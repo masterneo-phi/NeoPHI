@@ -186,13 +186,16 @@ func _test_config() -> void:
 	_check_eq(cfg.map_style, "solid", "config default map style")
 	_check_eq(cfg.window_width, 1280, "config default window width")
 	_check_eq(cfg.window_height, 1024, "config default window height")
-	_check_eq(cfg.split_offset, -1, "config default split offset")
+	_check_eq(cfg.split_ratio, 0.62, "config default split ratio")
 	_check_eq(cfg.scroll_stop, false, "config default scroll stop")
-	_check_eq(cfg.initial_split_offset(1280), 704, "config initial split 1280")
-	_check_eq(cfg.initial_split_offset(1000), 550, "config initial split 1000")
-	cfg.split_offset = 300
-	_check_eq(cfg.initial_split_offset(1280), 300, "config initial split saved")
-	cfg.split_offset = -1
+	_check_eq(cfg.split_offset_for(1280, 6), 794, "config split 1280")
+	_check_eq(cfg.split_offset_for(1000, 6), 620, "config split 1000")
+	# ログの最小幅 280 を保つ
+	_check_eq(cfg.split_offset_for(500, 6), 214, "config split log min")
+	_check_eq(cfg.split_offset_for(200, 6), 0, "config split tiny")
+	cfg.split_ratio = 0.3
+	_check_eq(cfg.split_offset_for(1000, 6), 300, "config split saved ratio")
+	cfg.split_ratio = 0.55
 
 	var path := OS.get_temp_dir().path_join("neophi-test-config.ini")
 	DirAccess.remove_absolute(path)
@@ -203,7 +206,7 @@ func _test_config() -> void:
 	cfg.map_style = "turn"
 	cfg.window_width = 900
 	cfg.window_height = 700
-	cfg.split_offset = 500
+	cfg.split_ratio = 0.4
 	cfg.scroll_stop = true
 	_check(cfg.save_file(path), "config save")
 	_tmp_files.append(path)
@@ -224,7 +227,7 @@ func _test_config() -> void:
 	_check_eq(cfg2.map_style, "turn", "config roundtrip map style")
 	_check_eq(cfg2.window_width, 900, "config roundtrip window width")
 	_check_eq(cfg2.window_height, 700, "config roundtrip window height")
-	_check_eq(cfg2.split_offset, 500, "config roundtrip split offset")
+	_check_eq(cfg2.split_ratio, 0.4, "config roundtrip split ratio")
 	_check_eq(cfg2.scroll_stop, true, "config roundtrip scroll stop")
 
 	# おかしな値は既定値に戻る
@@ -236,7 +239,7 @@ func _test_config() -> void:
 	bad.set_value("Map", "MapStyle", "bogus")
 	bad.set_value("Disp", "WindowWidth", 100)
 	bad.set_value("Disp", "WindowHeight", 100)
-	bad.set_value("Disp", "SplitOffset", 0)
+	bad.set_value("Disp", "SplitRatio", 9.9)
 	var bad_path := OS.get_temp_dir().path_join("neophi-test-config-bad.ini")
 	bad.save(bad_path)
 	_tmp_files.append(bad_path)
@@ -249,7 +252,19 @@ func _test_config() -> void:
 	_check_eq(cfg3.map_style, "solid", "config bad map style")
 	_check_eq(cfg3.window_width, 1280, "config bad window width")
 	_check_eq(cfg3.window_height, 1024, "config bad window height")
-	_check_eq(cfg3.split_offset, -1, "config bad split offset")
+	_check_eq(cfg3.split_ratio, 0.85, "config bad split ratio clamped")
+
+	# 古い設定(絶対ピクセルの SplitOffset)は、保存時の地図幅を保つよう
+	# 窓幅から右列分を引いた幅に対する比率に移行する
+	var old := ConfigFile.new()
+	old.set_value("Disp", "WindowWidth", 1280)
+	old.set_value("Disp", "SplitOffset", 704)
+	var old_path := OS.get_temp_dir().path_join("neophi-test-config-old.ini")
+	old.save(old_path)
+	_tmp_files.append(old_path)
+	var cfg_old := PhiConfig.new()
+	_check(cfg_old.load_file(old_path), "config load old file")
+	_check(absf(cfg_old.split_ratio - 704.0 / 1132.0) < 0.001, "config migrate split ratio")
 
 	# 無いファイルは false で既定値のまま
 	var cfg4 := PhiConfig.new()
@@ -571,39 +586,96 @@ func _test_login_lines() -> void:
 	_check(not lines_no_open.has("#open guest"), "login no open")
 
 
-# -- ズームのヒステリシス -------------------------------------------------------
-# 1700x1300 で起きた無限反転の回帰テスト。行の高さは倍率に連動して
-# 増える(実測 78px/段)ので、拡大は1段階ずつ縦の余裕を要求する。
-# 横は文字サイズに影響されないので、幅の余裕は要求しない
-# （幅の余裕を要求すると、縮小して1まで落ちたあと大きくし直しても
-# 途中の倍率で止まったままになる）。
+# -- ズームの規則(第3段の追加要望で変更) -------------------------------------
+# 拡大は、窓のリサイズ・境目のドラッグといった外部からのサイズ変更で
+# 立てた要求フラグがある時だけ、収まるなら1段階ずつ。縮小は即座に。
+# 要求が無いときは拡大しないので、文字サイズの連動によるレイアウトの
+# フィードバックでは発振しない。96px の余裕要求は廃止した。
+#
+# 行の高さ(窓の高さから地図の高さを引いたもの)の実測値:
+# ズーム 1→185、2→198、3→246、4→297(2026-11-16、VM の実測。
+# ツールバーを地図上のフロートに移してメニュー下の一列を無くし、
+# 画面外周の外枠(幅6)とタブ行下のスリット(8)が加わった後の値。
+# 地図の大きさは 800x600→489x415、900x700→551x502、
+# 1280x1024→786x778、1700x1300→1047x1003、2000x1400→1233x1103 で、
+# ズームは従来どおり 1/2/3/4/4、どの大きさでも発振しない)。
+# 5段以上は 3→4 の増分 51 で外挿する。フォント描画の
+# 違いで数ピクセル変わりうるが、規則の収束性には影響しない。
+const _CHROME_H := {1: 185, 2: 198, 3: 246, 4: 297}
+
+
+func _sim_chrome_h(zoom: int) -> int:
+	if _CHROME_H.has(zoom):
+		return _CHROME_H[zoom]
+	return 297 + 51 * (zoom - 4)
+
+
+func _sim_map_size(win_w: int, win_h: int, zoom: int) -> Vector2:
+	## ズームに応じたレイアウトで、地図に割り当てられる大きさ。
+	## 右列は廃止され、境目(HSplit)が窓幅いっぱいに広がる。
+	## 外枠の分だけ内側(幅−12)が使える幅になる。境目は幅の 0.62、
+	## ログの最小幅 280 と区切り 6 を保つ
+	## (PhiConfig.split_offset_for と同じ計算)。
+	var content_w := win_w - 12
+	var map_w := mini(int(round(content_w * 0.62)), content_w - 280 - 6)
+	map_w = maxi(map_w, 0)
+	return Vector2(map_w, win_h - _sim_chrome_h(zoom))
+
+
+func _settle(mv: MapView, win_w: int, win_h: int, grow: bool) -> int:
+	## 1回の外部イベント(要求フラグあり/なし)の後、レイアウトの
+	## フィードバックを反復して収束させる。反復回数を返す。
+	if grow:
+		mv.request_zoom_growth()
+	var iters := 0
+	while iters < 5:
+		mv.size = _sim_map_size(win_w, win_h, mv.zoom)
+		var before := mv.zoom
+		mv._update_zoom()
+		iters += 1
+		if mv.zoom == before:
+			break
+	return iters
+
 
 func _test_zoom_hysteresis() -> void:
 	var mv := MapView.new()
-	# ぎりぎり収まる大きさでは拡大しない(不感帯)。
+	# 要求が無ければ、収まる余裕があっても拡大しない。
 	mv.zoom = 3
-	mv.size = Vector2(1100, 1000)
-	mv._update_zoom()
-	_check_eq(mv.zoom, 3, "zoom no grow without margin")
-	# 余裕があれば拡大する。
 	mv.size = Vector2(1100, 1056)
 	mv._update_zoom()
-	_check_eq(mv.zoom, 4, "zoom grow with margin")
-	# 収まらなくなったら即座に縮小する。
-	mv.size = Vector2(1100, 959)
+	_check_eq(mv.zoom, 3, "zoom no grow without request")
+	# 要求があれば1段階だけ拡大する(2段階分の余裕があっても1段)。
+	mv.request_zoom_growth()
 	mv._update_zoom()
-	_check_eq(mv.zoom, 3, "zoom shrink when not fit")
+	_check_eq(mv.zoom, 4, "zoom grow one step")
+	mv.size = Vector2(2000, 2000)
+	mv._update_zoom()
+	_check_eq(mv.zoom, 4, "zoom request consumed")
+	# 要求があっても、収まらなければ拡大しない。
+	mv.zoom = 3
+	mv.size = Vector2(1100, 959)
+	mv.request_zoom_growth()
+	mv._update_zoom()
+	_check_eq(mv.zoom, 3, "zoom no grow when not fit")
+	# 収まらなくなったら、要求が無くても即座に縮小する。
+	mv.size = Vector2(1100, 719)
+	mv._update_zoom()
+	_check_eq(mv.zoom, 2, "zoom shrink when not fit")
+	# 縮小すると、溜まっていた拡大要求は捨てられる。
+	mv.request_zoom_growth()
+	mv.size = Vector2(1100, 479)
+	mv._update_zoom()
+	_check_eq(mv.zoom, 1, "zoom shrink consumes request")
+	mv.size = Vector2(1100, 1056)
+	mv._update_zoom()
+	_check_eq(mv.zoom, 1, "zoom no grow after shrink consumed")
 	# ぴったり収まる大きさでは今の倍率を保つ。
 	mv.zoom = 4
 	mv.size = Vector2(1100, 960)
 	mv._update_zoom()
 	_check_eq(mv.zoom, 4, "zoom keep exact fit")
-	# 幅がぎりぎりでも、縦に余裕があれば拡大する。
-	mv.zoom = 3
-	mv.size = Vector2(896, 1200)
-	mv._update_zoom()
-	_check_eq(mv.zoom, 4, "zoom grow at exact width fit")
-	# 縮小して1まで落ちても、大きくし直せば1段階ずつ戻る。
+	# 縮小して1まで落ちても、要求を繰り返せば1段階ずつ戻る。
 	mv.zoom = 3
 	mv.size = Vector2(698, 880)
 	mv._update_zoom()
@@ -613,34 +685,46 @@ func _test_zoom_hysteresis() -> void:
 	_check_eq(mv.zoom, 1, "zoom roundtrip shrink")
 	mv.size = Vector2(698, 880)
 	for _i in range(4):
+		mv.request_zoom_growth()
 		mv._update_zoom()
 	_check_eq(mv.zoom, 3, "zoom roundtrip grow back")
+	# 5x5 地図でも同じ規則(マスが小さい分、同じ幅で倍率が上がる)。
+	var mv5 := MapView.new()
+	mv5.set_map({"size": 5, "cells": [], "chars": []}, null, "")
+	mv5.size = Vector2(400, 400)
+	mv5._update_zoom()
+	_check_eq(mv5.zoom, 2, "zoom 5x5 shrink")
+	mv5.request_zoom_growth()
+	mv5.size = Vector2(500, 550)
+	mv5._update_zoom()
+	_check_eq(mv5.zoom, 3, "zoom 5x5 grow")
 	mv.queue_free()
+	mv5.queue_free()
 
-	# 行の高さのフィードバックを模して、広い窓サイズ範囲で収束すること。
-	# 幅935は1700px窓の分割幅、1100は余裕のある幅。
-	for map_w in [935, 1100]:
+	# ドラッグの模擬: 外部イベントを繰り返し、毎回フィードバックが
+	# 2回以内に収束し、収まった倍率で安定することを確認する。
+	for win_w in [800, 900, 1000, 1280, 1400, 1700, 1900, 2100]:
 		for win_h in range(600, 1601, 10):
 			var mv2 := MapView.new()
-			mv2.zoom = 2
-			var last_zoom := -1
-			var stable := 0
-			for _step in range(20):
-				# 行の高さ = 32 + 78 * zoom (実測 266@3, 344@4)。
-				var rows := 32 + 78 * mv2.zoom
-				mv2.size = Vector2(map_w, win_h - rows)
-				mv2._update_zoom()
-				if mv2.zoom == last_zoom:
-					stable += 1
-					if stable >= 2:
-						break
-				else:
-					stable = 0
-				last_zoom = mv2.zoom
-			_check(stable >= 2, "zoom settles w=" + str(map_w) + " h=" + str(win_h))
+			mv2.zoom = 1
+			var settled: Array = []
+			var max_iters := 0
+			for _e in range(6):
+				var iters := _settle(mv2, win_w, win_h, true)
+				max_iters = maxi(max_iters, iters)
+				settled.append(mv2.zoom)
+			# 外部イベント1回あたり、反復は3回以内(要求1回＋反動2回)。
+			_check(max_iters <= 3, "zoom settles w=" + str(win_w) + " h=" + str(win_h) + " iters=" + str(max_iters))
 			# 収束した倍率は収まっていること。
-			var need := (7 * 32 + 16) * mv2.zoom
-			_check(win_h - (32 + 78 * mv2.zoom) >= need, "zoom fits w=" + str(map_w) + " h=" + str(win_h))
+			var need := Vector2(7 * 32 * mv2.zoom, (7 * 32 + 16) * mv2.zoom)
+			var avail := _sim_map_size(win_w, win_h, mv2.zoom)
+			_check(avail.x >= need.x and avail.y >= need.y, "zoom fits w=" + str(win_w) + " h=" + str(win_h) + " zoom=" + str(mv2.zoom))
+			# 後半の外部イベントでは、収まった倍率が変わらないこと。
+			_check(settled[3] == settled[4] and settled[4] == settled[5], "zoom stable w=" + str(win_w) + " h=" + str(win_h))
+			# 要求が無いフィードバックだけでは倍率が変わらないこと。
+			var iters2 := _settle(mv2, win_w, win_h, false)
+			_check_eq(mv2.zoom, settled[5], "zoom no drift w=" + str(win_w) + " h=" + str(win_h))
+			_check(iters2 <= 2, "zoom feedback w=" + str(win_w) + " h=" + str(win_h))
 			mv2.queue_free()
 
 

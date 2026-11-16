@@ -127,6 +127,12 @@ const SWING_STREAKS := [[21.0, 0.0, 3.0], [16.0, 0.3, 2.0], [25.0, 0.55, 1.5]]
 ## 倒れたキャラの消滅: 段階の数と間隔(壁時計ベース)。
 const GHOST_STEPS := 8
 const GHOST_STEP := 0.08
+## `#ex-disp-magic` の1段階の長さ(秒)。Philly は 20ms だが、
+## 見えるように少し長くする。3段階で 0.24 秒。
+const DISP_MAGIC_PHASE := 0.08
+const DISP_MAGIC_PHASES := 3
+## サーバー駆動の魔法表示が出たマスで、自前の魔法弾を抑える時間。
+const DISP_MAGIC_SUPPRESS_WINDOW := 1.0
 ## 魔法弾の歩数と間隔、尾の長さと太さ、回る火花の軌道。
 const BOLT_STEPS := 10
 const BOLT_STEP := 0.028
@@ -156,13 +162,6 @@ const Q_TABLE := [
 	{0x00: [1, 3], 0x01: [1, 3], 0x02: [0, 1], 0x03: [0, 1], 0x04: [0, 3], 0x05: [0, 3], 0x06: [2, 0]},
 ]
 
-## 倍率を上げるときに要る余裕(px)。文字サイズが倍率に連動して
-## 行の高さが増える(実測で倍率1段あたり約78px)ため、ぎりぎりで
-## 拡大すると「拡大→行が伸びて収まらず縮小→行が縮んで拡大」の
-## 無限反転になりレイアウトが収束しない。拡大だけ余裕を要求し、
-## 縮小は収まらなくなったら即座に行う(不感帯で反転を防ぐ)。
-const ZOOM_GROW_MARGIN := 96
-
 ## 地図の倍率が変わったことを知らせます。UIの文字サイズの連動に使います。
 signal zoom_changed(new_zoom: int)
 
@@ -172,6 +171,20 @@ var label_font: Font = null
 var mapset := ""
 ## 自分のキャラの名前。浮き数字の位置決めと詠唱の取り消しに使います。
 var player_name := ""
+## 拡大の要求フラグ。窓のリサイズと境目のドラッグと地図の大きさの
+## 変化(外部からのサイズ変更)でのみ立て、`_update_zoom` が1段階の
+## 拡大に使う。レイアウトのフィードバック(文字サイズの変化)では立て
+## ないので、拡大→行が伸びる→縮小→行が縮む→拡大、の無限反転は
+## 起きない。
+var _grow_requested := false
+## 前に受けた地図の一辺のマス数。地図の大きさの変化を検知する。
+var _last_dim := 0
+
+
+## 外部からのサイズ変更があったことを知らせる。次の `_update_zoom` で、
+## 収まるなら1段階だけ拡大する。テストからも呼べる。
+func request_zoom_growth() -> void:
+	_grow_requested = true
 
 var _event: Dictionary = {}
 var _chip_tex: Texture2D = null
@@ -192,8 +205,32 @@ var _bolts: Array = []
 var _impacts: Array = []
 var _ghosts: Array = []
 var _bubbles: Dictionary = {}
+var _disp_magics: Array = []
+var _recent_disp_hits: Array = []
 var _shake_active := false
 var _shake_started := 0.0
+
+## 地図がまだ届いていない間に地図欄へ出すタイトルロゴ。
+const LOGO_PATH := "res://assets/logo.png"
+const TITLE_BG := Color(0.06, 0.05, 0.05)
+var _title_rect: TextureRect = null
+
+## 地図の周りの余白に出すモノグラム壁紙。タイル状に並べる。
+## 絵はタイルの大きさ(512x384)と一致させてあるので、NEAREST の
+## まま1:1で描けて補間が要らない。ファイルが無ければ黒い余白。
+const WALLPAPER_PATH := "res://assets/wallpaper.png"
+const WALLPAPER_TILE := Vector2(512.0, 384.0)
+const WALLPAPER_MODULATE := Color(0.8, 0.8, 0.8)
+## 壁紙の下地。タイルの暗部の色に合わせた濃紺。
+const WALLPAPER_BG := Color(0.075, 0.13, 0.22)
+var _wallpaper: Texture2D = null
+
+## 地図の右下に浮かせるコンパスの透け具合と、端からの余白。
+## 下の地図が見えて、針の向きも読み取れる程度。
+## 大きさはマップチップ1マス分(32px×ズーム)に追従させる。
+const COMPASS_ALPHA := 0.6
+const COMPASS_MARGIN := 8.0
+var compass: CompassView = null
 
 
 func _init() -> void:
@@ -201,6 +238,71 @@ func _init() -> void:
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	clip_contents = true
 	_caster_tracker = PhiCombatFx.CasterTracker.new()
+	_title_rect = TextureRect.new()
+	_title_rect.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_title_rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	_title_rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	_title_rect.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR
+	_title_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_title_rect.texture = title_texture()
+	add_child(_title_rect)
+	_wallpaper = wallpaper_texture()
+	# コンパスは地図の右下に半透明で浮かせる。マウスは通す
+	# (CompassView 側で MOUSE_FILTER_IGNORE)。地図が届くまで隠す。
+	compass = CompassView.new()
+	compass.modulate = Color(1.0, 1.0, 1.0, COMPASS_ALPHA)
+	compass.visible = false
+	add_child(compass)
+	_layout_compass(_compass_px())
+
+
+func _compass_px() -> float:
+	## コンパスの大きさ。マップチップ1マス分(32px×ズーム)。
+	return float(CHIP_SIZE * zoom)
+
+
+func _layout_compass(px: float) -> void:
+	## コンパスを地図の右下に置く。アンカーを右下に固定し、
+	## 大きさと余白ぶんだけ内側へずらす。最小サイズも同じ値に
+	## しないと、最小サイズに引っ張られて隅からはみ出す。
+	compass.custom_minimum_size = Vector2(px, px)
+	compass.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
+	compass.offset_left = -(px + COMPASS_MARGIN)
+	compass.offset_top = -(px + COMPASS_MARGIN)
+	compass.offset_right = -COMPASS_MARGIN
+	compass.offset_bottom = -COMPASS_MARGIN
+
+
+func _sync_compass_size() -> void:
+	## コンパスの大きさを、今のズームのマップチップ1マス分に
+	## 合わせ直す。ズームが変わった時に呼ぶ。
+	if compass != null:
+		_layout_compass(_compass_px())
+
+
+func set_compass_texture(tex: Texture2D) -> void:
+	if compass != null:
+		compass.direction_tex = tex
+		compass.queue_redraw()
+
+
+func set_compass_direction(dir_num: int, p_north_fix: bool) -> void:
+	if compass != null:
+		compass.set_direction(dir_num, p_north_fix)
+
+
+## モノグラム壁紙の絵を返す。ファイルが無い場合は null。
+func wallpaper_texture() -> Texture2D:
+	if ResourceLoader.exists(WALLPAPER_PATH):
+		return load(WALLPAPER_PATH) as Texture2D
+	return null
+
+
+## タイトルロゴの絵を返す。ファイルが無い(リポジトリの写しなど)場合は null。
+func title_texture() -> Texture2D:
+	if ResourceLoader.exists(LOGO_PATH):
+		return load(LOGO_PATH) as Texture2D
+	return null
 
 
 static func _now() -> float:
@@ -210,11 +312,16 @@ static func _now() -> float:
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_RESIZED:
 		_update_zoom()
+		if _event.is_empty():
+			queue_redraw()
 
 
 func _update_zoom() -> void:
-	## 割り当てられた大きさに収まる最大の整数倍率にする。ドット絵が
+	## 割り当てられた大きさに収まる整数倍率にする。ドット絵が
 	## 崩れないよう整数倍に限る。レイアウト前(サイズ0)は今の倍率を保つ。
+	## 拡大は、外部からのサイズ変更で要求があった時だけ1段階ずつ。
+	## 縮小は収まらなくなったら即座に。要求が無いときは拡大しないので、
+	## 文字サイズの連動によるレイアウトのフィードバックでは発振しない。
 	var dim := grid_dim(int(_event.get("size", 7)))
 	var avail := size
 	if avail.x < 1.0 or avail.y < 1.0:
@@ -223,26 +330,26 @@ func _update_zoom() -> void:
 	var zh := int(avail.y / (dim * CHIP_SIZE + MAP_TOP))
 	var fit := clampi(mini(zw, zh), 1, 8)
 	if fit > zoom:
-		# 拡大は1段階ずつ、縦に余裕があるときだけ。文字が大きくなると
-		# 行の高さが増えて地図の高さが減るので、縦だけに余裕を要求する
-		# （横は文字サイズに影響されない）。1段階ずつ上げることで、
-		# 途中の倍率で止まったままにならない。上げたあとのレイアウトで
-		# 再度呼ばれるので、余裕があれば次の段へ進む。
-		var target := zoom + 1
-		var need_h := (dim * CHIP_SIZE + MAP_TOP) * target
-		if avail.y < need_h + ZOOM_GROW_MARGIN:
-			return
-		zoom = target
-		zoom_changed.emit(zoom)
-		queue_redraw()
+		if _grow_requested:
+			_grow_requested = false
+			zoom = zoom + 1
+			zoom_changed.emit(zoom)
+			_sync_compass_size()
+			queue_redraw()
 	elif fit < zoom:
+		# 縮小するとき、溜まっていた拡大要求は古いので捨てる。
+		_grow_requested = false
 		zoom = fit
 		zoom_changed.emit(zoom)
+		_sync_compass_size()
 		queue_redraw()
 
 
 func set_map(event: Dictionary, p_assets: GameAssets, p_mapset: String) -> void:
 	_event = event
+	_title_rect.visible = false
+	if compass != null:
+		compass.visible = true
 	assets = p_assets
 	mapset = p_mapset
 	_chip_tex = null
@@ -252,6 +359,11 @@ func set_map(event: Dictionary, p_assets: GameAssets, p_mapset: String) -> void:
 		_items_tex = assets.items()
 	var dim := grid_dim(int(event.get("size", 7)))
 	custom_minimum_size = Vector2(dim * CHIP_SIZE, dim * CHIP_SIZE + MAP_TOP)
+	if dim != _last_dim:
+		_last_dim = dim
+		# 地図の大きさの変化は配置の反動ではなく内容の変化なので、
+		# 外部からのサイズ変更と同じく拡大を1段階だけ許します。
+		request_zoom_growth()
 	# フロート表示の基準点と、死亡の残像のもとになるキャラを覚えます。
 	_prev_charas = _last_charas
 	_last_charas = {}
@@ -276,6 +388,27 @@ func set_map(event: Dictionary, p_assets: GameAssets, p_mapset: String) -> void:
 	queue_redraw()
 
 
+## グラキャッシュ初期化の後、持っている絵を読み直す。
+## _chip_tex/_items_tex は set_map の時だけ取り直すので、ここで
+## 取り直さないと古いテクスチャのままになる。死亡の残像も古い
+## テクスチャを持っているので捨てる(0.6秒の演出なので実害は無い)。
+## 見えているキャラの絵は、再描画の「前に」作ってキャッシュを
+## 温めておく。描画コールバックの中でテクスチャを作ると、Mac の
+## Metal ではそのフレームにアップロードされず白く描かれ、次の
+## 地図が届くまで白いまま残る(2026-11-15 の報告)。
+func reload_cached_textures() -> void:
+	_chip_tex = null
+	_items_tex = null
+	_ghosts.clear()
+	if assets != null:
+		_chip_tex = assets.chip(mapset)
+		_items_tex = assets.items()
+		for ch_name in _last_charas:
+			var ch: Dictionary = _last_charas[ch_name]
+			assets.chara(str(ch.get("name", "")), str(ch.get("gra", "")), int(ch.get("default", 0)))
+	queue_redraw()
+
+
 ## テスト用: 基準点の表を返します。
 func debug_anchors() -> Dictionary:
 	return _anchors
@@ -287,6 +420,37 @@ func debug_center_anchor() -> Variant:
 
 
 ## テスト用: 残像の数を返します。
+func debug_event_empty() -> bool:
+	return _event.is_empty()
+
+
+func drawn_map_rect() -> Rect2:
+	## 描いている地図の範囲(コントロール内の座標)。マウスの当たり判定用。
+	var dim := grid_dim(int(_event.get("size", 7)))
+	var z := float(zoom)
+	var w := dim * CHIP_SIZE * z
+	var h := (dim * CHIP_SIZE + MAP_TOP) * z
+	var ox := floorf(maxf(0.0, (size.x - w) * 0.5))
+	var oy := floorf(maxf(0.0, (size.y - h) * 0.5))
+	return Rect2(ox, oy, w, h)
+
+
+func debug_disp_magic_count() -> int:
+	return _disp_magics.size()
+
+
+func debug_recent_disp_hit_count() -> int:
+	return _recent_disp_hits.size()
+
+
+func debug_bolt_count() -> int:
+	return _bolts.size()
+
+
+func debug_impact_count() -> int:
+	return _impacts.size()
+
+
 func debug_ghost_count() -> int:
 	return _ghosts.size()
 
@@ -416,8 +580,23 @@ static func build_water_grid(cells: Array, dim: int) -> Array:
 	return water
 
 
+## 余白全体を濃紺で塗り、壁紙があればタイル状に並べる。
+func _draw_wallpaper() -> void:
+	draw_rect(Rect2(Vector2.ZERO, size), WALLPAPER_BG)
+	if _wallpaper == null:
+		return
+	var y := 0.0
+	while y < size.y:
+		var x := 0.0
+		while x < size.x:
+			draw_texture_rect(_wallpaper, Rect2(x, y, WALLPAPER_TILE.x, WALLPAPER_TILE.y), false, WALLPAPER_MODULATE)
+			x += WALLPAPER_TILE.x
+		y += WALLPAPER_TILE.y
+
+
 func _draw() -> void:
 	if _event.is_empty():
+		draw_rect(Rect2(Vector2.ZERO, size), TITLE_BG)
 		return
 	var dim := grid_dim(int(_event.get("size", 7)))
 	var cells: Array = _event.get("cells", [])
@@ -429,9 +608,11 @@ func _draw() -> void:
 	var shake := _shake_offset(z)
 	var ox := floorf(maxf(0.0, (size.x - dim * CHIP_SIZE * z) * 0.5) + shake.x)
 	var oy := floorf(maxf(0.0, (size.y - (dim * CHIP_SIZE + MAP_TOP) * z) * 0.5) + shake.y)
+	# 地図の周りの余白にはモノグラム壁紙を敷く(無ければ黒)。
+	_draw_wallpaper()
 	draw_set_transform(Vector2(ox, oy), 0.0, Vector2.ONE)
-	# 背景
-	draw_rect(Rect2(0, 0, dim * CHIP_SIZE * z, (dim * CHIP_SIZE + MAP_TOP) * z), Color.BLACK)
+	# 地図の背景は塗らない。セルの絵が全面を覆い、上の張り出しの
+	# 隙間からは後ろの壁紙が見える(黒く塗ると帯になって目立つ)。
 	var water: Variant = null
 	if _chip_tex != null:
 		water = build_water_grid(cells, dim)
@@ -496,7 +677,9 @@ func _draw() -> void:
 			if int(ch.get("y", -1)) == row and 0 <= int(ch.get("x", -1)) and int(ch.get("x", -1)) < dim:
 				row_chars.append(ch)
 		for pair in arrange_row(row_chars):
+			_draw_state_icon(pair[0], pair[1], z, true)
 			_draw_chara(pair[0], pair[1], z)
+			_draw_state_icon(pair[0], pair[1], z, false)
 		# 4.5 残像(この行)。ずらさず、この行のキャラの上に重ねます。
 		_draw_ghosts(row, dim, z)
 	# 5. キャラ名ラベル(中心の自キャラは除外)。同じマスは後勝ち。
@@ -589,6 +772,27 @@ func _draw_placeholder_initial(ch: Dictionary, base_x: int, base_y: int, sw: flo
 	draw_string(label_font, Vector2(cx, cy), initial, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, Color.BLACK)
 
 
+func _draw_state_icon(ch: Dictionary, dx: int, z: float, under: bool) -> void:
+	## キャラの状態アイコン(第3段)。Philly はキャラの下→本体→上の順に描く。
+	var status := int(ch.get("status", 0))
+	var icon: Variant
+	if under:
+		icon = PhiCharaState.under_icon(status)
+	else:
+		var anim := int(_now() * 2.0) % 2
+		icon = PhiCharaState.over_icon(status, str(ch.get("dir", "F")), anim)
+	if icon == null:
+		return
+	var cell: int = icon[0]
+	var ix := (int(ch.get("x", 0)) * CHIP_SIZE + dx + int(icon[1])) * z
+	var iy := (int(ch.get("y", 0)) * CHIP_SIZE + 5 + int(icon[2])) * z
+	if _items_tex != null and cell * 32 + 32 <= _items_tex.get_width():
+		draw_texture_rect_region(_items_tex, Rect2(ix, iy, 32.0 * z, 32.0 * z), Rect2(cell * 32, 0, 32, 32))
+	else:
+		# 絵が無ければ小さな枠で代用する
+		draw_rect(Rect2(ix + 6.0 * z, iy + 6.0 * z, 20.0 * z, 20.0 * z), Color(1, 1, 1, 0.25), false, maxf(1.0, z))
+
+
 func _draw_labels(chars: Array, dim: int, z: float) -> void:
 	if label_font == null:
 		return
@@ -606,7 +810,7 @@ func _draw_labels(chars: Array, dim: int, z: float) -> void:
 		if chara_name.is_empty():
 			continue
 		per_cell[Vector2i(x, y)] = chara_name
-	var font_size := int(7 * z)
+	var font_size := int(6 * z)
 	for cell_key in per_cell:
 		var cell_pos: Vector2i = cell_key
 		var chara_name: String = per_cell[cell_key]
@@ -621,7 +825,7 @@ func _draw_labels(chars: Array, dim: int, z: float) -> void:
 # -- 戦闘の演出 ---------------------------------------------------------------
 
 func _process(_delta: float) -> void:
-	if _floats.is_empty() and _flashes.is_empty() and _swings.is_empty() and _slashes.is_empty() and _bolts.is_empty() and _impacts.is_empty() and _ghosts.is_empty() and _bubbles.is_empty() and not _shake_active:
+	if _floats.is_empty() and _flashes.is_empty() and _swings.is_empty() and _slashes.is_empty() and _bolts.is_empty() and _impacts.is_empty() and _ghosts.is_empty() and _bubbles.is_empty() and _disp_magics.is_empty() and not _shake_active:
 		return
 	_expire_effects()
 	queue_redraw()
@@ -642,6 +846,8 @@ func _expire_effects() -> void:
 	_bolts = kept_bolts
 	_impacts = _impacts.filter(func(f: Dictionary) -> bool: return now - float(f["spawned"]) < IMPACT_FRAME * IMPACT_FRAMES)
 	_ghosts = _ghosts.filter(func(g: Dictionary) -> bool: return int((now - float(g["spawned"])) / GHOST_STEP) < GHOST_STEPS)
+	_disp_magics = _disp_magics.filter(func(d: Dictionary) -> bool: return now - float(d["spawned"]) < DISP_MAGIC_PHASE * DISP_MAGIC_PHASES)
+	_recent_disp_hits = _recent_disp_hits.filter(func(h: Dictionary) -> bool: return now - float(h["spawned"]) < DISP_MAGIC_SUPPRESS_WINDOW)
 	var expired: Array = []
 	for speaker in _bubbles:
 		if now >= float(_bubbles[speaker]["expire"]):
@@ -730,6 +936,10 @@ func _combat_fx(attack: Dictionary, now: float) -> void:
 	if target_pos == null:
 		return
 	if _caster_tracker.consume(str(attack["attacker"]), now):
+		# サーバー駆動の魔法表示が同じマスを直前に出した時は、
+		# 自前の魔法弾は出さない(Philly の表示と二重になるため)。
+		if _disp_magic_covers_target(str(attack["target"]), now):
+			return
 		var attacker_pos: Variant = _float_position(attack["attacker"])
 		if attacker_pos != null and attacker_pos != target_pos:
 			_bolts.append({"start": _sprite_center(attacker_pos), "end": _sprite_center(target_pos), "spawned": now})
@@ -742,6 +952,45 @@ func _combat_fx(attack: Dictionary, now: float) -> void:
 		else:
 			# 攻撃する人が見えなければ、対象に軌跡だけ出します
 			_slashes.append({"center": _sprite_center(target_pos), "spawned": now})
+
+
+func spawn_disp_magic(data: Dictionary) -> void:
+	## `#ex-disp-magic` の表示を出す(第3段)。終点のマスを覚え、
+	## 直後の自前の魔法弾を抑えるのにも使う。
+	var now := _now()
+	_disp_magics.append({"data": data, "spawned": now})
+	var end: Dictionary = data["end"]
+	_recent_disp_hits.append({"cell": Vector2i(int(end["x"]), int(end["y"])), "spawned": now})
+	queue_redraw()
+
+
+func _disp_magic_covers_target(target: String, now: float) -> bool:
+	## 対象のいるマスを、サーバー駆動の魔法表示が最近出したか。
+	var cell := Vector2i(-1, -1)
+	var dim := grid_dim(int(_event.get("size", 7)))
+	if target == player_name or target == "あなた" or target == "自分":
+		cell = Vector2i(dim / 2, dim / 2)
+	else:
+		var ch: Variant = _last_charas.get(target)
+		if ch == null:
+			return false
+		cell = Vector2i(int(ch.get("x", -1)), int(ch.get("y", -1)))
+	return PhiDispMagic.bolt_suppressed(_recent_disp_hits, cell, now, DISP_MAGIC_SUPPRESS_WINDOW)
+
+
+func _draw_disp_magic(dm: Dictionary, z: float, now: float) -> void:
+	var age := now - float(dm["spawned"])
+	var phase := int(age / DISP_MAGIC_PHASE)
+	if phase >= DISP_MAGIC_PHASES:
+		return
+	var cells := PhiDispMagic.phase_cells(dm["data"], phase)
+	for c in cells:
+		var at: Vector2 = c[0]
+		var cell: int = c[1]
+		if _items_tex != null and cell * 32 + 32 <= _items_tex.get_width():
+			draw_texture_rect_region(_items_tex, Rect2(at.x * z, at.y * z, 32.0 * z, 32.0 * z), Rect2(cell * 32, 0, 32, 32))
+		else:
+			draw_circle(Vector2(at.x + 16.0, at.y + 16.0) * z, 12.0 * z, Color(0.4, 0.8, 1.0, 0.7))
 
 
 func spawn_death_fx(text: String) -> void:
@@ -816,6 +1065,8 @@ func _draw_effects(dim: int, z: float) -> void:
 		_draw_bolt(b, z, now)
 	for im in _impacts:
 		_draw_impact(im, z, now)
+	for dm in _disp_magics:
+		_draw_disp_magic(dm, z, now)
 	for f in _floats:
 		_draw_float(f, z, now)
 	_draw_bubbles(dim, z)
@@ -949,8 +1200,11 @@ func _draw_float(f: Dictionary, z: float, now: float) -> void:
 		return
 	var pos: Vector2 = f["pos"]
 	var label: String = f["label"]
-	# Tk のポイント数(7pt)をピクセル数に直します(96dpi で ×4/3)。
-	var font_size := int(round(28.0 * z / 3.0))
+	# 浮き数字は地図の倍率に比例させる。Python 版の 7pt 相当
+	# (28*z/3)より一回り大きくし、読み取りやすくする。
+	# 第4段で 12*zoom から 11*zoom に、レイアウト変更で
+	# 10*zoom に少しずつ小さくした。
+	var font_size := int(round(10.0 * z))
 	var rise := age * z / 0.03
 	var x := pos.x * z + float(f["xoff"]) * z
 	var y := pos.y * z + 4.0 * z - rise

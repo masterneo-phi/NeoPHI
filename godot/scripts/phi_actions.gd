@@ -11,10 +11,15 @@ extends RefCounted
 ##   "reset-config" / "clear-cache" / "screenshot" / "scroll-toggle" /
 ##   "open-config-folder" / "about" … アプリ側の処理。
 ##   "priv-window" / "loud-toggle" / "shortcut-config" … 第2段の処理。
+##   "new-tab" / "close-tab" / "say-all-tabs" / "autosave-toggle" /
+##   "delete-filter-toggle" / "image-window" … 第4段の処理。
+##   "talk-add" / "log-save" … 残り項目(第6段)の処理。
 ##
-## 第1段の範囲外のもの(タブ、BGM、CastF/ショートカット、
+## 第1段の範囲外のもの(タブ、CastF/ショートカット、
 ## 超魔法、隠しコマンド)は入れていない。第2段でプリブ窓と大声と
-## ショートカット設定を追加した。
+## ショートカット設定を追加した。第4段でタブとログまわりを追加した。
+## 第5段で BGM のトグルを追加した。
+## 超魔法メニューは XML から動的に作るので、この表には無い。
 
 const ACTIONS := {
 	"Open": {"caption": "接続", "hint": "サーバーに接続する", "kind": "connect"},
@@ -70,24 +75,35 @@ const ACTIONS := {
 	# 操作メニュー(第2段)
 	"NewPrivWindow": {"caption": "新規プリブウィンドウ", "hint": "新しいプリブウィンドウを開く [Shift+F6]", "kind": "priv-window"},
 	"Loud": {"caption": "大声", "hint": "世界中の全員に聞こえる大声で話す", "kind": "loud-toggle"},
+	"TalkAdd": {"caption": "追加発言", "hint": "発言の前に追加する言葉を設定する", "kind": "talk-add"},
 	"ShortcutConfig": {"caption": "ショートカット設定", "hint": "F1〜F12 のショートカットを編集する", "kind": "shortcut-config"},
+	# タブとログまわり(第4段)
+	"NewTab": {"caption": "新しいタブ", "hint": "新しいタブを開く", "kind": "new-tab"},
+	"CloseTab": {"caption": "タブを閉じる", "hint": "このタブを閉じる", "kind": "close-tab"},
+	"SayAllTabs": {"caption": "全タブ発言", "hint": "すべてのタブに同じ発言を送る", "kind": "say-all-tabs"},
+	"LogAutoSave": {"caption": "ログの自動保存", "hint": "ログをファイルに自動保存する", "kind": "autosave-toggle"},
+	"LogSave": {"caption": "ログを保存", "hint": "今のログをファイルに保存する", "kind": "log-save"},
+	"LogDeleteFilter": {"caption": "削除フィルタ", "hint": "正規表現に合う行をログに表示しない", "kind": "delete-filter-toggle"},
+	"ImageWindow": {"caption": "画像一覧", "hint": "画像の参照の一覧を表示する", "kind": "image-window"},
 	"M5x5": {"caption": "5x5 マップモード", "hint": "5x5 マップモードにする [Shift+5]", "kind": "send", "send": "#ex-map size=40"},
 	"M7x7": {"caption": "7x7 マップモード", "hint": "7x7 マップモードにする [Shift+7]", "kind": "send", "send": "#ex-map size=57"},
 	"MTurn": {"caption": "回転マップモード", "hint": "回転マップモードにする [T]", "kind": "send", "send": "#ex-map style=turn"},
 	"MSolid": {"caption": "北固定マップモード", "hint": "北固定マップモードにする [Shift+T]", "kind": "send", "send": "#ex-map style=solid"},
 	"SSMap": {"caption": "マップ画像の保存", "hint": "マップ画面の写真を撮って保存する", "kind": "screenshot"},
 	"LogScrollStop": {"caption": "ログスクロール停止", "hint": "ログを追加時のスクロールを止める", "kind": "scroll-toggle"},
+	"DispMagic": {"caption": "魔法表示", "hint": "サーバーからの魔法表示を受け取る(第3段)", "kind": "disp-magic-toggle"},
+	"PlayBGM": {"caption": "BGM を再生する", "hint": "BGM を再生する(第5段)", "kind": "bgm-toggle"},
 	"OpenConfigFolder": {"caption": "設定フォルダを開く", "hint": "設定フォルダを開く", "kind": "open-config-folder"},
-	"VersionInfo": {"caption": "バージョン情報", "hint": "バージョン情報を表示する", "kind": "about"},
+	"VersionInfo": {"caption": "NeoPHI " + PhiVersion.VERSION, "hint": "バージョン情報を表示する", "kind": "about"},
 }
 
 ## メニューバー。"-" は区切り線。
 const MENUS := [
-	{"name": "ファイル", "items": ["Open", "Close", "-", "ReadConfigFile", "InitializeConfig", "InitializeGraCache", "-", "Exit"]},
-	{"name": "操作", "items": ["NewPrivWindow", "Loud"]},
+	{"name": "ファイル", "items": ["Open", "Close", "NewTab", "CloseTab", "-", "ReadConfigFile", "InitializeConfig", "InitializeGraCache", "-", "Exit"]},
+	{"name": "操作", "items": ["NewPrivWindow", "Loud", "TalkAdd", "SayAllTabs"]},
 	{"name": "行動", "items": ["Equip", "Unequip", "-", "Read", "Write", "Erase", "Board", "-", "Get", "Put", "Use", "Sort", "FloorItem", "-", "Spells", "Pay", "Hit", "Check", "Skills"]},
 	{"name": "魔法", "items": ["WizardEye", "PartyEye", "EagleEye", "Identify", "Search", "WizardLock", "Unlock", "Detect", "Create", "Analyze", "Forget", "Call", "Return", "-", "WizardLight", "EagleEyeText", "List", "Destroy", "ChargeSpell", "Appear", "Disappear", "-", "Cast", "Cast1", "Cast2", "Cast3", "Cast4", "Cast5", "Cast6", "Cast7"]},
-	{"name": "表示", "items": ["M5x5", "M7x7", "MTurn", "MSolid", "-", "SSMap", "LogScrollStop"]},
+	{"name": "表示", "items": ["M5x5", "M7x7", "MTurn", "MSolid", "-", "SSMap", "LogScrollStop", "DispMagic", "PlayBGM", "-", "LogAutoSave", "LogSave", "LogDeleteFilter", "ImageWindow"]},
 	{"name": "ツール", "items": ["ShortcutConfig", "OpenConfigFolder", "VersionInfo"]},
 ]
 
@@ -126,7 +142,7 @@ static func enabled_when(action_name: String, connected: bool) -> bool:
 	match kind_of(action_name):
 		"connect":
 			return not connected
-		"disconnect", "send", "ask", "priv-window", "loud-toggle":
+		"disconnect", "send", "ask", "priv-window", "loud-toggle", "say-all-tabs":
 			return connected
 		_:
 			return true

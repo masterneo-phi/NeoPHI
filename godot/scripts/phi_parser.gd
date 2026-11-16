@@ -453,6 +453,12 @@ func _dispatch_command(text: String, raw: PackedByteArray) -> Array[Dictionary]:
 			if x != null and y != null:
 				_abs_pos = {"x": x, "y": y}
 		return []
+	if text.begins_with("#ex-disp-magic"):
+		# サーバーからの魔法表示(第3段)。読めなければ無視する。
+		var dm: Variant = PhiDispMagic.parse(text)
+		if dm != null:
+			return [{"type": "dispMagic", "data": dm}]
+		return []
 	if text.begins_with("#ch-srv "):
 		var parts := _split_ws(text)
 		if parts.size() >= 3:
@@ -460,8 +466,41 @@ func _dispatch_command(text: String, raw: PackedByteArray) -> Array[Dictionary]:
 			if port != null:
 				return [{"type": "worldTransfer", "state": "start", "server": "%s:%d" % [parts[1], port]}]
 		return []
-	# #bgm・#ex-map size= などの既知の行も、未知の行も無視する
+	# #bgm と #ex-bgm-speed は wphi のパーサと同じく無視する
+	# (golden の notice シナリオに `#bgm Seiju` → イベント無しがある)。
+	# BGM の解釈はセッションが bgm_event_for_line() で行う(第5段)。
+	# #ex-map size= などの既知の行も、未知の行も無視する
 	return []
+
+
+static func bgm_event_for_line(text: String) -> Dictionary:
+	## BGM 通知の行をイベントにする(第5段)。対象外なら空辞書。
+	##
+	## `#bgm <ファイル名>`: Philly の SharpBgm と同じく、最初の空白の
+	## 後ろ全体をファイル名とし、`.` が無ければ `.mid` を付ける。
+	## `#ex-bgm-speed <数字>`: Philly の SharpExBgmSpeed と同じく、
+	## 数字(%)だけを受ける(数字が無ければ無効)。
+	if text.begins_with("#ex-bgm-speed"):
+		var rest := text.substr(13).strip_edges(true, false)
+		var digits := ""
+		for i in range(rest.length()):
+			var ch := rest[i]
+			if ch >= "0" and ch <= "9":
+				digits += ch
+			else:
+				break
+		if digits.is_empty():
+			return {}
+		return {"type": "bgmSpeed", "speed": int(digits)}
+	if text.begins_with("#bgm"):
+		var rest := text.substr(4).strip_edges(true, false)
+		if rest.is_empty():
+			return {}
+		var bgm_name := rest.strip_edges()
+		if not bgm_name.contains("."):
+			bgm_name += ".mid"
+		return {"type": "bgm", "name": bgm_name}
+	return {}
 
 
 func _parse_user(raw: PackedByteArray) -> Variant:

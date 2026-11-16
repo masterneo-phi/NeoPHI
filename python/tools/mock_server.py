@@ -9,6 +9,15 @@ MP ダメージ。10回に1回は猫が倒れ、次の hit か移動で生き返
 ``priv`` と入れると案内人から priv が来る。受けた行を ``received`` に
 残す。キャラ ID は画面に出さない。
 
+回転マップ(``#ex-map style=turn``)にも対応する。実サーバ
+(``phi_m57.c`` の ``set_view7`` / ``print_m57``)と同じ規則で、turn の間は
+向きが上になるよう 7x7 の窓を取り直し(前4・後2、自キャラは画面の
+(3,4))、キャラの座標と向きコード(``BRFL`` をカメラ方向で回す)も
+変換する。ログイン時に ``style=turn`` を送られた場合も最初の地図から
+回転する。受け付けない style には実サーバと同じく ``#ex-map style=no``
+と返す。5x5 地図は従来どおり回転しない(実サーバの 5x5 は常に向き
+基準だが、モックの 5x5 は元々簡略化してある)。
+
 使い方::
 
     python tools/mock_server.py --port 21000
@@ -134,6 +143,14 @@ def _terrain(world_x: int, world_y: int) -> tuple[int, int]:
 _DIR_CHARS = "NESW"
 _DIR_VECTORS = [(0, -1), (1, 0), (0, 1), (-1, 0)]
 
+# 実サーバの px[] / py[](方向 0=N 1=E 2=S 3=W の単位ベクトル)。
+# 回転マップの座標変換に使う。
+_PX = (0, 1, 0, -1)
+_PY = (-1, 0, 1, 0)
+# 向きコード。``(キャラの絶対方向 - カメラ方向) % 4`` の位置の文字で、
+# 0=後ろ姿(B) 1=右向き(R) 2=正面(F) 3=左向き(L)。
+_RDC = "BRFL"
+
 # モックがコマンドとして扱う言葉。ここに無い行は発言として送り返す。
 # アクションキーで送られる1語が、吹き出しの発言にならないようにする。
 _COMMAND_WORDS = frozenset({
@@ -223,28 +240,49 @@ class MockServer:
                 )
                 await send_text("#map .")
                 return
+            turn = self._map_style == "turn"
+            cam = self._dir
             cells: list[tuple[int, int]] = []
-            for yy in range(7):
-                for xx in range(7):
-                    cells.append(
-                        _terrain(self._abs_x + xx - 3, self._abs_y + yy - 3)
-                    )
+            if turn:
+                # 回転マップ。画面の (wx, wy) は、右を vx・前を vy とする
+                # オフセット (vx, 4 - wy) に対応する。実サーバの式で
+                # 絶対座標へ回す。窓は前4・後2になる。
+                for wy in range(7):
+                    for wx in range(7):
+                        vx, vy = wx - 3, 4 - wy
+                        dx = _PX[cam] * vy - _PY[cam] * vx
+                        dy = _PY[cam] * vy + _PX[cam] * vx
+                        cells.append(
+                            _terrain(self._abs_x + dx, self._abs_y + dy)
+                        )
+            else:
+                for yy in range(7):
+                    for xx in range(7):
+                        cells.append(
+                            _terrain(self._abs_x + xx - 3, self._abs_y + yy - 3)
+                        )
             await send_raw(build_m57_m(_DIR_CHARS[self._dir], cells))
+            # 自キャラは solid で (3, 3)、turn で (3, 4)。向きコードは
+            # 両 style とも "B"(turn では自分がカメラなので、実サーバ
+            # でも (自分の向き - カメラ) = 0 で B になる)。
+            me_x, me_y = (3, 4) if turn else (3, 3)
             me = build_m57_o(
-                layer=0, char_id=1, x=3, y=3, dir_char="B",
+                layer=0, char_id=1, x=me_x, y=me_y, dir_char="B",
                 name="モック太郎", gra="t_Lord", status=0x40,
                 gigant="#", default=0x40,
             )
+            npc_x, npc_y, npc_dir = self._chara_wire(1, 0, "L")
             npc = build_m57_o(
-                layer=1, char_id=0x2A, x=4, y=3, dir_char="L",
+                layer=1, char_id=0x2A, x=npc_x, y=npc_y, dir_char=npc_dir,
                 name="案内人", gra="t_Residents", status=0,
                 gigant="#", default=0x05,
             )
             await send_raw(build_m57_w(me, npc))
             if include_cat:
                 # 練習相手のモック猫。正面(北)に置く。hit の対象になる。
+                cat_x, cat_y, cat_dir = self._chara_wire(0, -1, "F")
                 cat = build_m57_o(
-                    layer=2, char_id=0x2B, x=3, y=2, dir_char="F",
+                    layer=2, char_id=0x2B, x=cat_x, y=cat_y, dir_char=cat_dir,
                     name="モック猫", gra="t_catW", status=0,
                     gigant="#", default=0x05,
                 )
@@ -270,6 +308,12 @@ class MockServer:
                 self.received.append("#open <ID>")
             else:
                 self.received.append(line)
+            if line.startswith("#ex-map style="):
+                # ログイン時の style 指定も受け付ける(実サーバは
+                # 最初の地図からその style で送る)
+                value = line.split("=", 1)[1]
+                if value in ("turn", "solid"):
+                    self._map_style = value
             if line.startswith("#ex-switch ex-abspos"):
                 break
         if not got_open:
@@ -326,9 +370,15 @@ class MockServer:
                 await send_user(3, "案内人")
                 continue
             if line.startswith("#ex-map style="):
-                self._map_style = line.split("=", 1)[1]
-                await send_text(f"#ex-map style={self._map_style}")
-                await send_map()
+                value = line.split("=", 1)[1]
+                if value in ("turn", "solid"):
+                    self._map_style = value
+                    await send_text(f"#ex-map style={value}")
+                    await send_map()
+                else:
+                    # 実サーバは受け付けない style には no と返し、
+                    # 地図は送り直さない
+                    await send_text("#ex-map style=no")
                 continue
             if line.startswith("#ex-map size="):
                 self._map_size = 7 if "57" in line else 5
@@ -347,12 +397,17 @@ class MockServer:
                 self._pending_list = None
                 # "1" で1番の武器を外す、"." でやめる。どちらも返事は要らない
                 continue
-            if self._pending_list == "items":
+            if self._pending_list in ("items_get", "items_put", "items_use"):
+                verb = {
+                    "items_get": "拾いました",
+                    "items_put": "置きました",
+                    "items_use": "使いました",
+                }[self._pending_list]
                 self._pending_list = None
                 if line == ".":
                     await send_text("DM > やめました。")
                 else:
-                    await send_text(f"DM > {line} 番を拾いました。")
+                    await send_text(f"DM > {line} 番を{verb}。")
                 continue
             if self._pending_list == "spells":
                 self._pending_list = None
@@ -414,7 +469,7 @@ class MockServer:
                 await send_text("外す装備を選択して下さい")
                 continue
             if line in ("get", "put", "use"):
-                self._pending_list = "items"
+                self._pending_list = "items_" + line
                 await send_text("#list")
                 await send_text("[ 1] 木の剣")
                 await send_text("[ 2] 革の盾")
@@ -517,6 +572,26 @@ class MockServer:
             await writer.wait_closed()
         except OSError:
             pass
+
+    def _chara_wire(self, dx: int, dy: int, solid_code: str) -> tuple[int, int, str]:
+        """NPC の画面座標と向きコードを、現在の style で返す。
+
+        ``(dx, dy)`` は自キャラからの絶対オフセット、``solid_code`` は
+        solid(カメラ=北)の時の向きコード。solid ではそのまま
+        ``(dx + 3, dy + 3, solid_code)``。turn では実サーバと同じく、
+        オフセットをカメラ(=自分の向き)基準に回して自キャラが
+        (3, 4) になる位置に置き、向きコードは絶対方向
+        (solid はカメラが北なので ``_RDC`` の位置がそのまま絶対方向)
+        からカメラ方向を引いて回す。自キャラ自身には使わない
+        (自キャラの向きコードは両 style とも "B" で固定)。
+        """
+        if self._map_style != "turn":
+            return dx + 3, dy + 3, solid_code
+        cam = self._dir
+        vx = -_PY[cam] * dx + _PX[cam] * dy
+        vy = _PX[cam] * dx + _PY[cam] * dy
+        abs_dir = _RDC.index(solid_code)
+        return vx + 3, 4 - vy, _RDC[(abs_dir - cam) % 4]
 
     def _apply_move(self, line: str) -> None:
         if line == "go":

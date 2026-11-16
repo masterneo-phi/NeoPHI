@@ -22,6 +22,8 @@ var char_id := ""
 ## ログイン時に送る地図の大きさ(40=5x5, 57=7x7)とスタイル。
 var map_size := 57
 var map_style := "solid"
+## ログイン時に送る `#ex-switch ex-disp-magic=` の値。
+var disp_magic := true
 
 var _tcp := StreamPeerTCP.new()
 var _lines := LineBuffer.new()
@@ -34,10 +36,11 @@ var _keepalive_sent := false
 var _warned := false
 
 
-static func login_lines(p_char_id: Variant, p_map_size: int = 57, p_map_style: String = "solid") -> Array[String]:
+static func login_lines(p_char_id: Variant, p_map_size: int = 57, p_map_style: String = "solid", p_disp_magic: bool = true) -> Array[String]:
 	## Philly のログイン時の送信。値は Philly の既定値。
 	## 世界移動の後は `#open` を送らないので、その時は p_char_id=null で呼ぶ。
 	## 地図の大きさ(40=5x5, 57=7x7)とスタイルは設定から渡す。
+	## `#ex-disp-magic` は Philly.ini の DispMagicClientSide 既定(on)に従う。
 	var lines: Array[String] = []
 	if p_char_id != null:
 		lines.append("#open " + str(p_char_id))
@@ -50,7 +53,7 @@ static func login_lines(p_char_id: Variant, p_map_size: int = 57, p_map_style: S
 		"#ex-map style=%s" % p_map_style,
 		"#ex-switch ex-move-recv=true",
 		"#ex-switch ex-list-mode-end=true",
-		"#ex-switch ex-disp-magic=false",
+		"#ex-switch ex-disp-magic=" + ("true" if p_disp_magic else "false"),
 		"#ex-switch ex-abspos=true",
 	])
 	return lines
@@ -119,7 +122,7 @@ func poll() -> void:
 		if status == StreamPeerTCP.STATUS_CONNECTED:
 			_state = "open"
 			_last_recv_msec = Time.get_ticks_msec()
-			for line in login_lines(char_id, map_size, map_style):
+			for line in login_lines(char_id, map_size, map_style, disp_magic):
 				_send_queue.append(line)
 			_flush_queue()
 			_try_flush()
@@ -164,7 +167,9 @@ func poll() -> void:
 
 
 func _process_line(line: PackedByteArray) -> void:
+	var produced := false
 	for event in _parser.feed(line):
+		produced = true
 		if event.get("type") == "_internal":
 			if event.get("action") == "lag":
 				_send_queue.append("#end-lag")
@@ -172,6 +177,13 @@ func _process_line(line: PackedByteArray) -> void:
 				_send_queue.append("#map")
 		else:
 			event_received.emit(event)
+	# BGM 通知(#bgm / #ex-bgm-speed)はパーサが wphi 互換で無視する
+	# ので、イベントにならなかった '#' 行だけをここで拾う(第5段)。
+	# #more の中の行はパーサが message イベントにするので対象にならない。
+	if not produced and not line.is_empty() and line[0] == 0x23:
+		var bgm_event := PhiParser.bgm_event_for_line(Cp932.decode(line))
+		if not bgm_event.is_empty():
+			event_received.emit(bgm_event)
 
 
 func _flush_queue() -> void:

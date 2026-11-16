@@ -120,6 +120,37 @@ class TestSessionMock(unittest.IsolatedAsyncioTestCase):
             await session.disconnect(graceful=True)
             await asyncio.wait_for(task, timeout=5.0)
 
+    async def test_put_and_use_answers(self):
+        session = PhiSession(self.host, self.port, "TESTID")
+        task = asyncio.create_task(session.run())
+        try:
+            await self._collect_until(
+                session, lambda ev, evs: isinstance(ev, MapEvent)
+            )
+            for command, verb in (("put", "置きました"), ("use", "使いました")):
+                await session.send(command)
+                await self._collect_until(
+                    session,
+                    lambda ev, evs: isinstance(ev, ListEvent) and ev.lines,
+                )
+                await session.send("1")
+                await session.close_list()
+                events = await self._collect_until(
+                    session,
+                    lambda ev, evs: isinstance(ev, MessageEvent)
+                    and verb in plain_text(ev.text),
+                )
+                self.assertTrue(
+                    any(
+                        isinstance(ev, MessageEvent)
+                        and verb in plain_text(ev.text)
+                        for ev in events
+                    )
+                )
+        finally:
+            await session.disconnect(graceful=True)
+            await asyncio.wait_for(task, timeout=5.0)
+
     async def test_board_body_commands_not_executed(self):
         session = PhiSession(self.host, self.port, "TESTID")
         task = asyncio.create_task(session.run())
@@ -591,6 +622,263 @@ class TestSessionMock(unittest.IsolatedAsyncioTestCase):
             await session.send("a\nb")
         with self.assertRaises(ValueError):
             await session.send("a\rb")
+
+
+# 回転マップの規則は実サーバ(127.0.0.1:20017、guest)で実測して確認した:
+# 地形は3方向(N/E/S)とも式どおり(不一致0)、自キャラは turn で (3,4)・
+# 向きコードは常時 B、他キャラの向きコードも BRFL の回転どおりだった。
+_TURN_PX = (0, 1, 0, -1)
+_TURN_PY = (-1, 0, 1, 0)
+_TURN_RDC = "BRFL"
+
+
+def _expected_cells(pos, cam, turn):
+    """モックの地形関数から、style とカメラ方向に対する画面の49マスを
+    実サーバの規則で組み立てる。"""
+    cells = []
+    for wy in range(7):
+        for wx in range(7):
+            if turn:
+                vx, vy = wx - 3, 4 - wy
+                dx = _TURN_PX[cam] * vy - _TURN_PY[cam] * vx
+                dy = _TURN_PY[cam] * vy + _TURN_PX[cam] * vx
+            else:
+                dx, dy = wx - 3, wy - 3
+            cells.append(mock_server._terrain(pos[0] + dx, pos[1] + dy))
+    return cells
+
+
+def _char_tuple(event, name):
+    char = next(c for c in event.chars if c.name == name)
+    return char.x, char.y, char.dir
+
+
+class TestMockTurnMap(unittest.IsolatedAsyncioTestCase):
+    """モックの回転マップ(style=turn)。実サーバで実測した規則に合わせる。"""
+
+    async def asyncSetUp(self):
+        self.server = mock_server.MockServer("127.0.0.1", 0)
+        await self.server.start()
+        self.host, self.port = self.server.address
+
+    async def asyncTearDown(self):
+        await self.server.stop()
+
+    async def _collect_until(self, session, predicate, timeout=5.0):
+        events = []
+        deadline = asyncio.get_running_loop().time() + timeout
+        while asyncio.get_running_loop().time() < deadline:
+            try:
+                event = await asyncio.wait_for(session.events.get(), timeout=0.5)
+            except TimeoutError:
+                continue
+            events.append(event)
+            if predicate(event, events):
+                return events
+        return events
+
+    async def _next_map(self, session):
+        events = await self._collect_until(
+            session, lambda ev, evs: isinstance(ev, MapEvent)
+        )
+        maps = [ev for ev in events if isinstance(ev, MapEvent)]
+        self.assertTrue(maps)
+        return maps[-1]
+
+    async def test_turn_rotation_all_directions(self):
+        session = PhiSession(self.host, self.port, "TESTID")
+        task = asyncio.create_task(session.run())
+        try:
+            base = await self._next_map(session)
+            pos = (base.pos.x, base.pos.y)
+            # solid の従来どおりの姿(回帰防止)
+            self.assertEqual(base.dir, 0)
+            self.assertEqual(_char_tuple(base, "モック太郎"), (3, 3, "B"))
+            self.assertEqual(_char_tuple(base, "案内人"), (4, 3, "L"))
+            self.assertEqual(_char_tuple(base, "モック猫"), (3, 2, "F"))
+            self.assertEqual(
+                [(c.chip, c.attr) for c in base.cells],
+                _expected_cells(pos, 0, False),
+            )
+
+            await session.send("#ex-map style=turn")
+            # 向きごとの (自キャラ, 案内人, モック猫) の画面座標と向き
+            # コード。実サーバの規則から手で計算した値。
+            expected_chars = {
+                0: ((3, 4, "B"), (4, 4, "L"), (3, 3, "F")),
+                1: ((3, 4, "B"), (3, 3, "F"), (2, 4, "R")),
+                2: ((3, 4, "B"), (2, 4, "R"), (3, 5, "B")),
+                3: ((3, 4, "B"), (3, 5, "B"), (4, 4, "L")),
+            }
+            for cam in range(4):
+                if cam:
+                    await session.send("turn r")
+                event = await self._next_map(session)
+                self.assertEqual(event.style, "turn")
+                self.assertEqual(event.dir, cam * 2)
+                self.assertEqual(
+                    [(c.chip, c.attr) for c in event.cells],
+                    _expected_cells(pos, cam, True),
+                )
+                me, guide, cat = expected_chars[cam]
+                self.assertEqual(_char_tuple(event, "モック太郎"), me)
+                self.assertEqual(_char_tuple(event, "案内人"), guide)
+                self.assertEqual(_char_tuple(event, "モック猫"), cat)
+
+            # solid に戻すと最初の地図と一致する
+            await session.send("#ex-map style=solid")
+            event = await self._next_map(session)
+            self.assertEqual(event.style, "solid")
+            self.assertEqual(_char_tuple(event, "モック太郎"), (3, 3, "B"))
+            self.assertEqual(
+                [(c.chip, c.attr) for c in event.cells],
+                [(c.chip, c.attr) for c in base.cells],
+            )
+        finally:
+            await session.disconnect(graceful=True)
+            await asyncio.wait_for(task, timeout=5.0)
+
+    async def test_login_with_turn_style(self):
+        # ログインの行に style=turn を入れたら、最初の地図から回転する
+        # (実サーバもログイン時の style を最初の地図に反映する)。
+        # PhiSession は style=solid 固定なので raw でつなぐ。
+        reader, writer = await asyncio.open_connection(self.host, self.port)
+        try:
+            lines = login_lines("TESTID")
+            lines[6] = "#ex-map style=turn"
+            for line in lines:
+                writer.write(line.encode("cp932") + b"\n")
+            await writer.drain()
+            raw_lines = []
+            deadline = asyncio.get_running_loop().time() + 5.0
+            while asyncio.get_running_loop().time() < deadline:
+                raw = await asyncio.wait_for(reader.readline(), timeout=5.0)
+                if not raw:
+                    break
+                raw_lines.append(raw.rstrip(b"\r\n"))
+                if raw_lines[-1] == b"#m57 .":
+                    break
+            m_line = next(l for l in raw_lines if l.startswith(b"#m57 M "))
+            self.assertEqual(chr(m_line[7]), "N")
+            cells = [
+                (m_line[18 + i * 2], m_line[19 + i * 2]) for i in range(49)
+            ]
+            pos_line = next(l for l in raw_lines if l.startswith(b"#ex-pos "))
+            _, px, py = pos_line.decode("ascii").split()
+            self.assertEqual(
+                cells, _expected_cells((int(px), int(py)), 0, True)
+            )
+
+            def parse_body(body):
+                return (
+                    int(body[6:7]), int(body[8:9]),
+                    body[10:11].decode("ascii"),
+                    body[12:43].decode("cp932").strip(),
+                )
+
+            chars = {}
+            for raw in raw_lines:
+                if raw.startswith(b"#m57 O "):
+                    x, y, d, name = parse_body(raw[7:74])
+                    chars[name] = (x, y, d)
+                elif raw.startswith(b"#m57 W "):
+                    for start in (7, 75):
+                        x, y, d, name = parse_body(raw[start:start + 67])
+                        chars[name] = (x, y, d)
+            self.assertEqual(chars["モック太郎"], (3, 4, "B"))
+            self.assertEqual(chars["案内人"], (4, 4, "L"))
+            self.assertEqual(chars["モック猫"], (3, 3, "F"))
+        finally:
+            writer.close()
+            await writer.wait_closed()
+
+    async def test_invalid_style_is_rejected(self):
+        session = PhiSession(self.host, self.port, "TESTID")
+        task = asyncio.create_task(session.run())
+        try:
+            await self._next_map(session)
+            await session.send("#ex-map style=turn")
+            await self._next_map(session)
+            await session.send("#ex-map style=bogus")
+            # 実サーバは style=no と返すだけで地図は送らない
+            events = []
+            try:
+                while True:
+                    ev = await asyncio.wait_for(
+                        session.events.get(), timeout=0.7
+                    )
+                    events.append(ev)
+            except TimeoutError:
+                pass
+            self.assertFalse(
+                any(isinstance(ev, MapEvent) for ev in events)
+            )
+            self.assertEqual(self.server._map_style, "turn")
+            # 状態は turn のままなので、次の地図も回転している
+            await session.send("#map")
+            event = await self._next_map(session)
+            self.assertEqual(_char_tuple(event, "モック太郎"), (3, 4, "B"))
+        finally:
+            await session.disconnect(graceful=True)
+            await asyncio.wait_for(task, timeout=5.0)
+
+    async def test_effects_still_work_in_turn(self):
+        session = PhiSession(self.host, self.port, "TESTID")
+        task = asyncio.create_task(session.run())
+        try:
+            await self._next_map(session)
+            await session.send("#ex-map style=turn")
+            await self._next_map(session)
+
+            await session.send("hit")
+            events = await self._collect_until(
+                session,
+                lambda ev, evs: isinstance(ev, MessageEvent)
+                and "攻撃した" in plain_text(ev.text),
+            )
+            attack = next(
+                plain_text(ev.text)
+                for ev in events
+                if isinstance(ev, MessageEvent) and "攻撃した" in plain_text(ev.text)
+            )
+            self.assertTrue(parse_floats(attack))
+            self.assertIsNotNone(parse_attack(attack))
+
+            await session.send("cast")
+            await self._collect_until(
+                session,
+                lambda ev, evs: isinstance(ev, ListEvent) and ev.lines,
+            )
+            await session.send("3")
+            await session.close_list()
+            events = await self._collect_until(
+                session,
+                lambda ev, evs: isinstance(ev, MessageEvent)
+                and "Harm" in plain_text(ev.text),
+            )
+            harm = next(
+                plain_text(ev.text)
+                for ev in events
+                if isinstance(ev, MessageEvent) and "Harm" in plain_text(ev.text)
+            )
+            self.assertTrue(parse_floats(harm))
+            self.assertIsNotNone(parse_attack(harm))
+
+            await session.send("priv")
+            events = await self._collect_until(
+                session,
+                lambda ev, evs: isinstance(ev, MessageEvent)
+                and ev.channel == "priv",
+            )
+            privs = [
+                ev for ev in events
+                if isinstance(ev, MessageEvent) and ev.channel == "priv"
+            ]
+            self.assertTrue(privs)
+            self.assertEqual(privs[-1].from_, "案内人")
+        finally:
+            await session.disconnect(graceful=True)
+            await asyncio.wait_for(task, timeout=5.0)
 
 
 if __name__ == "__main__":

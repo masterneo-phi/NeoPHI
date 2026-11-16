@@ -424,6 +424,24 @@ func _read_skin_text(rel: String) -> Variant:
 	return SkinFiles.decode_text_file(data)
 
 
+func config_text(file_name: String) -> String:
+	## Philly の `Config/<file_name>` を探して読む。第4段の XML メニュー
+	## や削除フィルタの既定ファイルに使う。無ければ ""。
+	if not safe_name(file_name):
+		return ""
+	var rel := "Config/%s" % file_name
+	if not safe_rel(rel):
+		return ""
+	for root in philly_roots:
+		var found: Variant = _find_in(root, rel)
+		if found == null:
+			continue
+		var data: Variant = _read_file(found)
+		if data != null:
+			return SkinFiles.decode_text_file(data)
+	return ""
+
+
 func button_index() -> Dictionary:
 	## `Buttons/Index.txt` の中身。無ければ空の一覧(大きさは既定の 20)。
 	if _button_index != null:
