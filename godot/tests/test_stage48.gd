@@ -50,6 +50,9 @@ func _run() -> void:
 	var tab: Variant = main.call("_active_tab")
 	var config: Variant = main.get("_config")
 	config.log_image_disp = true
+	# 画像の縮小はログ欄の幅で決まる。旧スタイルで幅を固定する。
+	config.ui_style = "old"
+	tab.call("apply_ui_style")
 	tab.log_view.custom_minimum_size = Vector2(600, 200)
 	# テクスチャを用意して共有キャッシュへ入れる (背の高い画像で、
 	# 埋め込まれたらログ欄の内容の高さが伸びることで確認する)。

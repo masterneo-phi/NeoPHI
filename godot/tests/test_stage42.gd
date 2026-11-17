@@ -30,6 +30,10 @@ func _run() -> void:
 	await create_timer(1.0).timeout
 	var tab: PhiCharacter = main.call("_active_tab")
 	check(tab != null, "active tab exists")
+	# 下端余白は旧スタイル (分割配置) のログの仕様。新スタイルでは
+	# フロート窓の大きさから文字サイズが決まるので、ここでは旧にする。
+	(main.get("_config") as PhiConfig).ui_style = "old"
+	tab.apply_ui_style()
 	check(tab.get("_log_box") != null, "log stylebox duplicated")
 	# 起動時点のズーム (設定由来) でも、余白が文字サイズ比例で付いている
 	var start_size := PhiFont.ui_size_for_zoom(tab.map_view.zoom)

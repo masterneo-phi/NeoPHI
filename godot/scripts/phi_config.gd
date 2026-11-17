@@ -95,6 +95,17 @@ var toolbar_pos := Vector2(-1, -1)
 ## グループごとに1段に並べる (従来)。パネルの右下をドラッグ
 ## して幅を変えると、その幅に合う列数が入る。
 var toolbar_cols := 0
+## 表示スタイル (第101段、0.5.0)。 "new" はログと入力欄を
+## 地図の上に浮かせる新スタイル、"old" は従来の分割配置。
+## 既定は新スタイル (ユーザーの指定)。
+var ui_style := "new"
+## 地図の配置 (第101段)。0=中央 (既定)、1=左寄せ、2=右寄せ。
+## 地図が画面全域に広がる新スタイルで効く。
+var map_align := 0
+## ログ/入力フロート窓の位置と大きさ (地図の中の座標)。
+## 大きさ 0 は未設定で、その場合は既定の置き方にする。
+var log_float_rect := Rect2(0, 0, 0, 0)
+var input_float_rect := Rect2(0, 0, 0, 0)
 var talk_button_pos := Vector2(-1, -1)
 ## 入力欄の高さ(ピクセル)。-1 は未設定で、その場合は既定の
 ## 3行ぶんにする。境目のドラッグで更新され、保存はメイン画面の
@@ -184,6 +195,10 @@ func reset() -> void:
 	split_ratio = DEFAULT_SPLIT_RATIO
 	toolbar_pos = Vector2(-1, -1)
 	toolbar_cols = 0
+	ui_style = "new"
+	map_align = 0
+	log_float_rect = Rect2(0, 0, 0, 0)
+	input_float_rect = Rect2(0, 0, 0, 0)
 	talk_button_pos = Vector2(-1, -1)
 	input_height = -1
 	scroll_stop = false
@@ -260,6 +275,19 @@ func load_file(path: String = DEFAULT_PATH) -> bool:
 		if tx >= 0.0 and ty >= 0.0:
 			toolbar_pos = Vector2(tx, ty)
 	toolbar_cols = clampi(int(cfg.get_value("Disp", "ToolbarCols", 0)), 0, 64)
+	ui_style = "old" if str(cfg.get_value("Disp", "UiStyle", "new")) == "old" else "new"
+	map_align = clampi(int(cfg.get_value("Disp", "MapAlign", 0)), 0, 2)
+	# フロート窓の位置と大きさ。幅と高さがそろって正なら採用する。
+	if cfg.has_section_key("Disp", "LogFloatW") and cfg.has_section_key("Disp", "LogFloatH"):
+		var lw := float(cfg.get_value("Disp", "LogFloatW", 0))
+		var lh := float(cfg.get_value("Disp", "LogFloatH", 0))
+		if lw > 0.0 and lh > 0.0:
+			log_float_rect = Rect2(float(cfg.get_value("Disp", "LogFloatX", 0)), float(cfg.get_value("Disp", "LogFloatY", 0)), lw, lh)
+	if cfg.has_section_key("Disp", "InputFloatW") and cfg.has_section_key("Disp", "InputFloatH"):
+		var iw := float(cfg.get_value("Disp", "InputFloatW", 0))
+		var ih := float(cfg.get_value("Disp", "InputFloatH", 0))
+		if iw > 0.0 and ih > 0.0:
+			input_float_rect = Rect2(float(cfg.get_value("Disp", "InputFloatX", 0)), float(cfg.get_value("Disp", "InputFloatY", 0)), iw, ih)
 	# Talk ボタンの位置。両方そろって 0 以上なら採用する。
 	if cfg.has_section_key("Disp", "TalkButtonX") and cfg.has_section_key("Disp", "TalkButtonY"):
 		var bx := float(cfg.get_value("Disp", "TalkButtonX", -1))
@@ -320,6 +348,16 @@ func save_file(path: String = DEFAULT_PATH) -> bool:
 	cfg.set_value("Disp", "ToolbarX", toolbar_pos.x)
 	cfg.set_value("Disp", "ToolbarY", toolbar_pos.y)
 	cfg.set_value("Disp", "ToolbarCols", toolbar_cols)
+	cfg.set_value("Disp", "UiStyle", ui_style)
+	cfg.set_value("Disp", "MapAlign", map_align)
+	cfg.set_value("Disp", "LogFloatX", log_float_rect.position.x)
+	cfg.set_value("Disp", "LogFloatY", log_float_rect.position.y)
+	cfg.set_value("Disp", "LogFloatW", log_float_rect.size.x)
+	cfg.set_value("Disp", "LogFloatH", log_float_rect.size.y)
+	cfg.set_value("Disp", "InputFloatX", input_float_rect.position.x)
+	cfg.set_value("Disp", "InputFloatY", input_float_rect.position.y)
+	cfg.set_value("Disp", "InputFloatW", input_float_rect.size.x)
+	cfg.set_value("Disp", "InputFloatH", input_float_rect.size.y)
 	cfg.set_value("Disp", "SmoothMapScroll", smooth_scroll)
 	cfg.set_value("Disp", "TalkButtonX", talk_button_pos.x)
 	cfg.set_value("Disp", "TalkButtonY", talk_button_pos.y)

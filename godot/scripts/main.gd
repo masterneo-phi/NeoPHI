@@ -72,6 +72,12 @@ var _se_popup: PopupMenu = null
 var _se_item := -1
 var _mm_always_popup: PopupMenu = null
 var _mm_always_item := -1
+var _ui_style_popup: PopupMenu = null
+var _ui_style_item := -1
+var _map_align_popup: PopupMenu = null
+var _ma_center_item := -1
+var _ma_left_item := -1
+var _ma_right_item := -1
 var _master_magic_button: MenuButton = null
 var _map_mode_popup: PopupMenu = null
 var _m5_item := -1
@@ -97,6 +103,7 @@ var _about_opened := false
 var _update_http: HTTPRequest = null
 var _update_busy := false
 var _update_manual := false
+var _update_retried := false
 var _update_dialog: Window = null
 var _update_label: Label = null
 var _update_info: Dictionary = {}
@@ -438,6 +445,22 @@ func _build_menu_bar(root: VBoxContainer) -> void:
 				popup.add_check_item(str(action["caption"]), item_id)
 				_mm_always_popup = popup
 				_mm_always_item = popup.get_item_index(item_id)
+			elif action_name == "UiStyleFloat":
+				popup.add_check_item(str(action["caption"]), item_id)
+				_ui_style_popup = popup
+				_ui_style_item = popup.get_item_index(item_id)
+			elif action_name == "MapAlignCenter" or action_name == "MapAlignLeft" or action_name == "MapAlignRight":
+				# マップ配置は排他なのでラジオチェックで出す。
+				popup.add_radio_check_item(str(action["caption"]), item_id)
+				_map_align_popup = popup
+				var align_index := popup.get_item_index(item_id)
+				match action_name:
+					"MapAlignCenter":
+						_ma_center_item = align_index
+					"MapAlignLeft":
+						_ma_left_item = align_index
+					"MapAlignRight":
+						_ma_right_item = align_index
 			elif action_name == "M5x5" or action_name == "M7x7" or action_name == "M9x9" or action_name == "MTurn" or action_name == "MSolid":
 				# 地図モードは排他なのでラジオチェックで出す。
 				popup.add_radio_check_item(str(action["caption"]), item_id)
@@ -1133,6 +1156,15 @@ func _update_action_states() -> void:
 			_map_mode_popup.set_item_checked(_mturn_item, _config.map_style == "turn")
 		if _msolid_item >= 0:
 			_map_mode_popup.set_item_checked(_msolid_item, _config.map_style == "solid")
+	if _ui_style_popup != null and _ui_style_item >= 0:
+		_ui_style_popup.set_item_checked(_ui_style_item, _config.ui_style == "new")
+	if _map_align_popup != null:
+		if _ma_center_item >= 0:
+			_map_align_popup.set_item_checked(_ma_center_item, _config.map_align == 0)
+		if _ma_left_item >= 0:
+			_map_align_popup.set_item_checked(_ma_left_item, _config.map_align == 1)
+		if _ma_right_item >= 0:
+			_map_align_popup.set_item_checked(_ma_right_item, _config.map_align == 2)
 	# ツールバーのボタンの状態は、各タブが自分の接続状態で合わせる。
 	for t in _tabs:
 		t.refresh_toolbar_states()
@@ -1977,6 +2009,22 @@ func _do_action(action_name: String) -> void:
 				t.apply_smooth_scroll()
 			_update_action_states()
 			_save_config()
+		"ui-style-toggle":
+			# 表示スタイル (第101段、0.5.0)。新スタイルはログと
+			# 入力欄が地図の上に浮く。切替は1つに統一し、両方の
+			# 窓がまとめて切り替わる (ユーザーの指定)。
+			_config.ui_style = "old" if _config.ui_style == "new" else "new"
+			for t in _tabs:
+				t.apply_ui_style()
+			_update_action_states()
+			_save_config()
+		"map-align":
+			# マップ配置 (第101段)。中央/左寄せ/右寄せ。
+			_config.map_align = int(PhiActions.get_action(action_name).get("align", 0))
+			for t in _tabs:
+				t.apply_map_align()
+			_update_action_states()
+			_save_config()
 		"disp-magic-toggle":
 			# 魔法表示の受け取りを切り替える(第3段)。接続中なら即座に伝える。
 			_config.disp_magic = not _config.disp_magic
@@ -2190,6 +2238,22 @@ func _check_update(manual: bool) -> void:
 		_update_busy = false
 		if manual:
 			_log_active("system", "更新を確認できませんでした")
+		else:
+			_schedule_update_retry()
+
+
+func _schedule_update_retry() -> void:
+	## 自動チェックが失敗した時 (起動直後の回線不調など) に、
+	## 30 秒後にもう一度だけ確認する (第102段、0.5.0)。
+	if _update_retried:
+		return
+	_update_retried = true
+	var timer := Timer.new()
+	timer.one_shot = true
+	timer.wait_time = 30.0
+	timer.timeout.connect(func() -> void: _check_update(false))
+	add_child(timer)
+	timer.start()
 
 
 func _on_update_response(result: int, response_code: int, _headers: PackedStringArray, body: PackedByteArray) -> void:
@@ -2198,12 +2262,17 @@ func _on_update_response(result: int, response_code: int, _headers: PackedString
 	if result != HTTPRequest.RESULT_SUCCESS or response_code != 200:
 		if manual:
 			_log_active("system", "更新を確認できませんでした")
+		else:
+			_schedule_update_retry()
 		return
 	var info := PhiUpdate.parse_latest(body.get_string_from_utf8())
 	if info.is_empty():
 		if manual:
 			_log_active("system", "更新を確認できませんでした")
+		else:
+			_schedule_update_retry()
 		return
+	_update_retried = false
 	if PhiUpdate.is_newer(str(info["tag"]), PhiVersion.VERSION):
 		_update_info = info
 		_show_update_dialog()
@@ -2252,7 +2321,7 @@ func _show_update_dialog() -> void:
 		buttons.alignment = BoxContainer.ALIGNMENT_END
 		box.add_child(buttons)
 		var open_button := Button.new()
-		open_button.text = "ダウンロードページを開く"
+		open_button.text = "GitHub のリリースページを開く"
 		open_button.focus_mode = Control.FOCUS_NONE
 		open_button.pressed.connect(_on_update_open_page)
 		buttons.add_child(open_button)
@@ -2267,7 +2336,7 @@ func _show_update_dialog() -> void:
 	var shown := tag
 	if not rel_name.is_empty() and rel_name != tag:
 		shown = tag + " (" + rel_name + ")"
-	_update_label.text = "新しいバージョン " + shown + " が公開されています。\n現在のバージョンは " + PhiVersion.VERSION + " です。\nダウンロードページから新しい NeoPHI を入手してください。"
+	_update_label.text = "新しいバージョン " + shown + " が公開されています。\n現在のバージョンは " + PhiVersion.VERSION + " です。\nGitHub のリリースページから新しい NeoPHI を入手してください。"
 	var frame_min := (_update_dialog.get_child(0) as Control).get_combined_minimum_size()
 	var need := Vector2i(frame_min) + Vector2i(30, 24)
 	var root_size := get_window().size

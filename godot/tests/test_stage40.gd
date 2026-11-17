@@ -75,5 +75,16 @@ func _run() -> void:
 	await create_timer(0.2).timeout
 	check(main.get("_update_dialog") == null, "no dialog on 404")
 
+	# (5) 自動チェックの失敗は一度だけ再試行する (第102段)
+	main.set("_update_manual", false)
+	main.set("_update_retried", false)
+	main.call("_on_update_response", HTTPRequest.RESULT_CANT_CONNECT, 0, PackedStringArray(), PackedByteArray())
+	check(bool(main.get("_update_retried")), "auto failure schedules one retry")
+	main.call("_on_update_response", HTTPRequest.RESULT_CANT_CONNECT, 0, PackedStringArray(), PackedByteArray())
+	check(bool(main.get("_update_retried")), "second failure keeps single retry")
+	# 成功したら再試行フラグは戻る
+	main.call("_on_update_response", HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), same.to_utf8_buffer())
+	check(not bool(main.get("_update_retried")), "success clears retry flag")
+
 	print("stage40: %d checks, %d failures" % [_checks, _failures])
 	quit(1 if _failures > 0 else 0)

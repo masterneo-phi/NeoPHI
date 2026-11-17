@@ -45,7 +45,10 @@ func _initialize() -> void:
 	_test_status_format_and_centering()
 	_test_bar_alignment()
 	# 配置の幾何学は、ツリーに入れてレイアウトが回ってから見る。
+	# このテストは従来の分割配置 (旧スタイル) の幾何学を見るので、
+	# 既定の新スタイルではなく旧スタイルで組み立てる。
 	_config = PhiConfig.new()
+	_config.ui_style = "old"
 	var font := PhiFont.make_ui_font()
 	var bold := PhiFont.make_bold_font()
 	_tab = PhiCharacter.new()

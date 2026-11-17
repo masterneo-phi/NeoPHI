@@ -184,6 +184,9 @@ const Q_TABLE := [
 signal zoom_changed(new_zoom: int)
 
 var zoom := 4
+## 地図の横配置 (第101段)。0=中央、1=左寄せ、2=右寄せ。
+## 縦は常時中央。描画と当たり判定で同じ係数を使う。
+var map_align := 0
 var assets: GameAssets = null
 var label_font: Font = null
 ## 太字フォント(コンパスの様式表示など、目立たせたい文字用)。
@@ -695,13 +698,23 @@ func show_hover_hint(cname: String, local_pos: Vector2, font_size: int) -> void:
 	_hint_label.position = pos
 
 
+func _align_factor() -> float:
+	## 横配置の係数。余白を左にどれだけ残すか。
+	match map_align:
+		1:
+			return 0.0
+		2:
+			return 1.0
+	return 0.5
+
+
 func drawn_map_rect() -> Rect2:
 	## 描いている地図の範囲(コントロール内の座標)。マウスの当たり判定用。
 	var dim := grid_dim(int(_event.get("size", 7)))
 	var z := float(zoom)
 	var w := dim * CHIP_SIZE * z
 	var h := (dim * CHIP_SIZE + MAP_TOP) * z
-	var ox := floorf(maxf(0.0, (size.x - w) * 0.5))
+	var ox := floorf(maxf(0.0, (size.x - w) * _align_factor()))
 	var oy := floorf(maxf(0.0, (size.y - h) * 0.5))
 	return Rect2(ox, oy, w, h)
 
@@ -957,7 +970,7 @@ func _draw() -> void:
 	# 配置は整数ピクセルに丸める。小数位置だと線形補間でチップの
 	# 端が隣の絵と混ざり、セルの境に黒い線が出ることがある。
 	var shake := _shake_offset(z)
-	var ox := floorf(maxf(0.0, (size.x - dim * CHIP_SIZE * z) * 0.5) + shake.x)
+	var ox := floorf(maxf(0.0, (size.x - dim * CHIP_SIZE * z) * _align_factor()) + shake.x)
 	var oy := floorf(maxf(0.0, (size.y - (dim * CHIP_SIZE + MAP_TOP) * z) * 0.5) + shake.y)
 	# 第64段: 滑らかスクロールのずれ (画面ピクセル)。イーズ
 	# アウトで 0 へ戻す。前の地図は「ずれ - 1マス」の位置に

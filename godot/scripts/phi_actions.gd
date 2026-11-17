@@ -106,6 +106,10 @@ const ACTIONS := {
 	"LogScrollStop": {"caption": "ログスクロール停止", "hint": "新しい行が来てもログを自動でスクロールしない", "kind": "scroll-toggle"},
 	"SmoothScroll": {"caption": "スムーズマップスクロール", "hint": "移動時に地図をドット単位で滑らかにスクロールする(北固定の時だけ)", "kind": "smooth-scroll-toggle"},
 	"DispMagic": {"caption": "魔法表示", "hint": "魔法の軌跡や着弾を地図に表示する(サーバーからの表示情報)", "kind": "disp-magic-toggle"},
+	"UiStyleFloat": {"caption": "新スタイル (フロート表示)", "hint": "ログと入力欄を地図の上に浮かせて表示する新スタイル。外すと従来の配置 (旧スタイル) になる", "kind": "ui-style-toggle"},
+	"MapAlignCenter": {"caption": "マップ配置: 中央", "hint": "地図を画面の中央に表示する (新スタイル)", "kind": "map-align", "align": 0},
+	"MapAlignLeft": {"caption": "マップ配置: 左寄せ", "hint": "地図を画面の左に寄せて表示する (新スタイル)", "kind": "map-align", "align": 1},
+	"MapAlignRight": {"caption": "マップ配置: 右寄せ", "hint": "地図を画面の右に寄せて表示する (新スタイル)", "kind": "map-align", "align": 2},
 	"LogImage": {"caption": "ログに画像を表示", "hint": "ログ中の画像タグを画像そのもので表示する", "kind": "image-toggle"},
 	"PlayBGM": {"caption": "BGM を再生する", "hint": "サーバーから指定されたBGM(MIDI)を再生する", "kind": "bgm-toggle"},
 	"PlaySE": {"caption": "効果音を再生する", "hint": "ログに合わせて効果音 (SoundRegexp.ini / SoundFile.ini) を再生する", "kind": "se-toggle"},
@@ -121,7 +125,7 @@ const MENUS := [
 	{"name": "操作", "items": ["NewPrivWindow", "Loud", "TalkAdd", "SayAllTabs"]},
 	{"name": "行動", "items": ["Equip", "Unequip", "-", "Talk", "Read", "Write", "Erase", "Board", "-", "Get", "Put", "Use", "Sort", "FloorItem", "-", "Spells", "Pay", "Hit", "Check", "Skills"]},
 	{"name": "魔法", "items": ["WizardEye", "PartyEye", "EagleEye", "Identify", "Search", "WizardLock", "Unlock", "Detect", "Create", "Analyze", "Forget", "Call", "Return", "-", "WizardLight", "EagleEyeText", "List", "Destroy", "ChargeSpell", "Appear", "Disappear", "-", "Cast", "Cast1", "Cast2", "Cast3", "Cast4", "Cast5", "Cast6", "Cast7"]},
-	{"name": "表示", "items": ["M9x9", "M7x7", "M5x5", "MSolid", "MTurn", "-", "SSMap", "LogScrollStop", "SmoothScroll", "DispMagic", "LogImage", "PlayBGM", "PlaySE", "MasterMagicAlways", "-", "LogAutoSave", "LogSave", "LogSaveDir", "LogDeleteFilter", "ImageWindow"]},
+	{"name": "表示", "items": ["M9x9", "M7x7", "M5x5", "MSolid", "MTurn", "MapAlignCenter", "MapAlignLeft", "MapAlignRight", "-", "UiStyleFloat", "-", "SSMap", "LogScrollStop", "SmoothScroll", "DispMagic", "LogImage", "PlayBGM", "PlaySE", "MasterMagicAlways", "-", "LogAutoSave", "LogSave", "LogSaveDir", "LogDeleteFilter", "ImageWindow"]},
 	{"name": "ツール", "items": ["UnewPanel", "SoundTest", "ChipViewer", "CharaViewer", "ShortcutConfig", "OpenConfigFolder", "CheckUpdate", "VersionInfo"]},
 ]
 

@@ -265,6 +265,35 @@ var _toolbar_resize_start_width := 0.0
 const TOOLBAR_RESIZE_GRIP := 16.0
 var _toolbar_dragging := false
 var _toolbar_drag_offset := Vector2.ZERO
+## ログ/入力フロート窓 (第101段、0.5.0 の新スタイル)。
+## 地図の上に浮くパネルで、中身 (log_view / input_box) を
+## ドック配置と入れ替えて使う。枠の帯のドラッグで移動、
+## 右下の隅で大きさ変更。位置と大きさは設定に保持 (全タブ共通)。
+var _right_col: VBoxContainer = null
+var _log_float: PanelContainer = null
+var _input_float: PanelContainer = null
+var _log_float_band: PanelContainer = null
+var _input_float_band: PanelContainer = null
+var _log_float_title: Label = null
+var _input_float_title: Label = null
+var _log_float_content: MarginContainer = null
+var _input_float_content: MarginContainer = null
+var _float_mode := false
+var _floats_placed := false
+var _float_drag_panel: PanelContainer = null
+var _float_drag_offset := Vector2.ZERO
+var _float_resize_panel: PanelContainer = null
+var _float_resize_mouse_start := Vector2.ZERO
+var _float_resize_start_size := Vector2.ZERO
+var _applied_log_font := -1
+var _applied_input_font := -1
+var _dock_log_min := Vector2.ZERO
+var _dock_input_min := Vector2.ZERO
+## フロート窓の枠色。ログは金、入力は赤 (ユーザーの指定)。
+const FLOAT_LOG_BORDER := Color(0.83, 0.65, 0.25)
+const FLOAT_INPUT_BORDER := Color(0.78, 0.22, 0.22)
+## フロート窓の右下のリサイズ領域 (px)。
+const FLOAT_RESIZE_GRIP := 18.0
 ## 保持した位置が無く、自動配置 (右上) の間は true。
 ## 地図やパネル自体の大きさが変わるたびに置き直す (起動直後は
 ## レイアウト前で大きさが定まらず、左上に残る不具合があった)。
@@ -670,6 +699,7 @@ func clear_held_input() -> void:
 	_mouse_held = false
 	_list_dragging = false
 	_end_toolbar_drag()
+	_end_float_drag()
 	_mouse_cursor_now = ""
 	Input.set_custom_mouse_cursor(null)
 
@@ -778,6 +808,7 @@ func _build_ui() -> void:
 	_build_list_overlay()
 	_build_talk_button()
 	_build_toolbar_overlay()
+	_build_float_panels()
 	status_panel = StatusPanel.new()
 	status_panel.label_font = _font
 	status_panel.bold_font = _bold_font
@@ -793,6 +824,7 @@ func _build_ui() -> void:
 	var right_col := VBoxContainer.new()
 	right_col.add_theme_constant_override("separation", 4)
 	middle.add_child(right_col)
+	_right_col = right_col
 	var log_top_label := Label.new()
 	log_top_label.text = LOG_TOP_TEXT
 	log_top_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -853,6 +885,8 @@ func _build_ui() -> void:
 	refresh_ui_font_size()
 	_update_side_info()
 	apply_scroll_stop()
+	apply_map_align()
+	apply_ui_style()
 
 
 static func _round_panel(panel: PanelContainer) -> void:
@@ -1083,6 +1117,344 @@ func _build_toolbar_overlay() -> void:
 	_toolbar_panel.resized.connect(_rehome_toolbar_auto)
 	_apply_toolbar_home()
 	refresh_toolbar_states()
+
+
+# -- フロート窓 (第101段、0.5.0 の新スタイル) --------------------------------
+
+static func _float_box(border: Color) -> StyleBoxFlat:
+	## フロート窓の地。黒の透過に、角丸と色付きの外枠。
+	## 内側の余白は題名帯と中身側で持つので、ここは 0。
+	var box := StyleBoxFlat.new()
+	box.bg_color = Color(0, 0, 0, 0.62)
+	box.border_color = border
+	box.set_border_width_all(3)
+	box.set_corner_radius_all(10)
+	box.content_margin_left = 0
+	box.content_margin_right = 0
+	box.content_margin_top = 0
+	box.content_margin_bottom = 0
+	return box
+
+
+static func _float_band_box(tint: Color) -> StyleBoxFlat:
+	## フロート窓の題名帯の地。枠色を透かした帯で、上の角は
+	## 窓の内側の丸みに合わせる。
+	var box := StyleBoxFlat.new()
+	box.bg_color = tint
+	box.corner_radius_top_left = 7
+	box.corner_radius_top_right = 7
+	box.content_margin_left = 10
+	box.content_margin_right = 10
+	box.content_margin_top = 3
+	box.content_margin_bottom = 3
+	return box
+
+
+func _make_float_panel(border: Color, tint: Color, title: String) -> Array:
+	## フロート窓を組み立てる。[窓, 帯, 題名ラベル, 中身の入れ物]。
+	## 帯がドラッグのつかみどころ (ユーザーの指定で明示した)。
+	var panel := PanelContainer.new()
+	panel.add_theme_stylebox_override("panel", _float_box(border))
+	panel.mouse_filter = Control.MOUSE_FILTER_STOP
+	panel.visible = false
+	var vbox := VBoxContainer.new()
+	vbox.add_theme_constant_override("separation", 0)
+	vbox.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	panel.add_child(vbox)
+	var band := PanelContainer.new()
+	band.add_theme_stylebox_override("panel", _float_band_box(tint))
+	band.mouse_filter = Control.MOUSE_FILTER_STOP
+	band.mouse_default_cursor_shape = Control.CURSOR_MOVE
+	vbox.add_child(band)
+	var label := Label.new()
+	label.text = title
+	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	label.add_theme_color_override("font_color", Color.WHITE)
+	band.add_child(label)
+	var content := MarginContainer.new()
+	content.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	content.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	content.add_theme_constant_override("margin_left", 8)
+	content.add_theme_constant_override("margin_right", 8)
+	content.add_theme_constant_override("margin_top", 4)
+	content.add_theme_constant_override("margin_bottom", 8)
+	vbox.add_child(content)
+	return [panel, band, label, content]
+
+
+func _build_float_panels() -> void:
+	## ログと入力欄を入れるフロート窓。普段は隠れていて、
+	## 新スタイルの時に中身をドックから移して使う。
+	var log_parts := _make_float_panel(FLOAT_LOG_BORDER, Color(0.83, 0.65, 0.25, 0.45), LOG_TOP_TEXT)
+	_log_float = log_parts[0]
+	_log_float_band = log_parts[1]
+	_log_float_title = log_parts[2]
+	_log_float_content = log_parts[3]
+	map_view.add_child(_log_float)
+	var input_parts := _make_float_panel(FLOAT_INPUT_BORDER, Color(0.78, 0.22, 0.22, 0.5), "Chat Window")
+	_input_float = input_parts[0]
+	_input_float_band = input_parts[1]
+	_input_float_title = input_parts[2]
+	_input_float_content = input_parts[3]
+	map_view.add_child(_input_float)
+	_log_float.gui_input.connect(_on_float_gui_input.bind(_log_float))
+	_input_float.gui_input.connect(_on_float_gui_input.bind(_input_float))
+	_log_float_band.gui_input.connect(_on_float_band_gui_input.bind(_log_float))
+	_input_float_band.gui_input.connect(_on_float_band_gui_input.bind(_input_float))
+	_log_float.resized.connect(_on_float_resized)
+	_input_float.resized.connect(_on_float_resized)
+	map_view.resized.connect(_on_map_resized_floats)
+
+
+func apply_map_align() -> void:
+	## マップ配置 (中央/左寄せ/右寄せ) の反映。
+	if map_view != null and _config != null:
+		map_view.map_align = _config.map_align
+		map_view.queue_redraw()
+
+
+func apply_ui_style() -> void:
+	## 表示スタイルの反映。新スタイルではログと入力欄をフロート窓へ
+	## 移し、右列を畳んで地図を画面全域にする。旧スタイルでは
+	## 従来の分割配置に戻す。切替は両窓まとめて行う。
+	if _log_float == null or log_view == null or input_box == null or _config == null:
+		return
+	var want_float := _config.ui_style == "new"
+	if want_float == _float_mode:
+		if want_float:
+			_place_floats()
+			_apply_float_fonts()
+		return
+	_float_mode = want_float
+	# スタイルが変わったら文字サイズの適用済みキャッシュを捨てる。
+	# 倍率が同じままだと refresh が早期リターンして、前のスタイルの
+	# 文字サイズ (フロート窓由来) がドック側に残ってしまうため。
+	_applied_size = -1
+	_applied_log_font = -1
+	_applied_input_font = -1
+	if want_float:
+		_dock_log_min = log_view.custom_minimum_size
+		_dock_input_min = input_box.custom_minimum_size
+		input_split.remove_child(log_view)
+		_log_float_content.add_child(log_view)
+		input_split.remove_child(input_box)
+		_input_float_content.add_child(input_box)
+		log_view.custom_minimum_size = Vector2.ZERO
+		input_box.custom_minimum_size = Vector2.ZERO
+		if _right_col != null:
+			_right_col.visible = false
+		_log_float.visible = true
+		_input_float.visible = true
+		_place_floats()
+		_apply_float_log_look()
+		_apply_float_input_look()
+		_applied_log_font = -1
+		_applied_input_font = -1
+		_apply_float_fonts()
+	else:
+		_end_float_drag()
+		_log_float_content.remove_child(log_view)
+		input_split.add_child(log_view)
+		input_split.move_child(log_view, 0)
+		_input_float_content.remove_child(input_box)
+		input_split.add_child(input_box)
+		input_split.move_child(input_box, 1)
+		log_view.custom_minimum_size = _dock_log_min
+		input_box.custom_minimum_size = _dock_input_min
+		if _right_col != null:
+			_right_col.visible = true
+		_log_float.visible = false
+		_input_float.visible = false
+		_applied_log_font = -1
+		_applied_input_font = -1
+		_apply_log_css()
+		_restore_input_look()
+		refresh_ui_font_size()
+
+
+func _place_floats() -> void:
+	## フロート窓の位置と大きさを設定に合わせる。未設定なら
+	## 既定の置き方 (右上にログ、右下に入力) にする。
+	if map_view == null or map_view.size.x < 50.0 or map_view.size.y < 50.0:
+		return
+	var mw := map_view.size
+	if _config.log_float_rect.size.x > 0.0 and _config.log_float_rect.size.y > 0.0:
+		_log_float.position = _config.log_float_rect.position
+		_log_float.size = _config.log_float_rect.size
+	elif not _floats_placed:
+		var w := clampf(mw.x * 0.44, 320.0, 760.0)
+		var h := clampf(mw.y * 0.58, 200.0, 600.0)
+		_log_float.position = Vector2(mw.x - w - 10.0, 10.0)
+		_log_float.size = Vector2(w, h)
+	if _config.input_float_rect.size.x > 0.0 and _config.input_float_rect.size.y > 0.0:
+		_input_float.position = _config.input_float_rect.position
+		_input_float.size = _config.input_float_rect.size
+	elif not _floats_placed:
+		var w2 := clampf(mw.x * 0.44, 320.0, 760.0)
+		_input_float.position = Vector2(mw.x - w2 - 10.0, mw.y - 128.0)
+		_input_float.size = Vector2(w2, 118.0)
+	_floats_placed = true
+	_clamp_float_panels()
+
+
+func _clamp_float_panels() -> void:
+	## フロート窓が地図の外へはみ出さないようにする。
+	if not _float_mode or map_view == null:
+		return
+	for panel in [_log_float, _input_float]:
+		if panel == null:
+			continue
+		var max_pos := Vector2(maxf(0.0, map_view.size.x - panel.size.x), maxf(0.0, map_view.size.y - panel.size.y))
+		panel.position = Vector2(clampf(panel.position.x, 0.0, max_pos.x), clampf(panel.position.y, 0.0, max_pos.y))
+
+
+func _on_map_resized_floats() -> void:
+	## 地図の大きさが決まったら、未配置の窓を置き、
+	## 配置済みの窓は内側へ戻す。
+	if not _float_mode:
+		return
+	if not _floats_placed:
+		_place_floats()
+	else:
+		_clamp_float_panels()
+
+
+func _on_float_resized() -> void:
+	if _float_mode:
+		_apply_float_fonts()
+
+
+static func float_font_for(panel_size: Vector2) -> int:
+	## 窓の大きさから決まる文字サイズ。両窓で同じ式を使い、
+	## 大きさは窓ごとに独立に決まる (ユーザーの指定)。
+	return clampi(int(roundf(panel_size.x / 34.0)), 11, 30)
+
+
+func _apply_float_fonts() -> void:
+	## フロート窓の文字サイズを、それぞれの窓の大きさに合わせる。
+	## 題名帯の文字も、その窓の文字サイズに合わせる。
+	if not _float_mode or _log_float == null or _input_float == null:
+		return
+	var ls := float_font_for(_log_float.size)
+	if ls != _applied_log_font:
+		_applied_log_font = ls
+		_apply_log_font_size(ls)
+		if _log_float_title != null:
+			_log_float_title.add_theme_font_size_override("font_size", ls)
+	var isz := float_font_for(_input_float.size)
+	if isz != _applied_input_font:
+		_applied_input_font = isz
+		input_box.add_theme_font_size_override("font_size", isz)
+		if _input_float_title != null:
+			_input_float_title.add_theme_font_size_override("font_size", isz)
+
+
+func _apply_float_log_look() -> void:
+	## フロート時のログの見た目。地は透明にして窓の黒透過を
+	## 見せ、既定の文字色は白にする。タグやクラス色はそのまま。
+	var box := StyleBoxFlat.new()
+	box.bg_color = Color(0, 0, 0, 0)
+	log_view.add_theme_stylebox_override("normal", box)
+	_log_box = box
+	log_view.add_theme_color_override("default_color", Color.WHITE)
+
+
+func _apply_float_input_look() -> void:
+	## フロート時の入力欄の見た目。地は透明、文字とカーソルは白。
+	for slot in ["normal", "focus"]:
+		var box := StyleBoxFlat.new()
+		box.bg_color = Color(0, 0, 0, 0)
+		input_box.add_theme_stylebox_override(slot, box)
+	input_box.add_theme_color_override("font_color", Color.WHITE)
+	input_box.add_theme_color_override("caret_color", Color.WHITE)
+	input_box.add_theme_color_override("font_placeholder_color", Color(0.75, 0.75, 0.75))
+
+
+func _restore_input_look() -> void:
+	## ドック配置に戻す時、入力欄の地と色を元のテーマに戻す。
+	if _input_normal_box != null:
+		input_box.add_theme_stylebox_override("normal", _input_normal_box)
+	if _input_focus_box != null:
+		input_box.add_theme_stylebox_override("focus", _input_focus_box)
+	input_box.remove_theme_color_override("font_color")
+	input_box.remove_theme_color_override("caret_color")
+	input_box.remove_theme_color_override("font_placeholder_color")
+
+
+func _float_in_grip(panel: PanelContainer, local_pos: Vector2) -> bool:
+	## 右下の隅 (リサイズ領域) の中かどうか。
+	return local_pos.x >= panel.size.x - FLOAT_RESIZE_GRIP and local_pos.y >= panel.size.y - FLOAT_RESIZE_GRIP
+
+
+func _on_float_band_gui_input(event: InputEvent, panel: PanelContainer) -> void:
+	## 題名帯のドラッグで窓を動かす (つかみどころは帯だけに
+	## 統一した。第103段、ユーザーの指定)。
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
+		if event.pressed:
+			_float_drag_panel = panel
+			_float_drag_offset = event.global_position - panel.global_position
+			var vp := get_viewport()
+			if vp != null:
+				vp.set_input_as_handled()
+		else:
+			_end_float_drag()
+
+
+func _on_float_gui_input(event: InputEvent, panel: PanelContainer) -> void:
+	## 窓の右下の隅で大きさ変更。移動は題名帯が担うので、
+	## ここは隅だけを見る (中身の上の操作は中身が受ける)。
+	if event is InputEventMouseMotion:
+		if _float_drag_panel == null and _float_resize_panel == null:
+			panel.mouse_default_cursor_shape = \
+				Control.CURSOR_BDIAGSIZE if _float_in_grip(panel, event.position) else Control.CURSOR_ARROW
+		return
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
+		if event.pressed:
+			if _float_in_grip(panel, event.position):
+				_float_resize_panel = panel
+				_float_resize_mouse_start = event.global_position
+				_float_resize_start_size = panel.size
+				var vp := get_viewport()
+				if vp != null:
+					vp.set_input_as_handled()
+		else:
+			_end_float_drag()
+
+
+func _move_float_panel(panel: PanelContainer, target_global: Vector2) -> void:
+	var local: Vector2 = map_view.get_global_transform().affine_inverse() * target_global
+	var max_pos := Vector2(maxf(0.0, map_view.size.x - panel.size.x), maxf(0.0, map_view.size.y - panel.size.y))
+	panel.position = Vector2(clampf(local.x, 0.0, max_pos.x), clampf(local.y, 0.0, max_pos.y))
+
+
+func _resize_float_panel(panel: PanelContainer, mouse_global: Vector2) -> void:
+	var delta := mouse_global - _float_resize_mouse_start
+	var min_size := Vector2(220, 130) if panel == _log_float else Vector2(220, 70)
+	var ns := _float_resize_start_size + delta
+	ns.x = clampf(ns.x, min_size.x, maxf(min_size.x, map_view.size.x - panel.position.x))
+	ns.y = clampf(ns.y, min_size.y, maxf(min_size.y, map_view.size.y - panel.position.y))
+	panel.size = ns
+	_apply_float_fonts()
+
+
+func _end_float_drag() -> void:
+	## ドラッグの終わりに、位置と大きさを設定へ覚える
+	## (保存はメイン画面のタイミング。分割比率と同じ扱い)。
+	if _config != null:
+		if _float_drag_panel != null:
+			_save_float_rect(_float_drag_panel)
+		if _float_resize_panel != null:
+			_save_float_rect(_float_resize_panel)
+	_float_drag_panel = null
+	_float_resize_panel = null
+
+
+func _save_float_rect(panel: PanelContainer) -> void:
+	if panel == _log_float:
+		_config.log_float_rect = Rect2(panel.position, panel.size)
+	elif panel == _input_float:
+		_config.input_float_rect = Rect2(panel.position, panel.size)
 
 
 func _toolbar_effective_cols() -> int:
@@ -1416,6 +1788,8 @@ func _apply_log_css() -> void:
 	var fg: Variant = SkinFiles.parse_css_color(str(body.get("color", "")))
 	if fg != null:
 		log_view.add_theme_color_override("default_color", fg)
+	else:
+		log_view.remove_theme_color_override("default_color")
 	var classes: Dictionary = css.get("classes", {})
 	var ok: Dictionary = classes.get("class_system_ok", {})
 	_system_color = SkinFiles.parse_css_color(str(ok.get("color", "")))
@@ -1423,6 +1797,9 @@ func _apply_log_css() -> void:
 	_error_color = SkinFiles.parse_css_color(str(ng.get("color", "")))
 	var time_cls: Dictionary = classes.get("class_time", {})
 	_time_color = SkinFiles.parse_css_color(str(time_cls.get("color", "")))
+	# フロート表示の間は、スキンの地と色より窓の見た目を優先する。
+	if _float_mode:
+		_apply_float_log_look()
 
 
 func _on_map_zoom_changed(new_zoom: int) -> void:
@@ -1430,24 +1807,16 @@ func _on_map_zoom_changed(new_zoom: int) -> void:
 	zoom_changed.emit(new_zoom)
 
 
-func refresh_ui_font_size() -> void:
-	## 地図の倍率に比例して、このタブの UI の文字を大きくする。
-	## メニュー・ツールバーなどの全体の大きさはメイン画面が付ける。
-	if map_view == null:
-		return
-	var size := PhiFont.ui_size_for_zoom(map_view.zoom)
-	if size == _applied_size:
-		return
-	_applied_size = size
-	_style_talk_button(size)
+func _apply_log_font_size(size: int) -> void:
+	## ログの文字サイズ一式を付ける。地の下マージンで最終行の
+	## 余白も作る。行頭の時刻は絶対サイズで焼き込まれるので、
+	## サイズが変わったらログ全体を描き直す。
 	log_view.add_theme_font_size_override("font_size", size)
 	log_view.add_theme_font_size_override("normal_font_size", size)
 	log_view.add_theme_font_size_override("bold_font_size", size)
 	log_view.add_theme_font_size_override("italics_font_size", size)
 	log_view.add_theme_font_size_override("bold_italics_font_size", size)
 	log_view.add_theme_font_size_override("mono_font_size", size)
-	# ログの最終行が枠の下端に張り付いて見づらいので、地の
-	# 下マージンで余白を作る。大きさは文字サイズに比例させる。
 	# 地はテーマ共有なので複製して差し替えてから触る。スキンの
 	# 地が付け直されたら、付け直された方を取り直す (取りっぱなし
 	# だと余白が孤児の地に付いて見えなくなる)。
@@ -1456,14 +1825,31 @@ func refresh_ui_font_size() -> void:
 		_log_box = attached_box.duplicate() as StyleBox
 		log_view.add_theme_stylebox_override("normal", _log_box)
 	_log_box.content_margin_bottom = maxf(6.0, roundf(float(size) * 0.7))
-	# 行頭の時刻 [HH:MM] は行ごとに絶対サイズで焼き込まれる。
-	# 本文サイズが変わったら (窓リサイズ→ズーム変化など) ログ
-	# 全体を描き直し、時刻の大きさが混ざらないようにする。
 	if _log_render_size != size:
 		_log_render_size = size
 		if not _log_lines.is_empty():
 			_queue_log_rebuild()
-	input_box.add_theme_font_size_override("font_size", size)
+
+
+func refresh_ui_font_size() -> void:
+	## 地図の倍率に比例して、このタブの UI の文字を大きくする。
+	## メニュー・ツールバーなどの全体の大きさはメイン画面が付ける。
+	## フロート表示の間は、ログと入力欄の文字は窓の大きさで
+	## 決まる (第101段) ので、倍率連動からは外す。
+	if map_view == null:
+		return
+	var size := PhiFont.ui_size_for_zoom(map_view.zoom)
+	if size == _applied_size:
+		if _float_mode:
+			_apply_float_fonts()
+		return
+	_applied_size = size
+	_style_talk_button(size)
+	if _float_mode:
+		_apply_float_fonts()
+	else:
+		_apply_log_font_size(size)
+		input_box.add_theme_font_size_override("font_size", size)
 	if world_header != null:
 		world_header.add_theme_font_size_override("font_size", size)
 	# ログ列の上の帯を、世界名ヘッダーの高さに合わせる
@@ -1490,8 +1876,9 @@ func refresh_ui_font_size() -> void:
 		button.custom_minimum_size = min_size
 	_fit_toolbar_panel()
 	# 入力欄の最小の高さは今の文字で2行ぶん。高さ自体は
-	# 保持した値(無ければ3行ぶん)に合わせる。
-	if input_box != null:
+	# 保持した値(無ければ3行ぶん)に合わせる。フロート表示の
+	# 間は窓の大きさに任せるので触らない。
+	if input_box != null and not _float_mode:
 		input_box.custom_minimum_size = Vector2(0, _font.get_height(size) * 2 + 16)
 	_apply_input_height()
 	var chrome_size := PhiFont.chrome_size_for_zoom(map_view.zoom)
@@ -3744,6 +4131,7 @@ func handle_mouse_button(ev: InputEventMouseButton) -> void:
 			_mouse_held = false
 			_list_dragging = false
 			_end_toolbar_drag()
+			_end_float_drag()
 			_finish_talk_press()
 	elif ev.button_index == MOUSE_BUTTON_RIGHT and ev.pressed:
 		# 右クリックは攻撃(Philly の MapForm)。ツールバーの上は除く。
@@ -3827,6 +4215,12 @@ func _mouse_repeat_fallback_tick() -> void:
 
 func handle_mouse_motion(ev: InputEventMouseMotion) -> void:
 	_mouse_last_pos = ev.position
+	if _float_drag_panel != null:
+		_move_float_panel(_float_drag_panel, ev.position - _float_drag_offset)
+		return
+	if _float_resize_panel != null:
+		_resize_float_panel(_float_resize_panel, ev.position)
+		return
 	if _talk_dragging and _talk_button != null:
 		if ev.position.distance_to(_talk_press_global) > 6.0:
 			_talk_drag_moved = true
