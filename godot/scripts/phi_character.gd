@@ -253,7 +253,16 @@ var _input_normal_box: StyleBox = null
 var _input_focus_box: StyleBox = null
 var _toolbar_panel: PanelContainer = null
 var _toolbar_title: Label = null
+var _toolbar_rows_box: VBoxContainer = null
 var _toolbar_buttons: Array[Button] = []
+## ボタンをグループ (TOOLBAR の "-" 区切り) ごとに分けたもの。
+## 段の組み直し (第100段) で使い回す。
+var _toolbar_groups: Array = []
+var _toolbar_resizing := false
+var _toolbar_resize_mouse_start := Vector2.ZERO
+var _toolbar_resize_start_width := 0.0
+## パネル右下のリサイズ領域 (px)。
+const TOOLBAR_RESIZE_GRIP := 16.0
 var _toolbar_dragging := false
 var _toolbar_drag_offset := Vector2.ZERO
 ## 保持した位置が無く、自動配置 (右上) の間は true。
@@ -1027,6 +1036,7 @@ func _build_toolbar_overlay() -> void:
 	rows.add_theme_constant_override("separation", 2)
 	rows.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_toolbar_panel.add_child(rows)
+	_toolbar_rows_box = rows
 	# パネルの一番上に題名を出す。ドラッグで動かせるよう、
 	# マウスは素通しにしてパネル側で受ける。
 	_toolbar_title = Label.new()
@@ -1036,20 +1046,18 @@ func _build_toolbar_overlay() -> void:
 	_toolbar_title.add_theme_color_override("font_color", Color(0.85, 0.85, 0.85))
 	_toolbar_title.add_theme_font_size_override("font_size", PhiFont.ui_size_for_zoom(map_view.zoom))
 	rows.add_child(_toolbar_title)
-	var row: HBoxContainer = null
+	_toolbar_groups.clear()
+	var group: Array = []
 	for item in PhiActions.TOOLBAR:
 		var action_name := str(item)
 		if action_name == "-":
-			row = null
+			if not group.is_empty():
+				_toolbar_groups.append(group)
+				group = []
 			continue
 		var action := PhiActions.get_action(action_name)
 		if action.is_empty():
 			continue
-		if row == null:
-			row = HBoxContainer.new()
-			row.add_theme_constant_override("separation", 2)
-			row.mouse_filter = Control.MOUSE_FILTER_IGNORE
-			rows.add_child(row)
 		var button := Button.new()
 		button.tooltip_text = str(action["hint"])
 		button.focus_mode = Control.FOCUS_NONE
@@ -1066,12 +1074,113 @@ func _build_toolbar_overlay() -> void:
 			button.text = _short_caption(str(action["caption"]))
 		button.pressed.connect(_on_toolbar_button_pressed.bind(action_name))
 		button.set_meta("action", action_name)
-		row.add_child(button)
+		group.append(button)
 		_toolbar_buttons.append(button)
+	if not group.is_empty():
+		_toolbar_groups.append(group)
+	_layout_toolbar()
 	_toolbar_panel.gui_input.connect(_on_toolbar_panel_gui_input)
 	_toolbar_panel.resized.connect(_rehome_toolbar_auto)
 	_apply_toolbar_home()
 	refresh_toolbar_states()
+
+
+func _toolbar_effective_cols() -> int:
+	## 実際に使う列数。0 は未設定 (グループごとに1段)。
+	if _config != null and _config.toolbar_cols > 0:
+		return _config.toolbar_cols
+	return 0
+
+
+func _new_toolbar_row() -> HBoxContainer:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 2)
+	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_toolbar_rows_box.add_child(row)
+	return row
+
+
+func _layout_toolbar() -> void:
+	## ボタンの段を組み直す (第100段)。列数が未設定なら
+	## グループごとに1段 (従来)。列数が決まっていれば、
+	## グループを丸ごと入れられる段には詰めて並べ、入らない
+	## 大きなグループは途中で折って、その列数に収める。
+	## ボタン自体は使い回す。
+	if _toolbar_rows_box == null:
+		return
+	for group in _toolbar_groups:
+		for button in group:
+			var b := button as Control
+			if b.get_parent() != null:
+				b.get_parent().remove_child(b)
+	for i in range(_toolbar_rows_box.get_child_count() - 1, 0, -1):
+		var child := _toolbar_rows_box.get_child(i)
+		_toolbar_rows_box.remove_child(child)
+		child.queue_free()
+	var cols := _toolbar_effective_cols()
+	if cols <= 0:
+		for group in _toolbar_groups:
+			var row := _new_toolbar_row()
+			for button in group:
+				row.add_child(button)
+		return
+	var row: HBoxContainer = null
+	var in_row := 0
+	for group in _toolbar_groups:
+		var buttons: Array = group
+		if row != null and in_row > 0 and buttons.size() <= cols \
+				and in_row + buttons.size() > cols:
+			# グループが丸ごと入らないなら、次の段から始める。
+			row = null
+			in_row = 0
+		for button in buttons:
+			if row == null or in_row >= cols:
+				row = _new_toolbar_row()
+				in_row = 0
+			row.add_child(button)
+			in_row += 1
+
+
+func _toolbar_button_pitch() -> float:
+	## 列数の換算に使う、ボタン1つぶんの横幅 (間隔込み)。
+	var w := 0.0
+	for button in _toolbar_buttons:
+		w = maxf(w, (button as Control).get_combined_minimum_size().x)
+	return w + 2.0
+
+
+func _toolbar_cols_for_width(width: float) -> int:
+	## パネルの横幅から、それに収まる列数を出す。
+	if _toolbar_panel == null:
+		return 0
+	var box := _toolbar_panel.get_theme_stylebox("panel") as StyleBox
+	var margins := 0.0
+	if box != null:
+		margins = box.get_margin(SIDE_LEFT) + box.get_margin(SIDE_RIGHT)
+	var pitch := _toolbar_button_pitch()
+	if pitch <= 0.0:
+		return 0
+	var cols := int((width - margins + 2.0) / pitch)
+	return clampi(cols, 1, _toolbar_buttons.size())
+
+
+func _toolbar_in_grip(local_pos: Vector2) -> bool:
+	## パネル右下のリサイズ領域の中かどうか。
+	if _toolbar_panel == null:
+		return false
+	return local_pos.x >= _toolbar_panel.size.x - TOOLBAR_RESIZE_GRIP \
+		and local_pos.y >= _toolbar_panel.size.y - TOOLBAR_RESIZE_GRIP
+
+
+func _resize_toolbar_to(width: float) -> void:
+	## 幅に合う列数へ組み直して、パネルの大きさを合わせる。
+	var cols := _toolbar_cols_for_width(width)
+	if cols <= 0 or cols == _toolbar_effective_cols():
+		return
+	if _config != null:
+		_config.toolbar_cols = cols
+	_layout_toolbar()
+	_fit_toolbar_panel()
 
 
 static func _short_caption(caption: String) -> String:
@@ -1183,8 +1292,31 @@ func _on_toolbar_panel_gui_input(event: InputEvent) -> void:
 	## パネルの地のドラッグでパネルを動かす。ボタンの上の
 	## クリックはボタンが受けるので、ここには来ない。
 	## 離すのはマウスのボタン処理でも拾う(地の外で離しても止まる)。
+	## 右下の隅は大きさの変更用 (第100段): ドラッグで幅を
+	## 変えると列数が変わって自動で整列し直す。ダブル
+	## クリックで既定の並び (グループごとに1段) に戻す。
+	if event is InputEventMouseMotion:
+		if not _toolbar_dragging and not _toolbar_resizing:
+			_toolbar_panel.mouse_default_cursor_shape = \
+				Control.CURSOR_BDIAGSIZE if _toolbar_in_grip(event.position) else Control.CURSOR_MOVE
+		return
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 		if event.pressed:
+			if _toolbar_in_grip(event.position):
+				if event.double_click:
+					if _config != null:
+						_config.toolbar_cols = 0
+					_layout_toolbar()
+					_fit_toolbar_panel()
+				else:
+					_toolbar_resizing = true
+					_toolbar_auto_home = false
+					_toolbar_resize_mouse_start = event.global_position
+					_toolbar_resize_start_width = _toolbar_panel.size.x
+				var vpg := get_viewport()
+				if vpg != null:
+					vpg.set_input_as_handled()
+				return
 			_toolbar_dragging = true
 			_toolbar_auto_home = false
 			_toolbar_drag_offset = event.global_position - _toolbar_panel.global_position
@@ -1198,6 +1330,7 @@ func _on_toolbar_panel_gui_input(event: InputEvent) -> void:
 func _end_toolbar_drag() -> void:
 	## ドラッグの終わりに、位置を設定へ覚える(保存はメイン画面が
 	## 終了時などに行う。分割比率と同じ扱い)。
+	_toolbar_resizing = false
 	if not _toolbar_dragging:
 		return
 	_toolbar_dragging = false
@@ -3698,6 +3831,9 @@ func handle_mouse_motion(ev: InputEventMouseMotion) -> void:
 		if ev.position.distance_to(_talk_press_global) > 6.0:
 			_talk_drag_moved = true
 		_move_talk_button(ev.position - _talk_drag_offset)
+		return
+	if _toolbar_resizing and _toolbar_panel != null:
+		_resize_toolbar_to(_toolbar_resize_start_width + ev.position.x - _toolbar_resize_mouse_start.x)
 		return
 	if _toolbar_dragging and _toolbar_panel != null:
 		_move_toolbar_panel(ev.position - _toolbar_drag_offset)

@@ -91,6 +91,10 @@ var split_ratio := DEFAULT_SPLIT_RATIO
 ## その場合は地図の左上 (8, 8) に置く。ドラッグで動かすと更新され、
 ## 分割比率と同じく、保存はメイン画面のタイミング(終了時など)。
 var toolbar_pos := Vector2(-1, -1)
+## コマンドパレットの列数 (第100段)。0 は未設定で、その場合は
+## グループごとに1段に並べる (従来)。パネルの右下をドラッグ
+## して幅を変えると、その幅に合う列数が入る。
+var toolbar_cols := 0
 var talk_button_pos := Vector2(-1, -1)
 ## 入力欄の高さ(ピクセル)。-1 は未設定で、その場合は既定の
 ## 3行ぶんにする。境目のドラッグで更新され、保存はメイン画面の
@@ -179,6 +183,7 @@ func reset() -> void:
 	window_height = DEFAULT_WINDOW_HEIGHT
 	split_ratio = DEFAULT_SPLIT_RATIO
 	toolbar_pos = Vector2(-1, -1)
+	toolbar_cols = 0
 	talk_button_pos = Vector2(-1, -1)
 	input_height = -1
 	scroll_stop = false
@@ -254,6 +259,7 @@ func load_file(path: String = DEFAULT_PATH) -> bool:
 		var ty := float(cfg.get_value("Disp", "ToolbarY", -1))
 		if tx >= 0.0 and ty >= 0.0:
 			toolbar_pos = Vector2(tx, ty)
+	toolbar_cols = clampi(int(cfg.get_value("Disp", "ToolbarCols", 0)), 0, 64)
 	# Talk ボタンの位置。両方そろって 0 以上なら採用する。
 	if cfg.has_section_key("Disp", "TalkButtonX") and cfg.has_section_key("Disp", "TalkButtonY"):
 		var bx := float(cfg.get_value("Disp", "TalkButtonX", -1))
@@ -313,6 +319,7 @@ func save_file(path: String = DEFAULT_PATH) -> bool:
 	cfg.set_value("Disp", "SplitRatio", split_ratio)
 	cfg.set_value("Disp", "ToolbarX", toolbar_pos.x)
 	cfg.set_value("Disp", "ToolbarY", toolbar_pos.y)
+	cfg.set_value("Disp", "ToolbarCols", toolbar_cols)
 	cfg.set_value("Disp", "SmoothMapScroll", smooth_scroll)
 	cfg.set_value("Disp", "TalkButtonX", talk_button_pos.x)
 	cfg.set_value("Disp", "TalkButtonY", talk_button_pos.y)
