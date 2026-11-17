@@ -131,11 +131,11 @@ func _run() -> void:
 			overlap = true
 	check(area == 200.0 * 150.0 - 100.0 * 80.0, "strips cover exactly the outside")
 	check(not overlap, "strips do not cover the grid")
-	# マスクの内側はセルの並び: 上は余白帯ぶん下がり、下端は
-	# 地図の四角の下端と一致する (ユーザーの指定)
+	# マスクの内側は地図の四角: 上の余白帯 (MAP_TOP) を含む
+	# (帯まで隠す版はちらついたためユーザーの判断で戻した)
 	var mr: Rect2 = mv.call("_scroll_mask_rect", 12.0, 26.0, 9, 2.0)
-	check(mr.position == Vector2(12, 26 + 16 * 2), "mask top excludes the headroom band")
-	check(mr.size == Vector2(9 * 32 * 2, 9 * 32 * 2), "mask covers exactly the cell area")
+	check(mr.position == Vector2(12, 26), "mask top is the grid top (headroom included)")
+	check(mr.size == Vector2(9 * 32 * 2, (9 * 32 + 16) * 2), "mask covers the whole grid square")
 	check(mr.end.y == 26.0 + (9 * 32 + 16) * 2.0, "mask bottom matches the grid bottom")
 
 	# --- (2) 切断でアニメーションが止まる ---

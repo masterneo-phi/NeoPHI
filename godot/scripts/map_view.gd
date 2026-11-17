@@ -985,20 +985,19 @@ func _draw() -> void:
 			draw_circle(to, 4.0, Color(1, 1, 1, 0.55))
 	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 	if scrolling:
-		# スクロール中はセルの並び (本体) の外へはみ出した描画を
-		# 壁紙で覆い隠す (第65段、ユーザーの要望)。上の余白帯
-		# (MAP_TOP) も隠すので、背の高いチップの張り出しは
-		# セルの本体が入るまで見えない。下端は従来どおり
-		# 地図の四角の下端と一致する。
+		# スクロール中は地図の四角の外へはみ出した描画を壁紙で
+		# 覆い隠す (第65段、ユーザーの要望)。枠の内側だけが
+		# 滑って見えるようにする。上の余白帯 (MAP_TOP) は
+		# 内側に含める: 帯まで隠す版は張り出しが最後に
+		# ぱっと現れてちらついたため、ユーザーの判断で戻した。
 		_mask_outside_grid(_scroll_mask_rect(ox, oy, dim, z))
 
 
 func _scroll_mask_rect(ox: float, oy: float, dim: int, z: float) -> Rect2:
-	## スクロール中のマスクの内側 = セルの並びの範囲。
-	## 上は余白帯 (MAP_TOP) の分だけ下げ、下は地図の
-	## 四角の下端と一致する。
-	return Rect2(ox, oy + MAP_TOP * z,
-		dim * float(CHIP_SIZE) * z, dim * float(CHIP_SIZE) * z)
+	## スクロール中のマスクの内側 = 地図の四角 (上の余白帯
+	## MAP_TOP を含む)。
+	return Rect2(ox, oy, dim * float(CHIP_SIZE) * z,
+		(dim * float(CHIP_SIZE) + MAP_TOP) * z)
 
 
 func _outside_strips(rect: Rect2, bounds: Vector2) -> Array:

@@ -179,6 +179,13 @@ func send_line(line: String) -> void:
 		return
 	if line == "#ulist":
 		_parser.clear_users()
+	if line.begins_with("#ex-map size="):
+		# 要求した地図の大きさを覚える (メニュー・キー・手入力の
+		# どれで送っても)。9x9 未対応サーバへの落とし直しは
+		# この値を見て判断する。
+		var v := line.trim_prefix("#ex-map size=").strip_edges()
+		if v.is_valid_int():
+			map_size = int(v)
 	_send_queue.append(line)
 
 

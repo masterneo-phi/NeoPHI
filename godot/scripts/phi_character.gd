@@ -510,8 +510,12 @@ func _process(_delta: float) -> void:
 	# 長いほど、サーバ側の送信バッファが溢れにくい。
 	session.drain_socket()
 	# ログ欄の行数が増えすぎたら、受信も表示待ちも捌けた
-	# タイミングで記録から描き直して切り詰める。
-	if _log_view_lines > LOG_VIEW_TRIM_LINES and _log_batch.is_empty() \
+	# タイミングで記録から描き直して切り詰める。洪水で捌け
+	# ないまま上限を超えたら、文書の増大を止めるため即座に
+	# 切り詰める (第66段)。
+	if _log_view_lines > LOG_VIEW_HARD_LINES:
+		_rebuild_log_view(true)
+	elif _log_view_lines > LOG_VIEW_TRIM_LINES and _log_batch.is_empty() \
 			and session.pending_line_count() == 0:
 		_queue_log_rebuild()
 	# ログ自動保存は 1 秒ごとにまとめて書き出す (行ごとの
@@ -1573,9 +1577,7 @@ func _on_event(event: Dictionary) -> void:
 			_update_status(event)
 		"notice":
 			if event.has("name"):
-				_player_name = str(event["name"])
-				map_view.player_name = _player_name
-				title_changed.emit(tab_title())
+				_accept_player_name(str(event["name"]))
 			if event.has("world"):
 				_world = str(event["world"])
 			if event.has("area"):
@@ -1955,6 +1957,10 @@ const FLOOD_PENDING_LINES := 300
 ## ログ欄の行数がこれを超えたら、記録 (上限2000行) から
 ## 描き直して切り詰める。
 const LOG_VIEW_TRIM_LINES := 3200
+## 洪水で受信が捌けないままこの行数を超えたら、描き直しを
+## 後回しにせず即座に切り詰める。文書が際限なく育つと表示が
+## 重くなり、受信が追いつかなくなって切断されるため。
+const LOG_VIEW_HARD_LINES := 6000
 
 
 func _flooding() -> bool:
@@ -2005,14 +2011,15 @@ func log_display_backlog() -> int:
 	return _log_batch.size()
 
 
-func _rebuild_log_view() -> void:
+func _rebuild_log_view(force := false) -> void:
 	_img_rebuild_queued = false
 	if log_view == null or not is_instance_valid(log_view):
 		return
 	# 大量行の受信が残っている間は、全体の描き直し (一番重い
 	# 処理) を後回しにする。受信が捌けてから改めて描き直す。
 	# (call_deferred の連鎖ではなくタイマーで再確認する。)
-	if (session != null and session.pending_line_count() > 200) or _log_batch.size() > 200:
+	# force の時は文書の際限ない増大を止めるため後回ししない。
+	if not force and ((session != null and session.pending_line_count() > 200) or _log_batch.size() > 200):
 		_img_rebuild_queued = true
 		get_tree().create_timer(0.3).timeout.connect(_rebuild_log_view)
 		return
@@ -2249,11 +2256,22 @@ func _on_log_meta_clicked(meta: Variant) -> void:
 		OS.shell_open(url)
 
 
+func _accept_player_name(new_name: String) -> void:
+	## サーバが #name や #status で送る名前を取り込む。
+	## グラ変更済みのキャラでは、クラシック地図 (5x5) の間は
+	## 名前の代わりにグラ名が送られてくる (旧クライアント
+	## 向けの仕様) ので、自分のグラ名と一致する値は名前と
+	## して扱わない。
+	if new_name == _self_gra and not _player_name.is_empty() and new_name != _player_name:
+		return
+	_player_name = new_name
+	map_view.player_name = _player_name
+	title_changed.emit(tab_title())
+
+
 func _update_status(event: Dictionary) -> void:
 	if event.has("name"):
-		_player_name = str(event["name"])
-		map_view.player_name = _player_name
-		title_changed.emit(tab_title())
+		_accept_player_name(str(event["name"]))
 	if event.has("exp"):
 		_exp = int(event["exp"])
 	if status_panel != null:
@@ -2670,11 +2688,15 @@ func _fixup_classic_self(event: Dictionary) -> void:
 	var has_self := false
 	for ch_var in chars:
 		var ch: Dictionary = ch_var
-		if int(ch.get("x", -1)) == 2 and int(ch.get("y", -1)) == 3 and str(ch.get("name", "")).is_empty():
-			ch["name"] = _player_name
-			if not str(ch.get("gra", "")).is_empty():
-				_self_gra = str(ch["gra"])
-			has_self = true
+		if int(ch.get("x", -1)) == 2 and int(ch.get("y", -1)) == 3:
+			# 自分行は、名前欄が空か、グラ名が入っているか、
+			# 自分の名前が入っているかのどれかで来る。
+			var row_name := str(ch.get("name", ""))
+			if row_name.is_empty() or row_name == _self_gra or row_name == _player_name:
+				ch["name"] = _player_name
+				if not str(ch.get("gra", "")).is_empty():
+					_self_gra = str(ch["gra"])
+				has_self = true
 	if not has_self:
 		chars.append({
 			"id": -1, "x": 2, "y": 3, "dir": "B",

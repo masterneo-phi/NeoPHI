@@ -234,6 +234,9 @@ var _in_more := false
 var _in_list := false
 var _list_lines: Array[String] = []
 var _map_size := 7
+## 直前の地図フレームの大きさ。大きさが変わったらキャラ行は
+## 座標系が違うので引き継がない (モード切替時の残像防止)。
+var _last_frame_size := 0
 var _map_dir := 0
 var _map_cells: Variant = null # Array[Dictionary] か null
 var _map_chars: Array[Dictionary] = []
@@ -582,7 +585,18 @@ func _parse_m81_m(raw: PackedByteArray) -> void:
 	_parse_mx_m(raw, 9, 162)
 
 
+func _note_frame_size(size: int) -> void:
+	## 地図の大きさが変わったら、前フレームのキャラ行を捨てる。
+	## 大きさが同じ間は、行が来ないフレームでも前フレームの
+	## キャラを引き継ぐ (サーバは変化した行だけ送るため)。
+	if _last_frame_size != 0 and size != _last_frame_size:
+		_map_chars = []
+		_chara_clear_pending = false
+	_last_frame_size = size
+
+
 func _parse_mx_m(raw: PackedByteArray, size: int, chip_bytes: int) -> void:
+	_note_frame_size(size)
 	_map_size = size
 	if raw.size() > _M57_DIRECTION_OFFSET:
 		_map_dir = _dir_to_num(raw[_M57_DIRECTION_OFFSET])
@@ -598,6 +612,7 @@ func _parse_mx_m(raw: PackedByteArray, size: int, chip_bytes: int) -> void:
 
 func _parse_map_m(raw: PackedByteArray) -> void:
 	## `#map M`(5x5)。本体が `-` なら前フレームのまま。
+	_note_frame_size(5)
 	_map_size = 5
 	var body := raw.slice(7)
 	var body_end := 0
