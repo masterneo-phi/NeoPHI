@@ -217,8 +217,8 @@ func _test_log_file() -> void:
 	_check_eq(PhiLogFile.sanitize_name("Guest"), "Guest", "logfile sanitize plain")
 	_check_eq(PhiLogFile.sanitize_name("a/b:c"), "a_b_c", "logfile sanitize separators")
 	_check_eq(PhiLogFile.sanitize_name(""), "character", "logfile sanitize empty")
-	_check_eq(PhiLogFile.log_path("user://Logs", "Guest", false), "user://Logs/Guest.log", "logfile text path")
-	_check_eq(PhiLogFile.log_path("user://Logs", "Guest", true), "user://Logs/Guest.html", "logfile html path")
+	_check_eq(PhiLogFile.log_path("user://Logs", "Guest", false, "20261117"), "user://Logs/Guest_20261117.log", "logfile text path")
+	_check_eq(PhiLogFile.log_path("user://Logs", "Guest", true, "20261117"), "user://Logs/Guest_20261117.html", "logfile html path")
 	_check_eq(PhiLogFile.format_text_line("hello", true, "12:34:56"), "[12:34:56] hello", "logfile text line time")
 	_check_eq(PhiLogFile.format_text_line("hello", false, "12:34:56"), "hello", "logfile text line plain")
 	_check_eq(PhiLogFile.escape_html("<a>&\"b\""), "&lt;a&gt;&amp;&quot;b&quot;", "logfile escape html")
@@ -234,8 +234,8 @@ func _test_log_file() -> void:
 	_check(html.contains("a&lt;b<br>"), "logfile html body")
 	var log_dir := DirAccess.open(dir)
 	if log_dir != null:
-		log_dir.remove("Guest.log")
-		log_dir.remove("Guest.html")
+		log_dir.remove(PhiLogFile.log_path(dir, "Guest", false).get_file())
+		log_dir.remove(PhiLogFile.log_path(dir, "Guest", true).get_file())
 	var user_dir := DirAccess.open("user://")
 	if user_dir != null:
 		user_dir.remove("stage4_test_logs")

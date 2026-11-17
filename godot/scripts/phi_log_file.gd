@@ -2,7 +2,10 @@ class_name PhiLogFile
 extends RefCounted
 ## ログの自動保存。Philly の `SrcLink/LogFile` にあたる。
 ##
-## キャラクターごとに `Logs/<名前>.log`(テキスト)か `.html` に追記する。
+## キャラクターごとに `Logs/<名前>_<YYYYMMDD>.log`(テキスト)か
+## `.html` に追記する。Philly と同じく日付単位のファイルで、
+## 日付が変わると次のファイルに移る (Philly の classLogFile は
+## 既定 ftfDaily で、ファイル名の %s に yyyymmdd が入る)。
 ## テキスト保存は時刻入り・タグ削除を選べる(Philly.ini の
 ## LogSaveTextWithTime / LogSaveDeleteTag)。HTML 保存は、作った時に
 ## ヘッダを1回だけ書き、以後は行を足していく(Philly の
@@ -28,9 +31,19 @@ static func sanitize_name(char_name: String) -> String:
 	return out
 
 
-static func log_path(dir: String, char_name: String, html: bool) -> String:
+static func date_stamp() -> String:
+	## `YYYYMMDD`(自動保存のファイル名用)。
+	var now := Time.get_date_dict_from_system()
+	return "%04d%02d%02d" % [int(now["year"]), int(now["month"]), int(now["day"])]
+
+
+static func log_path(dir: String, char_name: String, html: bool, stamp: String = "") -> String:
+	## 自動保存のパス。`<名前>_<YYYYMMDD>.log/.html`。stamp を
+	## 省略すると今日の日付 (書くたびに判定するので、日付が
+	## 変われば自然に次のファイルになる)。
 	var ext := ".html" if html else ".log"
-	return dir.path_join(sanitize_name(char_name) + ext)
+	var day := stamp if not stamp.is_empty() else date_stamp()
+	return dir.path_join(sanitize_name(char_name) + "_" + day + ext)
 
 
 static func format_text_line(line: String, with_time: bool, stamp: String) -> String:
