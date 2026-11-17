@@ -39,6 +39,9 @@ signal register_completed(display_name: String)
 const REPEAT_START_MS := 200
 const REPEAT_FALLBACK_MS := 500
 const REPEAT_MIN_INTERVAL_MS := 120
+## 第77段: 同時押し (斜め) が合体するのを待つ時間。これより速く
+## 2つ目の方向キーが来れば、1つ目の単独の1歩は出ずに斜めになる。
+const CHORD_GRACE_MS := 60
 ## ログの記録の上限(コピー・自動保存の元)。超えたら古い方から捨てる。
 const MAX_LOG_LINES := 2000
 ## ログの最小の高さ。入力欄を広げても、この高さは残す。
@@ -202,6 +205,11 @@ var _mouse_turn_dir := ""
 var _held_moves: Array[Dictionary] = []
 var _held_since := 0
 var _last_repeat_send := 0
+## 第77段: 新しい保持の最初のキーは、同時押し (斜め) の相方が
+## すぐ後に来るかもしれないので、少しだけ送らずに待つ。
+## 期限 (msec、0 = 保留なし) と、この保持でもう送ったか。
+var _held_step_pending_until := 0
+var _held_seq_sent := false
 var _map_dim_now := 0
 var _m81_fell_back := false
 var _map_style_now := ""
@@ -588,11 +596,14 @@ func _process(_delta: float) -> void:
 		_pin_log_bottom()
 	_repeat_fallback_tick()
 	_mouse_repeat_fallback_tick()
+	_held_step_pending_tick()
 	_bump_timeout_tick()
 
 
 func clear_held_input() -> void:
 	_held_moves.clear()
+	_held_step_pending_until = 0
+	_held_seq_sent = false
 	_mouse_held = false
 	_list_dragging = false
 	_end_toolbar_drag()
@@ -1632,6 +1643,8 @@ func _on_session_closed() -> void:
 	else:
 		log_message("system", "接続が閉じました")
 	_held_moves.clear()
+	_held_step_pending_until = 0
+	_held_seq_sent = false
 	_hide_list_overlay()
 	# BGM は切断で止める(Philly と同じく曲名も空に戻す)。
 	if not bgm_name.is_empty():
@@ -2913,6 +2926,9 @@ func press_held_move(key_event: InputEventKey, key: String, mods: String) -> voi
 	var physical := int(key_event.physical_keycode)
 	if physical == 0:
 		physical = int(key_event.keycode)
+	if _held_moves.is_empty():
+		# 新しい保持の始まり。まだこの保持では送っていない。
+		_held_seq_sent = false
 	for i in range(_held_moves.size()):
 		if int(_held_moves[i]["code"]) == physical:
 			_held_moves.remove_at(i)
@@ -2923,6 +2939,12 @@ func press_held_move(key_event: InputEventKey, key: String, mods: String) -> voi
 
 
 func release_held_move(key_event: InputEventKey) -> void:
+	# 第77段: 保留中の1歩があれば、離す前の合成のまま先に送る
+	# (短いタップでも1歩が消えないように)。
+	if _held_step_pending_until > 0:
+		_held_step_pending_until = 0
+		_send_held_step()
+		_held_seq_sent = true
 	var physical := int(key_event.physical_keycode)
 	if physical == 0:
 		physical = int(key_event.keycode)
@@ -2933,6 +2955,36 @@ func release_held_move(key_event: InputEventKey) -> void:
 	if not _held_moves.is_empty():
 		_held_since = Time.get_ticks_msec()
 		_last_repeat_send = 0
+	else:
+		_held_seq_sent = false
+
+
+func _on_move_key_pressed() -> void:
+	## 第77段: 移動キーが押された時の送り方。
+	## - 保留中なら相方が来たということなので、その場で合成して送る。
+	## - 新しい保持の最初のキーは、同時押しの合体待ちで少し保留する。
+	## - 保持が流れている最中の追加キーは、今までどおり即送る。
+	if _held_step_pending_until > 0:
+		_held_step_pending_until = 0
+		_send_held_step()
+		_held_seq_sent = true
+	elif not _held_seq_sent:
+		_held_step_pending_until = Time.get_ticks_msec() + CHORD_GRACE_MS
+	else:
+		_send_held_step()
+
+
+func _held_step_pending_tick() -> void:
+	## 第77段: 合体待ちの期限が来たら、その時点の合成で1歩送る。
+	if _held_step_pending_until == 0:
+		return
+	if Time.get_ticks_msec() < _held_step_pending_until:
+		return
+	_held_step_pending_until = 0
+	if _held_moves.is_empty():
+		return
+	_send_held_step()
+	_held_seq_sent = true
 
 
 func _repeat_on_map() -> void:
@@ -3600,6 +3652,13 @@ func handle_key(key_event: InputEventKey) -> bool:
 		if not selected.is_empty():
 			DisplayServer.clipboard_set(selected)
 			return true
+	# リストが出ている間は、入力欄にフォーカスがあってもリストの
+	# キーを先に受ける (第77段)。詠唱の対象選択などを、Tab で
+	# フォーカスを外さなくてもテンキーでそのまま選べる
+	# (Philly のリストモードはモーダル)。リストが扱わないキーは
+	# この後の入力欄の処理に流れる。
+	if _list_active and handle_list_key(code, shift, ctrl, alt):
+		return true
 	# (6)追加発言の呼び出しと、(7)入力欄フォーカス時は TextEdit 任せ。
 	# ↓ の呼び出しは TextEdit のキャレット移動より先に見る。
 	if input_box.has_focus():
@@ -3619,11 +3678,13 @@ func handle_key(key_event: InputEventKey) -> bool:
 	# (9)リストが出ている間のキー(Philly KeyBindListMode)。
 	if _list_active and handle_list_key(code, shift, ctrl, alt):
 		return true
-	# (10)移動キー。押した時点で1歩送り、押し続けの記録にも入れる。
+	# (10)移動キー。押し続けの記録に入れて、送り方は
+	# _on_move_key_pressed に任せる (第77段: 最初のキーは同時押しの
+	# 合体待ちで少し保留する)。
 	var moved: Variant = PhiKeys.move_input(code, shift, ctrl, alt, meta, true)
 	if moved != null:
 		press_held_move(key_event, str(moved[0]), str(moved[1]))
-		_send_held_step()
+		_on_move_key_pressed()
 		return true
 	# P は支払い (金額を聞いてから送る ask アクション。Philly の
 	# 修飾なしキー表にあるが、送るだけのキー表では表せないので
