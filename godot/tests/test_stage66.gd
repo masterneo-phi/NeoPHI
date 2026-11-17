@@ -162,13 +162,22 @@ func _run() -> void:
 	check(str(ev_syn["chars"][0]["name"]) == "KURO", "synthesized self uses player name")
 
 	# --- (2b) 明示的に 9x9 を要求したら、未対応サーバでは 7x7 へ ---
+	# (第68段改: 応答が無ければ数回送り直してから諦める)
 	var tsession: Variant = tab.get("session")
 	tsession.map_size = 57
 	tab.call("do_send_action", "M9x9")
 	check(int(tsession.map_size) == 81, "M9x9 request tracked in session")
 	var ev_classic: Dictionary = {"type": "map", "size": 5, "cells": cells5, "chars": [], "dir": 4}
 	tab.call("_on_event", ev_classic)
-	check(int(tsession.map_size) == 57, "fallback re-requests 57 on non-9x9 frame")
+	check(int(tsession.map_size) == 81, "no instant fallback on a non-9x9 frame")
+	tsession.set("_state", "open")
+	tab.set("_m81_attempts", 0)
+	tab.set("_m81_watch_since", 0)
+	for t in [1000, 2500, 2501, 4001, 4002, 5502]:
+		tab.call("_check_m81_watchdog", t)
+	check(int(tsession.map_size) == 57, "watchdog gives up to 57 after retries")
+	check(bool(tab.get("_m81_fell_back")) == true, "fallback latched after retries")
+	tsession.set("_state", "idle")
 
 	# --- (3) 洪水時はログの切り詰めを後回しにせず即行う ---
 	for i in 5:

@@ -43,6 +43,10 @@ var port := 0
 var char_id := ""
 ## ログイン時に送る地図の大きさ(40=5x5, 57=7x7)とスタイル。
 var map_size := 81
+## 接続先に最終的に頼みたい地図の大きさ。map_size は今この
+## 接続で要求している大きさで、9x9 希望でも接続時は 57 から
+## 始めて後で 81 へ昇格を試す (第68段改)。
+var desired_map_size := 0
 var map_style := "solid"
 ## ログイン時に送る `#ex-switch ex-disp-magic=` の値。
 var disp_magic := true

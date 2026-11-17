@@ -1008,12 +1008,15 @@ func _connect_character(host: String, port: int, char_id: String, display_name: 
 func _connect_tab(tab: PhiCharacter, host: String, port: int, char_id: String, use_startup: bool = false) -> void:
 	## タブを接続する。地図の大きさ・様式は、初回の自動接続だけ
 	## コマンドライン引数を優先し、あとは設定の値を使う。
-	tab.session.map_size = _config.map_size
+	# 9x9 希望でも、接続はまず 7x7 で始める (第68段改)。
+	tab.session.desired_map_size = _config.map_size
+	tab.session.map_size = 57 if _config.map_size == 81 else _config.map_size
 	tab.session.map_style = _config.map_style
 	tab.session.disp_magic = _config.disp_magic
 	if use_startup:
 		if _startup_map_size > 0:
-			tab.session.map_size = _startup_map_size
+			tab.session.desired_map_size = _startup_map_size
+			tab.session.map_size = 57 if _startup_map_size == 81 else _startup_map_size
 		if not _startup_map_style.is_empty():
 			tab.session.map_style = _startup_map_style
 	tab.connect_to(host, port, char_id)
@@ -1332,14 +1335,102 @@ func _on_tab_button_pressed(tab: PhiCharacter) -> void:
 	_activate_tab(tab)
 
 
+## タブのドラッグ並べ替え (第70段、Philly 仕様)。
+var _tab_drag_tab: PhiCharacter = null
+var _tab_drag_start_x := 0.0
+var _tab_dragging := false
+
+
 func _on_tab_button_gui_input(event: InputEvent, tab: PhiCharacter) -> void:
+	var mm := event as InputEventMouseMotion
+	if mm != null:
+		_update_tab_drag(mm, tab)
+		return
 	var mb := event as InputEventMouseButton
-	if mb == null or not mb.pressed:
+	if mb == null:
+		return
+	if mb.button_index == MOUSE_BUTTON_LEFT:
+		if mb.pressed:
+			if mb.double_click and not tab.is_session_open():
+				_show_connect_dialog(tab)
+				return
+			_tab_drag_tab = tab
+			_tab_drag_start_x = mb.global_position.x
+			_tab_dragging = false
+		elif _tab_drag_tab == tab:
+			_end_tab_drag()
+		return
+	if not mb.pressed:
 		return
 	if mb.button_index == MOUSE_BUTTON_MIDDLE and _config.mclick_tab_close:
 		_close_tab(tab)
-	elif mb.button_index == MOUSE_BUTTON_LEFT and mb.double_click and not tab.is_session_open():
-		_show_connect_dialog(tab)
+
+
+func _update_tab_drag(mm: InputEventMouseMotion, tab: PhiCharacter) -> void:
+	## 押し始めてから 6px 以上動いたらドラッグとみなし、
+	## ポインタの位置に合わせてその場で並べ替える。
+	if _tab_drag_tab != tab or (mm.button_mask & MOUSE_BUTTON_MASK_LEFT) == 0:
+		return
+	if not _tab_dragging:
+		if absf(mm.global_position.x - _tab_drag_start_x) <= 6.0:
+			return
+		_tab_dragging = true
+		_set_tab_drag_visual(tab, true)
+	var target := _tab_drop_index(mm.global_position.x)
+	if target != _tabs.find(tab):
+		_move_tab(tab, target)
+
+
+func _end_tab_drag() -> void:
+	if _tab_drag_tab != null:
+		_set_tab_drag_visual(_tab_drag_tab, false)
+	_tab_drag_tab = null
+	_tab_dragging = false
+
+
+func _set_tab_drag_visual(tab: PhiCharacter, on: bool) -> void:
+	for e in _tab_buttons:
+		if e["tab"] == tab:
+			(e["button"] as Button).modulate.a = 0.55 if on else 1.0
+			return
+
+
+func _tab_drop_index(global_x: float) -> int:
+	## ポインタの x から、タブを差し込む位置を求める。
+	for i in range(_tab_buttons.size()):
+		var holder := _tab_buttons[i]["holder"] as Control
+		if global_x < holder.get_global_rect().get_center().x:
+			return i
+	return maxi(_tab_buttons.size() - 1, 0)
+
+
+func _move_tab(tab: PhiCharacter, to_index: int) -> void:
+	## タブの並び順を変える。並びはタブの保存にも反映される。
+	var from := _tabs.find(tab)
+	if from < 0:
+		return
+	var eidx := -1
+	for i in range(_tab_buttons.size()):
+		if _tab_buttons[i]["tab"] == tab:
+			eidx = i
+			break
+	if eidx < 0:
+		return
+	to_index = clampi(to_index, 0, _tabs.size() - 1)
+	if from == to_index:
+		return
+	var active := _active_tab()
+	_tabs.remove_at(from)
+	_tabs.insert(to_index, tab)
+	var entry: Dictionary = _tab_buttons[eidx]
+	_tab_buttons.remove_at(eidx)
+	_tab_buttons.insert(to_index, entry)
+	_tab_row.move_child(entry["holder"] as Control, to_index)
+	_tab_row.move_child(_plus_button, _tab_row.get_child_count() - 1)
+	_tab_container.move_child(tab, to_index)
+	_active_index = _tabs.find(active)
+	_refresh_tab_titles()
+	_save_tab_session()
 
 
 func _on_tab_close_pressed(tab: PhiCharacter) -> void:
@@ -1375,6 +1466,8 @@ func _close_tab(tab: PhiCharacter) -> void:
 	var idx := _tabs.find(tab)
 	if idx < 0:
 		return
+	if _tab_drag_tab == tab:
+		_end_tab_drag()
 	tab.disconnect_graceful()
 	for i in range(_tab_buttons.size()):
 		if _tab_buttons[i]["tab"] == tab:

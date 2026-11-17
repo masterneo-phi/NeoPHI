@@ -136,23 +136,40 @@ func _run() -> void:
 	check(PhiConfig.new().map_size == 81, "fresh config defaults to 81")
 	check(PhiSession.new().map_size == 81, "fresh session defaults to 81")
 
-	# (8) 未対応サーバへのフォールバック: 9x9 でない地図が届いたら
-	# その接続だけ 7x7 に落とす。実タブ (main シーン) で見る。
+	# (8) 未対応サーバへのフォールバック (第68段改): 81 を試して
+	# 応答が無ければ数回送り直し、それでも来なければその接続
+	# だけ 7x7 に落とす。実タブ (main シーン) で見る。
 	var ps := load("res://main.tscn") as PackedScene
 	var main: Node = ps.instantiate()
 	root.add_child(main)
 	await create_timer(1.0).timeout
 	var tab: PhiCharacter = main.call("_active_tab")
+	tab.session.set("_state", "open")
 	tab.session.map_size = 81
 	tab.set("_m81_fell_back", false)
-	tab.call("_maybe_fallback_m81", {"type": "map", "size": 9, "cells": [], "chars": []})
-	check(tab.session.map_size == 81, "fallback: size 9 keeps 81")
-	tab.call("_maybe_fallback_m81", {"type": "map", "size": 7, "cells": [], "chars": []})
-	check(tab.session.map_size == 57, "fallback: size 7 drops session to 57")
+	tab.set("_m81_attempts", 0)
+	tab.set("_m81_watch_since", 0)
+	tab.set("_map_dim_now", 7)
+	tab.call("_check_m81_watchdog", 5000)
+	tab.call("_check_m81_watchdog", 6500)
+	check(tab.session.map_size == 81, "fallback: first timeout resends 81")
+	tab.call("_check_m81_watchdog", 8000)
+	tab.call("_check_m81_watchdog", 9500)
+	check(tab.session.map_size == 81, "fallback: second timeout still trying")
+	tab.call("_check_m81_watchdog", 11000)
+	tab.call("_check_m81_watchdog", 12500)
+	check(tab.session.map_size == 57, "fallback: gives up to 57")
 	check(bool(tab.get("_m81_fell_back")), "fallback: flag set")
+	# 9x9 が届いている間は諦めない
+	tab.set("_m81_fell_back", false)
+	tab.set("_m81_attempts", 0)
+	tab.set("_m81_watch_since", 0)
 	tab.session.map_size = 81
-	tab.call("_maybe_fallback_m81", {"type": "map", "size": 5, "cells": [], "chars": []})
-	check(tab.session.map_size == 81, "fallback: only once per connection")
+	tab.set("_map_dim_now", 9)
+	tab.call("_check_m81_watchdog", 20000)
+	tab.call("_check_m81_watchdog", 20000 + 60000)
+	check(tab.session.map_size == 81, "fallback: size 9 keeps 81")
+	tab.session.set("_state", "idle")
 	main.queue_free()
 
 	print("stage41: %d checks, %d failures" % [_checks, _failures])

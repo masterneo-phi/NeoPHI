@@ -506,6 +506,11 @@ func _process(_delta: float) -> void:
 	_log_batching = false
 	_check_m81_watchdog(Time.get_ticks_msec())
 	_flush_log_batch()
+	# 表示を間引いた分は、受信が捌けてから記録で揃える (第69段)。
+	if _view_gap and _log_batch.is_empty() and not _flooding() \
+			and session.pending_line_count() == 0:
+		_view_gap = false
+		_rebuild_log_view()
 	# 表示まで終えたら、届いているバイトだけ先に取り込んで
 	# おく (処理は次のフレーム)。ソケットを空けておく時間が
 	# 長いほど、サーバ側の送信バッファが溢れにくい。
@@ -523,10 +528,16 @@ func _process(_delta: float) -> void:
 	# ファイル開閉が大量行の受信を詰まらせるため)。
 	if not _save_pending.is_empty():
 		_save_flush_acc += _delta
-		if _save_flush_acc >= 1.0:
+		if _save_flush_acc >= 1.0 and not _flooding():
 			_save_flush_acc = 0.0
 			_flush_log_save()
 	var now_open := session.is_open()
+	# 接続が開いたら 9x9 の試行を仕切り直す (第68段改)。
+	if now_open and not _m81_open_seen:
+		_m81_open_seen = true
+		_on_m81_session_opened()
+	elif not now_open:
+		_m81_open_seen = false
 	# 切断中はキャラの歩行アニメーションを止める (第65段)。
 	# session_closed シグナル側が先に _was_open を戻すと変化
 	# 検出が行き違えるため、検出は _was_open ではなく、最後に
@@ -1333,45 +1344,77 @@ func _on_input_split_dragged(offset: int) -> void:
 
 # -- 接続 --------------------------------------------------------------------
 
-func _maybe_fallback_m81(event: Dictionary) -> void:
-	## 9x9 を要求したのに 9x9 でない地図が届いたら、そのサーバは
-	## size=81 に未対応なので、7x7 を要求し直して表示を続ける。
-	## 落とすのはこの接続のセッションだけで、設定の希望 (81) は
-	## 残すので、対応サーバでは次回も 9x9 で入れる。
-	if _m81_fell_back or session.map_size != 81:
-		return
-	if int(event.get("size", 0)) == 9:
-		return
-	_do_fallback_m81()
-
-
 func _do_fallback_m81() -> void:
 	## 9x9 を諦めて 7x7 を要求し直す (この接続だけ)。
 	_m81_fell_back = true
+	_m81_upgrade_pending = false
+	_m81_attempts = 0
 	session.map_size = 57
 	session.send_line("#ex-map size=57")
 	log_message("system", "このサーバは 9x9 マップに未対応のため、7x7 マップで表示します")
 
 
-## 9x9 の応答を見切るまでの時間 (ミリ秒)。rel5g 系サーバは
-## size=81 を無視して地図フレーム自体を送ってこないことが
-## あるため、フレーム駆動の落とし直し (_maybe_fallback_m81)
-## だけでは切り替わらない。一定時間 9x9 が届かなければ
-## 時間で見切って 7x7 へ落とす (第68段)。
+## 9x9 の試し方 (第68段改、ユーザーの提案): 最初から 81 を
+## 要求すると、未対応サーバでは無視されて 5x5 になり、後から
+## 送る落とし直しもログイン直後の状態では届かないことがある。
+## そこで、まず 7x7 (57) で入って表示を確保し、接続が落ち
+## 着いてから 81 を試す。81 が届かなければ数回送り直し、
+## それでも来なければ 7x7 のまま確定する (表示は最初から
+## 7x7 なので、諦めても画面は変わらない)。
+const M81_UPGRADE_DELAY_MSEC := 800
 const M81_WATCHDOG_MSEC := 1500
+const M81_MAX_ATTEMPTS := 3
 var _m81_watch_since := 0
+var _m81_upgrade_pending := false
+var _m81_attempts := 0
+var _m81_open_seen := false
+
+
+func _on_m81_session_opened() -> void:
+	## 接続 (世界移動後の再接続を含む) が開くたびに、9x9 の
+	## 試行を仕切り直す。希望が 81 で現在値が小さい時は、
+	## まず今の大きさで入ってから昇格を試す。
+	_m81_fell_back = false
+	_m81_attempts = 0
+	_m81_watch_since = 0
+	_m81_upgrade_pending = session != null \
+		and session.desired_map_size == 81 and session.map_size < 81
 
 
 func _check_m81_watchdog(now_ms: int) -> void:
-	if session == null or not session.is_open() or _m81_fell_back \
-			or session.map_size != 81 or _map_dim_now == 9:
+	if session == null or not session.is_open():
 		_m81_watch_since = 0
 		return
+	if _m81_upgrade_pending:
+		if _m81_watch_since == 0:
+			_m81_watch_since = now_ms
+		elif now_ms - _m81_watch_since >= M81_UPGRADE_DELAY_MSEC:
+			_m81_upgrade_pending = false
+			_m81_watch_since = 0
+			_m81_attempts = 1
+			session.send_line("#ex-map size=81")
+		return
+	if _m81_fell_back:
+		# 諦めた後に手動で 9x9 を選び直したら、試し直す。
+		if session.map_size == 81:
+			_m81_fell_back = false
+			_m81_attempts = 1
+			_m81_watch_since = 0
+		return
+	if session.map_size != 81 or _map_dim_now == 9:
+		_m81_watch_since = 0
+		return
+	if _m81_attempts == 0:
+		_m81_attempts = 1
 	if _m81_watch_since == 0:
 		_m81_watch_since = now_ms
 	elif now_ms - _m81_watch_since >= M81_WATCHDOG_MSEC:
 		_m81_watch_since = 0
-		_do_fallback_m81()
+		if _m81_attempts < M81_MAX_ATTEMPTS:
+			_m81_attempts += 1
+			session.send_line("#ex-map size=81")
+		else:
+			_do_fallback_m81()
 
 
 func connect_to(p_host: String, p_port: int, p_char_id: String) -> void:
@@ -1387,6 +1430,9 @@ func connect_to(p_host: String, p_port: int, p_char_id: String) -> void:
 	_cut_by_other = false
 	_m81_fell_back = false
 	_m81_watch_since = 0
+	_m81_attempts = 0
+	_m81_upgrade_pending = false
+	_m81_open_seen = false
 	log_message("system", "%s:%d に接続します..." % [host, port])
 	session.connect_to(host, port, p_char_id)
 	title_changed.emit(tab_title())
@@ -1635,7 +1681,6 @@ func _on_event(event: Dictionary) -> void:
 				bgm_speed = new_speed
 				bgm_changed.emit()
 		"map":
-			_maybe_fallback_m81(event)
 			_resolve_bump_watch(event)
 			_learn_self_gra(event)
 			if int(event.get("size", 7)) == 5:
@@ -1982,6 +2027,19 @@ const LOG_FLUSH_CATCHUP_BUDGET_MSEC := 12
 ## 受信が滞ると送信バッファ溢れや無進捗タイムアウトで切断
 ## するため、表示の凍結より接続の維持を優先する。
 const FLOOD_PENDING_LINES := 300
+## 洪水の最中は、ログ欄がこの行数を超えたら表示待ちの古い行を
+## 表示から間引く (第69段)。記録 (_log_lines) と自動保存には
+## 全行残るので、捌けた後に描き直せば表示も揃う。文書が育つ
+## ほど表示が重くなり、受信が滞って切断されるのを防ぐ。
+const LOG_VIEW_FLOOD_CAP := 2500
+const LOG_BATCH_KEEP_TAIL := 400
+## 表示待ち自体がこの行数を超えたら、最新側だけ残して間引く。
+## 記録の上限 (2000行) より古い行は、どうせ描き直しても
+## 表示に戻らないため。
+const LOG_BATCH_HARD_CAP := 4000
+const LOG_BATCH_HARD_KEEP := 2000
+## 表示を間引いたので、捌けた後に記録から描き直して揃える。
+var _view_gap := false
 ## ログ欄の行数がこれを超えたら、記録 (上限2000行) から
 ## 描き直して切り詰める。
 const LOG_VIEW_TRIM_LINES := 3200
@@ -2007,6 +2065,14 @@ func _flush_log_batch() -> void:
 	if log_view == null or not is_instance_valid(log_view):
 		_log_batch.clear()
 		return
+	# 表示の間引き (第69段)。記録と自動保存には全行残る。
+	if _log_batch.size() > LOG_BATCH_HARD_CAP:
+		_log_batch = _log_batch.slice(_log_batch.size() - LOG_BATCH_HARD_KEEP)
+		_view_gap = true
+	elif _log_view_lines >= LOG_VIEW_FLOOD_CAP \
+			and _log_batch.size() > LOG_BATCH_KEEP_TAIL:
+		_log_batch = _log_batch.slice(_log_batch.size() - LOG_BATCH_KEEP_TAIL)
+		_view_gap = true
 	if _flooding():
 		return
 	var start := Time.get_ticks_msec()
@@ -2062,9 +2128,15 @@ func _rebuild_log_view(force := false) -> void:
 		was_bottom = ratio > 0.98
 	log_view.clear()
 	_log_view_lines = 0
+	_view_gap = false
 	_log_rebuilding = true
+	var drain_count := 0
 	for entry in _log_lines:
 		_append_log_entry(entry)
+		drain_count += 1
+		if drain_count % 128 == 0 and session != null:
+			# 描き直しの間もソケットだけは空けておく (第69段)。
+			session.drain_socket()
 	_log_rebuilding = false
 	_img_fit_width = log_view.size.x
 	if bar != null:
@@ -2141,7 +2213,9 @@ func _save_log_line(prefix: String, plain_line: String, raw_line: String) -> voi
 		_flush_log_save()
 		_save_key = key
 	_save_pending.append(line)
-	if _save_pending.size() >= 100:
+	# 洪水の最中は書き出しを大きめにまとめる (第69段)。
+	var save_threshold := 2000 if _flooding() else 100
+	if _save_pending.size() >= save_threshold:
 		_flush_log_save()
 
 
@@ -3010,6 +3084,10 @@ func send_greeting() -> void:
 func do_send_action(action_name: String) -> void:
 	## メニュー・ツールバーの送信アクション(Cast1〜Cast7 は
 	## 次のリストを抑える。Philly NextListCancel)。
+	# 9x9 へは、まず 7x7 を送ってから 81 を送る (第68段改)。
+	if action_name == "M9x9" and session != null and session.map_size == 40:
+		session.desired_map_size = 81
+		session.send_line("#ex-map size=57")
 	if action_name.length() == 5 and action_name.begins_with("Cast"):
 		_suppress_lists = 1
 	var was_list := _list_active
