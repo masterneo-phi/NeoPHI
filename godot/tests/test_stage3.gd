@@ -344,11 +344,12 @@ func _test_map_view_disp_magic() -> void:
 	mv.spawn_disp_magic(data)
 	_check_eq(mv.debug_disp_magic_count(), 1, "map disp count")
 	_check_eq(mv.debug_recent_disp_hit_count(), 1, "map disp hit count")
-	# 同じマスの魔法攻撃では、自前の魔法弾は出ない。
+	# 発動タイル (魔法陣) は円状オーラに差し替わる (第97段)。
+	_check_eq(mv.debug_cast_count(), 1, "map disp cast tile becomes aura")
+	# 同じマスの魔法攻撃では、自前の発動演出は出ない (二重に出ない)。
 	mv.spawn_combat_fx("DM > Alice は魔法を唱えている... \nDM > Alice は Bob を Harm で攻撃した. [10 hp]")
-	_check_eq(mv.debug_bolt_count(), 0, "map disp suppresses bolt")
-	_check_eq(mv.debug_impact_count(), 0, "map disp suppresses impact")
-	# 魔法表示が無ければ、魔法弾が出る。
+	_check_eq(mv.debug_cast_count(), 1, "map disp suppresses own cast")
+	# 魔法表示が無ければ、術師の位置に発動演出が出る。
 	var mv2 := MapView.new()
 	mv2.player_name = "Alice"
 	mv2.set_map({"size": 7, "cells": [], "chars": [
@@ -356,7 +357,7 @@ func _test_map_view_disp_magic() -> void:
 		{"name": "Bob", "x": 3, "y": 2, "dir": "F", "gra": "", "status": 0, "gigant": "#", "default": 0, "layer": 0},
 	]}, null, "")
 	mv2.spawn_combat_fx("DM > Alice は魔法を唱えている... \nDM > Alice は Bob を Harm で攻撃した. [10 hp]")
-	_check_eq(mv2.debug_bolt_count(), 1, "map bolt without disp")
+	_check_eq(mv2.debug_cast_count(), 1, "map cast without disp")
 	mv.queue_free()
 	mv2.queue_free()
 

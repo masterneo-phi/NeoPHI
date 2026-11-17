@@ -131,9 +131,13 @@ const GHOST_STEP := 0.08
 ## 見えるように少し長くする。3段階で 0.24 秒。
 const DISP_MAGIC_PHASE := 0.08
 const DISP_MAGIC_PHASES := 3
-## サーバー駆動の魔法表示が出たマスで、自前の魔法弾を抑える時間。
+## サーバー駆動の魔法表示が出たマスで、自前の発動演出を抑える時間。
 const DISP_MAGIC_SUPPRESS_WINDOW := 1.0
+## 魔法の色 (MP ダメージの点滅など)。
+const MAGIC_COLOR := Color(0.310, 0.765, 0.969)
 ## 魔法弾の歩数と間隔、尾の長さと太さ、回る火花の軌道。
+## 魔法弾は「魔法表示」が ON の時だけ飛ぶ (ユーザーの指定)。
+## OFF の時は発動の円状オーラだけになる。
 const BOLT_STEPS := 10
 const BOLT_STEP := 0.028
 const BOLT_COLOR := Color(0.310, 0.765, 0.969)
@@ -146,6 +150,16 @@ const IMPACT_FRAMES := 6
 const IMPACT_FRAME := 0.03
 const IMPACT_COLORS := [Color.WHITE, Color(0.882, 0.961, 0.996), Color(0.702, 0.898, 0.988), Color(0.506, 0.831, 0.980), Color(0.310, 0.765, 0.969), Color(0.161, 0.714, 0.965)]
 const IMPACT_SPARKS := 8
+## 発動: 術師を中心に円状に広がる波の演出。魔法陣 (サーバー駆動
+## 表示の発動タイル) は、どちらの設定でもこのオーラに差し替える
+## (ユーザーの指定)。持続は1秒弱。中心の閃光 + 遅れて広がる
+## リング3重 + 円周の火花。
+const CAST_DURATION := 0.9
+const CAST_RING_COUNT := 3
+const CAST_RING_DELAY := 0.16
+const CAST_RING_MAX_R := 34.0
+const CAST_COLORS := [Color.WHITE, Color(0.882, 0.961, 0.996), Color(0.702, 0.898, 0.988), Color(0.506, 0.831, 0.980), Color(0.310, 0.765, 0.969), Color(0.161, 0.714, 0.965)]
+const CAST_SPARKS := 10
 ## 吹き出し: 本文の幅(地図の絵の座標)、行数、表示時間。
 const BUBBLE_MAX_WIDTH := 132.0
 const BUBBLE_MAX_LINES := 3
@@ -208,6 +222,9 @@ var _session_live := true
 ## 新しい地図が 1 マス分だけずれている時は、地図全体を
 ## ドット単位でずらしながら描いて滑らかに見せる。
 var smooth_scroll := true
+## 魔法弾を飛ばすか (「魔法表示」の設定に連動。PhiCharacter が
+## config.disp_magic を反映する)。OFF なら発動オーラだけ。
+var magic_bolt := false
 ## 現在の地図様式 ("solid" = 北固定 / "turn" = 回転)。滑らか
 ## スクロールは北固定の時だけ効く (第65段、ユーザーの指定)。
 var map_style := "solid"
@@ -289,6 +306,7 @@ var _swings: Array = []
 var _slashes: Array = []
 var _bolts: Array = []
 var _impacts: Array = []
+var _casts: Array = []
 var _ghosts: Array = []
 var _bubbles: Dictionary = {}
 var _disp_magics: Array = []
@@ -704,6 +722,10 @@ func debug_impact_count() -> int:
 	return _impacts.size()
 
 
+func debug_cast_count() -> int:
+	return _casts.size()
+
+
 func debug_ghost_count() -> int:
 	return _ghosts.size()
 
@@ -738,6 +760,19 @@ static func dir_to_row(dir_value: Variant) -> int:
 
 static func is_giant(gigant: Variant) -> bool:
 	return str(gigant) == "*"
+
+
+static func is_big(gigant: Variant) -> bool:
+	## 2x2 の大きな敵 (サーバの大きさ印 'B'、PHIDM_NEO v1.3〜)。
+	## gigant ('*') とは別で、体が基準マスから東・南へ 2x2 に広がる。
+	return str(gigant) == "B"
+
+
+static func char_draw_row(ch: Dictionary, dim: int) -> int:
+	## キャラを描く行パス。2x2 の敵は足元が南の行にあるため、
+	## 基準マスの次の行で描く (重なり順を足元に合わせる)。
+	var row := int(ch.get("y", 0)) + (1 if is_big(ch.get("gigant")) else 0)
+	return mini(row, dim - 1)
 
 
 static func arrange_row(chars: Array) -> Array:
@@ -781,7 +816,7 @@ static func chara_src_rect(dir_value: Variant, gigant: Variant, anim_frame: int 
 	var row := dir_to_row(dir_value)
 	var frame := anim_frame & 1
 	var sy := row * CHARA_H
-	if large or is_giant(gigant):
+	if large or is_giant(gigant) or is_big(gigant):
 		return Rect2(CHARA_W_NORMAL * 2 + frame * CHARA_W_GIANT, sy, CHARA_W_GIANT, CHARA_H)
 	return Rect2(frame * CHARA_W_NORMAL, sy, CHARA_W_NORMAL, CHARA_H)
 
@@ -958,7 +993,7 @@ func _draw() -> void:
 		# 4. キャラ(この行)
 		var row_chars: Array = []
 		for ch in chars:
-			if int(ch.get("y", -1)) == row and 0 <= int(ch.get("x", -1)) and int(ch.get("x", -1)) < dim:
+			if char_draw_row(ch, dim) == row and 0 <= int(ch.get("x", -1)) and int(ch.get("x", -1)) < dim:
 				row_chars.append(ch)
 		for pair in arrange_row(row_chars):
 			var ch: Dictionary = pair[0]
@@ -1094,12 +1129,17 @@ func _draw_chara(ch: Dictionary, dx: int, z: float, tex_override: Texture2D = nu
 	var sh := rect.size.y
 	var base_x := int(ch.get("x", 0)) * CHIP_SIZE + (CHIP_SIZE - int(sw)) / 2 + dx
 	var base_y := int(ch.get("y", 0)) * CHIP_SIZE + (CHIP_SIZE - CHARA_H) / 2 - CHARA_Y_ABOVE_FLOOR + MAP_TOP
+	# 2x2 の敵は大きな絵を 2 倍に描き、基準マスから東・南の
+	# 4 マスを覆う。base は基準マスの通常位置のまま (絵の上端が
+	# 基準行の上端、足元が南行の足元に一致する)。
+	var dw := sw * (2.0 if is_big(ch.get("gigant")) else 1.0)
+	var dh := sh * (2.0 if is_big(ch.get("gigant")) else 1.0)
 	var tex: Texture2D = tex_override
 	if tex == null and assets != null:
 		tex = assets.chara(str(ch.get("name", "")), str(ch.get("gra", "")), int(ch.get("default", 0)))
 	if tex == null:
-		draw_rect(Rect2(base_x * z + po.x, base_y * z + po.y, sw * z, sh * z), Color.YELLOW)
-		_draw_placeholder_initial(ch, base_x, base_y, sw, sh, z)
+		draw_rect(Rect2(base_x * z + po.x, base_y * z + po.y, dw * z, dh * z), Color.YELLOW)
+		_draw_placeholder_initial(ch, base_x, base_y, int(dw), int(dh), z)
 		return
 	var magnify: Variant = ch.get("magnify")
 	if magnify != null:
@@ -1107,7 +1147,7 @@ func _draw_chara(ch: Dictionary, dx: int, z: float, tex_override: Texture2D = nu
 		var d := _magnified_dst(base_x, base_y, m)
 		draw_texture_rect_region(tex, Rect2(d[0] * z + po.x, d[1] * z + po.y, d[2] * z, d[3] * z), rect, modulate)
 		return
-	draw_texture_rect_region(tex, Rect2(base_x * z + po.x, base_y * z + po.y, sw * z, sh * z), rect, modulate)
+	draw_texture_rect_region(tex, Rect2(base_x * z + po.x, base_y * z + po.y, dw * z, dh * z), rect, modulate)
 
 
 func _magnified_dst(base_x: int, base_y: int, m: Dictionary) -> Array[int]:
@@ -1160,6 +1200,7 @@ func _draw_labels(chars: Array, dim: int, z: float) -> void:
 	var cx := dim / 2
 	var cy := dim / 2
 	var per_cell := {}
+	var big_cells := {}
 	for ch in chars:
 		var x := int(ch.get("x", -1))
 		var y := int(ch.get("y", -1))
@@ -1171,12 +1212,16 @@ func _draw_labels(chars: Array, dim: int, z: float) -> void:
 		if chara_name.is_empty():
 			continue
 		per_cell[Vector2i(x, y)] = chara_name
+		if is_big(ch.get("gigant")):
+			big_cells[Vector2i(x, y)] = true
 	var font_size := PhiFont.ui_size_for_zoom(int(z))
 	var mask := _name_mask_style(z)
 	for cell_key in per_cell:
 		var cell_pos: Vector2i = cell_key
 		var chara_name: String = per_cell[cell_key]
-		var x := (cell_pos.x * CHIP_SIZE + CHIP_SIZE / 2) * z
+		# 2x2 の敵は名前を 2 マス分の中心に置く。
+		var center_off := CHIP_SIZE / 2 if big_cells.has(cell_key) else 0
+		var x := (cell_pos.x * CHIP_SIZE + CHIP_SIZE / 2 + center_off) * z
 		var y := (cell_pos.y * CHIP_SIZE + int(CHIP_SIZE * 0.6) + MAP_TOP) * z
 		var ts := name_font.get_string_size(chara_name, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size)
 		var pos := Vector2(x - ts.x / 2.0, y + name_font.get_ascent(font_size))
@@ -1225,7 +1270,7 @@ func _process(_delta: float) -> void:
 	if _scroll_t < 1.0:
 		_scroll_t = minf(1.0, _scroll_t + _delta / SCROLL_DURATION)
 		queue_redraw()
-	if _floats.is_empty() and _flashes.is_empty() and _swings.is_empty() and _slashes.is_empty() and _bolts.is_empty() and _impacts.is_empty() and _ghosts.is_empty() and _bubbles.is_empty() and _disp_magics.is_empty() and not _shake_active:
+	if _floats.is_empty() and _flashes.is_empty() and _swings.is_empty() and _slashes.is_empty() and _bolts.is_empty() and _impacts.is_empty() and _casts.is_empty() and _ghosts.is_empty() and _bubbles.is_empty() and _disp_magics.is_empty() and not _shake_active:
 		return
 	_expire_effects()
 	queue_redraw()
@@ -1245,6 +1290,7 @@ func _expire_effects() -> void:
 			kept_bolts.append(b)
 	_bolts = kept_bolts
 	_impacts = _impacts.filter(func(f: Dictionary) -> bool: return now - float(f["spawned"]) < IMPACT_FRAME * IMPACT_FRAMES)
+	_casts = _casts.filter(func(f: Dictionary) -> bool: return now - float(f["spawned"]) < CAST_DURATION)
 	_ghosts = _ghosts.filter(func(g: Dictionary) -> bool: return int((now - float(g["spawned"])) / GHOST_STEP) < GHOST_STEPS)
 	_disp_magics = _disp_magics.filter(func(d: Dictionary) -> bool: return now - float(d["spawned"]) < DISP_MAGIC_PHASE * DISP_MAGIC_PHASES)
 	_recent_disp_hits = _recent_disp_hits.filter(func(h: Dictionary) -> bool: return now - float(h["spawned"]) < DISP_MAGIC_SUPPRESS_WINDOW)
@@ -1313,7 +1359,7 @@ static func _flash_color(kind: String) -> Color:
 		"taken":
 			return Color(1.0, 0.322, 0.322)
 		"mpdmg":
-			return BOLT_COLOR
+			return MAGIC_COLOR
 	return Color.WHITE
 
 
@@ -1334,20 +1380,25 @@ func spawn_combat_fx(text: String) -> void:
 
 
 func _combat_fx(attack: Dictionary, now: float) -> void:
-	## 攻撃1回に、斬撃の軌跡か魔法弾の演出を出します。
+	## 攻撃1回に、斬撃の軌跡か魔法の演出を出します。
+	## 魔法の発動は常に術師の周りの円状オーラ。魔法弾は
+	## 「魔法表示」が ON の時だけ、対象へ飛ばします。
 	var target_pos: Variant = _float_position(attack["target"])
 	if target_pos == null:
 		return
 	if _caster_tracker.consume(str(attack["attacker"]), now):
 		# サーバー駆動の魔法表示が同じマスを直前に出した時は、
-		# 自前の魔法弾は出さない(Philly の表示と二重になるため)。
+		# 自前の演出も出さない(Philly の表示と二重になるため)。
 		if _disp_magic_covers_target(str(attack["target"]), now):
 			return
 		var attacker_pos: Variant = _float_position(attack["attacker"])
-		if attacker_pos != null and attacker_pos != target_pos:
-			_bolts.append({"start": _sprite_center(attacker_pos), "end": _sprite_center(target_pos), "spawned": now})
-		else:
-			_impacts.append({"center": _sprite_center(target_pos), "spawned": now})
+		if attacker_pos != null:
+			_casts.append({"center": _sprite_center(attacker_pos), "spawned": now})
+			if magic_bolt:
+				if attacker_pos != target_pos:
+					_bolts.append({"start": _sprite_center(attacker_pos), "end": _sprite_center(target_pos), "spawned": now})
+				else:
+					_impacts.append({"center": _sprite_center(target_pos), "spawned": now})
 	else:
 		var attacker_pos2: Variant = _float_position(attack["attacker"])
 		if attacker_pos2 != null:
@@ -1359,11 +1410,17 @@ func _combat_fx(attack: Dictionary, now: float) -> void:
 
 func spawn_disp_magic(data: Dictionary) -> void:
 	## `#ex-disp-magic` の表示を出す(第3段)。終点のマスを覚え、
-	## 直後の自前の魔法弾を抑えるのにも使う。
+	## 直後の自前の演出を抑えるのにも使う。
+	## 発動タイル (魔法陣) は描かず、代わりに術師の位置へ
+	## 円状オーラを出す (ユーザーの指定、設定によらず差し替え)。
 	var now := _now()
 	_disp_magics.append({"data": data, "spawned": now})
 	var end: Dictionary = data["end"]
 	_recent_disp_hits.append({"cell": Vector2i(int(end["x"]), int(end["y"])), "spawned": now})
+	for c in PhiDispMagic.phase_cells(data, 0):
+		if int(c[1]) == PhiDispMagic.CELL_CAST:
+			var at: Vector2 = c[0]
+			_casts.append({"center": at + Vector2(16.0, 16.0), "spawned": now})
 	queue_redraw()
 
 
@@ -1390,6 +1447,9 @@ func _draw_disp_magic(dm: Dictionary, z: float, now: float) -> void:
 	for c in cells:
 		var at: Vector2 = c[0]
 		var cell: int = c[1]
+		if cell == PhiDispMagic.CELL_CAST:
+			# 魔法陣は出さない (発動は円状オーラに差し替え済み)。
+			continue
 		if _items_tex != null and cell * 32 + 32 <= _items_tex.get_width():
 			draw_texture_rect_region(_items_tex, Rect2(at.x * z, at.y * z, 32.0 * z, 32.0 * z), Rect2(cell * 32, 0, 32, 32))
 		else:
@@ -1478,6 +1538,8 @@ func _draw_effects(dim: int, z: float) -> void:
 		_draw_bolt(b, z, now)
 	for im in _impacts:
 		_draw_impact(im, z, now)
+	for im in _casts:
+		_draw_cast(im, z, now)
 	for dm in _disp_magics:
 		_draw_disp_magic(dm, z, now)
 	for f in _floats:
@@ -1539,6 +1601,64 @@ static func _scaled_points(pts: PackedVector2Array, cx: float, cy: float, scale:
 	for p in pts:
 		out.append(Vector2(cx + (p.x - cx) * scale, cy + (p.y - cy) * scale))
 	return out
+
+
+func _draw_cast(im: Dictionary, z: float, now: float) -> void:
+	## 魔法の発動アニメーション。術師を中心に、円状の波が
+	## 同心円に広がり、広がるにつれて薄れて消えます。
+	## 中心の閃光、少しずつ遅れて広がるリング3重、円周上を
+	## 外へ流れる火花で組みます。対象側には何も出しません。
+	var age := now - float(im["spawned"])
+	if age < 0.0 or age >= CAST_DURATION:
+		return
+	var t := age / CAST_DURATION
+	var c: Vector2 = im["center"]
+	var center := Vector2(c.x * z, c.y * z)
+	var base: Color = CAST_COLORS[mini(int(t * CAST_COLORS.size()), CAST_COLORS.size() - 1)]
+	# 波の本体: 先行する輪の内側を、薄い色で満たします。
+	var lead := _cast_ring_progress(age, 0)
+	if lead > 0.0:
+		var body := Color(base.r, base.g, base.b, 0.16 * (1.0 - lead))
+		draw_circle(center, _cast_ring_radius(lead) * z, body)
+	# 中心の閃光: 最初に強く光り、縮みながら消えます。
+	var flash_a := pow(1.0 - t, 1.5)
+	if flash_a > 0.01:
+		var halo := Color(base.r, base.g, base.b, 0.55 * flash_a)
+		draw_circle(center, lerpf(15.0, 7.0, t) * z, halo)
+		draw_circle(center, lerpf(9.0, 4.0, t) * z, Color(1, 1, 1, 0.9 * flash_a))
+	# リング: 遅れて出る輪ほど、遅れて広がり遅れて消えます。
+	for i in CAST_RING_COUNT:
+		var p := _cast_ring_progress(age, i)
+		if p <= 0.0 or p >= 1.0:
+			continue
+		var ring := Color(base.r, base.g, base.b, 0.95 * (1.0 - p))
+		var width := maxf(1.0, lerpf(3.2, 1.2, p) * z)
+		draw_arc(center, _cast_ring_radius(p) * z, 0.0, TAU, 64, ring, width, true)
+	# 円周の火花: 先行する輪の円周上に乗り、外を向いて流れます。
+	if lead > 0.0 and lead < 1.0:
+		var spark := Color(base.r, base.g, base.b, 0.9 * (1.0 - lead))
+		var r := _cast_ring_radius(lead) * z
+		for i in CAST_SPARKS:
+			var angle := i * TAU / CAST_SPARKS + age * 1.2
+			var sx := center.x + r * cos(angle)
+			var sy := center.y + r * sin(angle)
+			var len := lerpf(7.0, 3.0, lead)
+			draw_colored_polygon(PhiCombatFx.radial_spark_points(sx, sy, z, angle, len, 1.2), spark)
+
+
+static func _cast_ring_progress(age: float, index: int) -> float:
+	## リング index の進み具合 (0..1)。後の輪ほど遅れて始まり、
+	## 残りの時間で広がり切ります。
+	var start := CAST_RING_DELAY * float(index)
+	if age <= start:
+		return 0.0
+	return clampf((age - start) / (CAST_DURATION - start), 0.0, 1.0)
+
+
+static func _cast_ring_radius(progress: float) -> float:
+	## 輪の半径。最初は速く、広がるにつれてゆるやかに (ease-out)。
+	var p := clampf(progress, 0.0, 1.0)
+	return lerpf(4.0, CAST_RING_MAX_R, 1.0 - (1.0 - p) * (1.0 - p))
 
 
 func _draw_bolt(b: Dictionary, z: float, now: float) -> void:

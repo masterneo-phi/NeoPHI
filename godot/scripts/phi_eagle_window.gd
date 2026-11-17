@@ -27,23 +27,37 @@ func show_event(event: Dictionary, assets: GameAssets, mapset: String, zoom: flo
 		_title_label.add_theme_font_size_override("font_size", title_size)
 	_title_label.text = "Eagle Eye" if source_name.is_empty() else "Eagle Eye ― " + source_name
 	_view.set_event(event, assets, mapset, zoom, defines)
-	var frame := get_child(0) as Control
-	var need := Vector2i(frame.get_combined_minimum_size()) + Vector2i(24, 18)
 	if visible:
-		size = need
-		min_size = need
-		# 大きくなった時は、窓が画面の外へはみ出さないよう
-		# 位置を内側へ戻す。
+		# 開いている間は、ユーザーが決めた位置・大きさを保つ
+		# (盤は窓の大きさに追随して拡縮する)。画面の外へ
+		# はみ出していたら内側へ戻すだけにする。
 		var rs := get_tree().root.size
 		position = Vector2i(
 			clampi(position.x, 0, maxi(rs.x - size.x, 0)),
 			clampi(position.y, 0, maxi(rs.y - size.y, 0)))
 	else:
-		min_size = need
+		# 開いた直後の大きさは従来どおり、盤の既定の大きさ
+		# (実寸・最大 560px 目安) + 題名行などの枠。
+		var frame := get_child(0) as Control
+		var need := _default_window_size(frame)
 		var root_size := get_tree().root.size
 		need = Vector2i(mini(need.x, maxi(root_size.x - 16, 320)), mini(need.y, maxi(root_size.y - 16, 240)))
-		min_size = need
 		popup_centered(need)
+		# 埋め込み窓は popup の時点で大きさが min_size へ
+		# 戻ってしまうため、表示後に同じ大きさを入れ直す
+		# (位置は popup の中央寄せがそのまま残る)。
+		size = need
+
+
+func _default_window_size(frame: Control) -> Vector2i:
+	## 盤の既定の大きさで開く時の窓の大きさ。枠の最小寸法を、
+	## 盤の既定寸法を最小寸法に仮置きして測る (普段の最小寸法は
+	## 小さくしてあり、窓を縮められるようにしている)。
+	var saved := _view.custom_minimum_size
+	_view.custom_minimum_size = _view.board_pixel_size()
+	var full := Vector2i(frame.get_combined_minimum_size())
+	_view.custom_minimum_size = saved
+	return full + Vector2i(24, 18)
 
 
 func _build() -> void:
@@ -76,7 +90,13 @@ func _build() -> void:
 	PhiWindowDrag.attach(head, self)
 	_view = PhiEagleView.new()
 	_view.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+	# 盤は窓の空き領域いっぱいに広がり、リサイズに追随する。
+	_view.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_view.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	box.add_child(_view)
+	# 窓は盤の既定寸法より小さくまで縮められるようにする
+	# (盤は割り当てに合わせて縮む)。
+	min_size = Vector2i(220, 200)
 	close_requested.connect(func() -> void: hide())
 
 

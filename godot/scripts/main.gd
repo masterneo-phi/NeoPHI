@@ -1953,6 +1953,9 @@ func _do_action(action_name: String) -> void:
 				tab.session.disp_magic = _config.disp_magic
 				if tab.is_session_open():
 					tab.send_line("#ex-switch ex-disp-magic=" + ("true" if _config.disp_magic else "false"))
+			# 魔法弾の有無も「魔法表示」に連動する (全タブへ反映)。
+			for t in _tabs:
+				t.apply_magic_effect()
 			_update_action_states()
 			_save_config()
 		"image-toggle":

@@ -125,7 +125,7 @@ const MENUS := [
 ]
 
 ## ツールバーに並べるアクション。"-" は区切り。
-const TOOLBAR := ["Open", "Close", "-", "Equip", "Unequip", "Read", "Write", "Erase", "Get", "Put", "Use", "-", "Spells", "Hit", "Check", "NewPrivWindow", "Loud", "-", "Cast", "M9x9", "M7x7", "M5x5", "MSolid", "MTurn", "-", "SSMap"]
+const TOOLBAR := ["Open", "Close", "-", "Equip", "Unequip", "Read", "Write", "Erase", "Get", "Put", "Use", "-", "Spells", "Hit", "Check", "NewPrivWindow", "Loud", "-", "Cast", "M9x9", "M7x7", "M5x5", "MSolid", "MTurn", "-", "SSMap", "-", "PlayBGM", "LogAutoSave"]
 
 
 ## メニュー項目の右端に表示するショートカット（アクセラレータ）。

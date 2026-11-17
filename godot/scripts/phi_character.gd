@@ -264,6 +264,9 @@ var _toolbar_auto_home := false
 var _last_command := ""
 var _history_boundary := 0
 var _input_snapshot := ""
+## 直前に送った文 (入力欄に打ったままの形)。下書きが空の
+## Enter で、その文が履歴にそのまま残っていれば再発言する。
+var _last_sent_text := ""
 ## 追加発言(TalkAdd)。実行中だけの保持で、保存はしない。
 var _talk_add := ""
 var _tag_popup: PopupMenu = null
@@ -755,6 +758,7 @@ func _build_ui() -> void:
 	map_view = MapView.new()
 	map_view.set_session_live(false)  # 接続するまでアニメーションしない
 	apply_smooth_scroll()
+	apply_magic_effect()
 	map_view.label_font = _font
 	map_view.bold_font = _bold_font
 	map_view.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -1051,7 +1055,9 @@ func _build_toolbar_overlay() -> void:
 		button.focus_mode = Control.FOCUS_NONE
 		button.expand_icon = true
 		button.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
-		if action_name == "Loud":
+		if action_name in ["Loud", "PlayBGM", "LogAutoSave"]:
+			# 大声と、BGM 再生・ログ記録の ON/OFF スイッチは
+			# 押下状態がそのまま設定を表すトグルにする。
 			button.toggle_mode = true
 		var icon: Variant = _assets.button_icon(action_name)
 		if icon != null:
@@ -1094,6 +1100,12 @@ func refresh_toolbar_states() -> void:
 		button.disabled = not PhiActions.enabled_when(action_name, connected)
 		if action_name == "Loud":
 			button.set_pressed_no_signal(is_loud())
+		elif action_name == "PlayBGM":
+			# メニューの「BGM を再生する」と同じ設定を共有する。
+			button.set_pressed_no_signal(_config != null and _config.play_bgm)
+		elif action_name == "LogAutoSave":
+			# メニューの「ログの自動保存」と同じ設定を共有する。
+			button.set_pressed_no_signal(_config != null and _config.log_auto_save)
 
 
 func _apply_toolbar_home() -> void:
@@ -1365,6 +1377,13 @@ func apply_smooth_scroll() -> void:
 	## 表示メニュー「スムーズマップスクロール」の反映 (第65段)。
 	if map_view != null and _config != null:
 		map_view.smooth_scroll = _config.smooth_scroll
+
+
+func apply_magic_effect() -> void:
+	## 魔法弾を飛ばすかは「魔法表示」の設定に連動する
+	## (ユーザーの指定)。ON で魔法弾、OFF では発動オーラだけ。
+	if map_view != null and _config != null:
+		map_view.magic_bolt = _config.disp_magic
 
 
 func _on_split_resized() -> void:
@@ -3228,7 +3247,13 @@ func submit_input(party: bool = false) -> void:
 	_history_boundary = PhiInputHistory.clamp_boundary(input_box.text, _history_boundary)
 	var draft := PhiInputHistory.draft_of(input_box.text, _history_boundary)
 	if draft.is_empty():
-		return
+		# 下書きが空でも、直前に送った文が入力欄にそのまま
+		# 残っていれば、その文をもう一度送る (再発言)。
+		# 送った文を書き換えた場合は境界が戻って下書きに
+		# なるので、ここには来ない。
+		draft = _resendable_text()
+		if draft.is_empty():
+			return
 	# 送信してもフォーカスは入力欄に残す (第89段、Philly と
 	# 同じ)。連続して発言できるのが本来の姿で、移動モードへ
 	# 戻るのは Esc / Tab / 地図クリックの役割。
@@ -3265,11 +3290,31 @@ func _send_speech_text(text: String, party: bool) -> void:
 	session.send_text("\n".join(lines))
 
 
+func _resendable_text() -> String:
+	## 再発言できる文。直前に送った文が、入力欄の履歴部分に
+	## そのまま残っている時だけ、その文を返す。履歴を消したり
+	## 書き換えたりした場合は再発言しない。
+	if _last_sent_text.is_empty():
+		return ""
+	var history := input_box.text.left(_history_boundary)
+	# 送信後に advance が末尾へ足した改行を1つ除いて比べる。
+	if history.ends_with("\n"):
+		history = history.left(history.length() - 1)
+	if history == _last_sent_text or history.ends_with("\n" + _last_sent_text):
+		return _last_sent_text
+	return ""
+
+
 func _advance_history() -> void:
 	## 送った文を履歴に入れ、境界を末尾まで進める。
 	## キャレットを末尾に置き、表示も末尾までスクロールする。
 	## 追加発言があれば、新しい下書きとして先に入れておく
 	## (Philly の送信後の AddLine(TalkAdd))。
+	# 再発言の時は下書きが空のまま呼ばれるので、直前の文を
+	# 上書きしない (空でない時だけ覚え直す)。
+	var sent := PhiInputHistory.draft_of(input_box.text, _history_boundary)
+	if not sent.is_empty():
+		_last_sent_text = sent
 	var result := PhiInputHistory.advance(input_box.text, _history_boundary)
 	input_box.text = str(result["text"])
 	_history_boundary = int(result["boundary"])

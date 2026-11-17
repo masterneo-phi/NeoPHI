@@ -66,8 +66,9 @@ func set_event(event: Dictionary, assets: GameAssets, mapset: String, zoom: floa
 	# (第87段。倍率 4 の地図だと盤が 1000px を超えて邪魔に
 	# なっていた)。チップ実寸 (32px) を上限に、盤全体が
 	# MAX_BOARD_PX に収まるよう必要なら縮めるだけにする。
+	# これは「開いた直後の既定の大きさ」用で、実際の描画倍率は
+	# 割り当てられた大きさに追随する (_current_scale)。
 	_scale = clampf(MAX_BOARD_PX / float(_dim * MapView.CHIP_SIZE), 0.25, 1.0)
-	custom_minimum_size = board_pixel_size()
 	queue_redraw()
 
 
@@ -76,7 +77,24 @@ func board_dim() -> int:
 
 
 func board_pixel_size() -> Vector2:
+	## 既定の盤の大きさ (開いた直後の窓の大きさの目安)。
 	return Vector2(_dim * MapView.CHIP_SIZE, _dim * MapView.CHIP_SIZE + MapView.MAP_TOP) * _scale
+
+
+func _current_scale() -> float:
+	## 実際に描く倍率。割り当てられた大きさに盤全体が収まる
+	## 倍率にし、窓のリサイズで拡大も縮小もする (マップ窓と
+	## 同じ感覚)。大きさがまだ決まっていない時は既定倍率。
+	if _dim <= 0 or size.x <= 0.0 or size.y <= 0.0:
+		return _scale
+	var fit := minf(
+		size.x / float(_dim * MapView.CHIP_SIZE),
+		size.y / float(_dim * MapView.CHIP_SIZE + MapView.MAP_TOP))
+	return maxf(fit, 0.05)
+
+
+func debug_current_scale() -> float:
+	return _current_scale()
 
 
 func _process(_delta: float) -> void:
@@ -95,10 +113,15 @@ func _sheet_for(cell: Dictionary) -> Texture2D:
 	return _chip_texs[int(cell["attr"]) & 0x03] as Texture2D
 
 
+func _init() -> void:
+	# 窓のリサイズで割り当てが変わったら、新しい倍率で描き直す。
+	resized.connect(queue_redraw)
+
+
 func _draw() -> void:
 	if _dim <= 0:
 		return
-	var z := _scale
+	var z := _current_scale()
 	var cs := float(MapView.CHIP_SIZE)
 	draw_rect(Rect2(Vector2.ZERO, size), Color.BLACK)
 	var water: Variant = null
