@@ -116,5 +116,34 @@ func _run() -> void:
 	tab.log_message("log", PhiTags.plain_text(raw5), raw5)
 	await process_frame
 	check(tab.log_view.get_content_height() >= h5 + 96, "tag size attrs honored")
+	# 欄より幅広い画像は欄幅に縮み、欄を狭めると追随して
+	# さらに縮む (リサイズで描き直して合わせ直す)。文字の
+	# 折り返し増と混ざらないよう、記録を空にして画像だけで測る。
+	tab.set("_log_lines", [])
+	tab.call("_rebuild_log_view", true)
+	await process_frame
+	await process_frame
+	tab.log_view.custom_minimum_size = Vector2(600, 200)
+	tab.log_view.size = Vector2(600, 200)
+	await process_frame
+	var wide := Image.create(800, 400, false, Image.FORMAT_RGBA8)
+	wide.fill(Color(0.2, 0.2, 0.8))
+	var url6 := "http://example.com/wide.png"
+	PhiCharacter.store_image_texture(url6, ImageTexture.create_from_image(wide))
+	await process_frame
+	var h6: int = tab.log_view.get_content_height()
+	var raw6 := "/*img=" + url6 + "*/"
+	tab.log_message("log", PhiTags.plain_text(raw6), raw6)
+	await process_frame
+	await process_frame
+	var grew6: int = tab.log_view.get_content_height() - h6
+	check(grew6 >= 270 and grew6 <= 310, "wide image shrunk to log width")
+	tab.log_view.custom_minimum_size = Vector2(300, 200)
+	tab.log_view.size = Vector2(300, 200)
+	await process_frame
+	await process_frame
+	await process_frame
+	var shrunk: int = h6 + grew6 - tab.log_view.get_content_height()
+	check(shrunk >= 120, "image refits smaller when log narrows")
 	print("stage48: ", _checks, " checks, ", _failures, " failures")
 	quit(1 if _failures > 0 else 0)
