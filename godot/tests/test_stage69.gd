@@ -33,6 +33,9 @@ func _run() -> void:
 	var iso := ProjectSettings.globalize_path("user://stage69_tabs.ini")
 	OS.execute("rm", ["-f", iso])
 	main.set("_tab_session_path", "user://stage69_tabs.ini")
+	var isoc := ProjectSettings.globalize_path("user://stage69_cfg.ini")
+	OS.execute("rm", ["-f", isoc])
+	main.set("_config_path", "user://stage69_cfg.ini")
 	root.add_child(main)
 	await process_frame
 	await process_frame

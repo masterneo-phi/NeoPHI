@@ -49,6 +49,14 @@ func _initialize() -> void:
 func _run() -> void:
 	var ps := load("res://main.tscn") as PackedScene
 	var main: Node = ps.instantiate()
+	# 設定とタブ復元を隔離する (共有ホームの NeoPHI.ini が
+	# SmoothMapScroll=false 等に汚染されていると読んでしまう)。
+	var iso_cfg := ProjectSettings.globalize_path("user://stage64_cfg.ini")
+	OS.execute("rm", ["-f", iso_cfg])
+	main.set("_config_path", "user://stage64_cfg.ini")
+	var iso_tab := ProjectSettings.globalize_path("user://stage64_tabs.ini")
+	OS.execute("rm", ["-f", iso_tab])
+	main.set("_tab_session_path", "user://stage64_tabs.ini")
 	root.add_child(main)
 	await create_timer(0.6).timeout
 	var tab: Variant = main.call("_active_tab")

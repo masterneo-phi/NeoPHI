@@ -80,6 +80,11 @@ func _run() -> void:
 	var iso := ProjectSettings.globalize_path("user://stage65_start.ini")
 	OS.execute("rm", ["-f", iso])
 	main.set("_tab_session_path", "user://stage65_start.ini")
+	# 設定も隔離する (トグルの保存が共有の NeoPHI.ini へ出て、
+	# 次回実行や他スイートの既定値を汚染しないように)。
+	var isoc := ProjectSettings.globalize_path("user://stage65_main_cfg.ini")
+	OS.execute("rm", ["-f", isoc])
+	main.set("_config_path", "user://stage65_main_cfg.ini")
 	root.add_child(main)
 	await process_frame
 	await process_frame
@@ -198,9 +203,13 @@ func _run() -> void:
 		pend.append("x".to_utf8_buffer())
 	session.set("_pending_lines", pend)
 	tab.call("_flush_log_batch")
-	check(tab.call("log_display_backlog") == 3, "flush paused while flooding")
+	check(tab.call("log_display_backlog") == 0, "flush discards to record while flooding (stage71)")
+	check(bool(tab.get("_view_gap")) == true, "freeze marks gap while flooding")
 	var empty_pend: Array[PackedByteArray] = []
 	session.set("_pending_lines", empty_pend)
+	tab.set("_log_batching", true)
+	tab.log_message("log", "65洪水あと")
+	tab.set("_log_batching", false)
 	tab.call("_flush_log_batch")
 	check(tab.call("log_display_backlog") == 0, "flush resumes after flood")
 

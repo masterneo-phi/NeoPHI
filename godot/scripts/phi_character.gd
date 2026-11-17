@@ -2040,6 +2040,10 @@ const LOG_BATCH_HARD_CAP := 4000
 const LOG_BATCH_HARD_KEEP := 2000
 ## 表示を間引いたので、捌けた後に記録から描き直して揃える。
 var _view_gap := false
+## 洪水の間に表示から外した行数 (進捗表示用、第71段)。
+var _flood_received := 0
+## 洪水の進捗行を最後に出した時刻 (msec)。
+var _flood_progress_at := 0
 ## ログ欄の行数がこれを超えたら、記録 (上限2000行) から
 ## 描き直して切り詰める。
 const LOG_VIEW_TRIM_LINES := 3200
@@ -2060,10 +2064,33 @@ func _flush_log_batch() -> void:
 	## かかるが、その間も受信は止まらない。溜めた entry の
 	## 下準備 (タグ解析・bbcode 化) はここでまとめて行う
 	## (第65段)。大量行の受信中は表示自体を止める。
-	if _log_batch.is_empty():
-		return
 	if log_view == null or not is_instance_valid(log_view):
 		_log_batch.clear()
+		return
+	# 洪水の間は表示を凍結する (第71段)。間引き (第69段) でも
+	# 表示欄は育ち続け、切り詰めの描き直しが繰り返し走って
+	# 受信を滞らせていた。そこで受信中はログ欄へ一切出さず、
+	# 行は記録と自動保存だけに残す (表示待ちの entry は記録
+	# にも入っているので、ここで捨ててよい)。捌けた後に
+	# 記録から描き直して揃える (既存の _view_gap の回復)。
+	# 進捗は 1 秒に 1 行だけ出す。
+	if _flooding():
+		if not _log_batch.is_empty():
+			_flood_received += _log_batch.size()
+			_log_batch.clear()
+			_view_gap = true
+		var now71 := Time.get_ticks_msec()
+		if now71 - _flood_progress_at >= 1000:
+			_flood_progress_at = now71
+			log_view.append_text(
+				"[color=#888888]（大量の行を受信中… %d 行）[/color]\n"
+				% _flood_received)
+			_log_view_lines += 1
+			if _log_at_bottom() and (_config == null or not _config.scroll_stop):
+				_pin_bottom_pending = true
+		return
+	_flood_received = 0
+	if _log_batch.is_empty():
 		return
 	# 表示の間引き (第69段)。記録と自動保存には全行残る。
 	if _log_batch.size() > LOG_BATCH_HARD_CAP:
@@ -2073,8 +2100,6 @@ func _flush_log_batch() -> void:
 			and _log_batch.size() > LOG_BATCH_KEEP_TAIL:
 		_log_batch = _log_batch.slice(_log_batch.size() - LOG_BATCH_KEEP_TAIL)
 		_view_gap = true
-	if _flooding():
-		return
 	var start := Time.get_ticks_msec()
 	var follow := _log_at_bottom()
 	var max_lines := LOG_FLUSH_MAX_LINES
