@@ -94,6 +94,7 @@ const ACTIONS := {
 	"SayAllTabs": {"caption": "全タブ発言", "hint": "すべてのタブに同じ発言を送る", "kind": "say-all-tabs"},
 	"LogAutoSave": {"caption": "ログの自動保存", "hint": "ログを自動でファイルに保存し続ける", "kind": "autosave-toggle"},
 	"LogSave": {"caption": "ログを保存", "hint": "今表示しているログをファイルに保存する", "kind": "log-save"},
+	"LogSaveDir": {"caption": "ログの保存先...", "hint": "ログを保存するフォルダを指定する", "kind": "log-save-dir"},
 	"LogDeleteFilter": {"caption": "削除フィルタ", "hint": "設定した正規表現に合う行をログに表示しない", "kind": "delete-filter-toggle"},
 	"ImageWindow": {"caption": "画像一覧", "hint": "ログ中の画像参照の一覧を開く(選ぶと取得して表示)", "kind": "image-window"},
 	"M5x5": {"caption": "5x5 マップモード", "hint": "表示する地図を5x5マスにする [Shift+5]", "kind": "send", "send": "#ex-map size=40"},
@@ -120,7 +121,7 @@ const MENUS := [
 	{"name": "操作", "items": ["NewPrivWindow", "Loud", "TalkAdd", "SayAllTabs"]},
 	{"name": "行動", "items": ["Equip", "Unequip", "-", "Talk", "Read", "Write", "Erase", "Board", "-", "Get", "Put", "Use", "Sort", "FloorItem", "-", "Spells", "Pay", "Hit", "Check", "Skills"]},
 	{"name": "魔法", "items": ["WizardEye", "PartyEye", "EagleEye", "Identify", "Search", "WizardLock", "Unlock", "Detect", "Create", "Analyze", "Forget", "Call", "Return", "-", "WizardLight", "EagleEyeText", "List", "Destroy", "ChargeSpell", "Appear", "Disappear", "-", "Cast", "Cast1", "Cast2", "Cast3", "Cast4", "Cast5", "Cast6", "Cast7"]},
-	{"name": "表示", "items": ["M9x9", "M7x7", "M5x5", "MSolid", "MTurn", "-", "SSMap", "LogScrollStop", "SmoothScroll", "DispMagic", "LogImage", "PlayBGM", "PlaySE", "MasterMagicAlways", "-", "LogAutoSave", "LogSave", "LogDeleteFilter", "ImageWindow"]},
+	{"name": "表示", "items": ["M9x9", "M7x7", "M5x5", "MSolid", "MTurn", "-", "SSMap", "LogScrollStop", "SmoothScroll", "DispMagic", "LogImage", "PlayBGM", "PlaySE", "MasterMagicAlways", "-", "LogAutoSave", "LogSave", "LogSaveDir", "LogDeleteFilter", "ImageWindow"]},
 	{"name": "ツール", "items": ["UnewPanel", "SoundTest", "ChipViewer", "CharaViewer", "ShortcutConfig", "OpenConfigFolder", "CheckUpdate", "VersionInfo"]},
 ]
 

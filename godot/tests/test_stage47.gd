@@ -28,7 +28,7 @@ const DISPATCH_KINDS := [
 	"reload-config", "reset-config", "clear-cache", "exit",
 	"priv-window", "loud-toggle", "talk-add", "shortcut-config",
 	"unew-panel", "sound-test", "chip-viewer", "chara-viewer",
-	"say-all-tabs", "autosave-toggle", "log-save",
+	"say-all-tabs", "autosave-toggle", "log-save", "log-save-dir",
 	"delete-filter-toggle", "image-window", "screenshot",
 	"scroll-toggle", "smooth-scroll-toggle", "disp-magic-toggle", "bgm-toggle", "se-toggle",
 	"master-magic-toggle", "open-config-folder", "update-check",

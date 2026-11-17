@@ -2889,14 +2889,27 @@ func handle_list_key(code: String, shift: bool, ctrl: bool, alt: bool) -> bool:
 	if code.begins_with("Digit") and code.length() == 6:
 		var digit := code[5]
 		if digit >= "1" and digit <= "9":
-			_send_list_row(int(digit) - 1)
+			_send_list_digit(int(digit))
 			return true
 	if code.begins_with("Numpad") and code.length() == 7:
 		var num_digit := code[6]
 		if num_digit >= "1" and num_digit <= "9":
-			_send_list_row(int(num_digit) - 1)
+			_send_list_digit(int(num_digit))
 			return true
 	return false
+
+
+func _send_list_digit(digit: int) -> void:
+	## 数字キーでの選択。リストにある数字はその行を送り、
+	## リストに無い数字はキャンセル扱いでリストを閉じる
+	## (第98段、利用者の要望)。テンキーは移動キーでもある
+	## ため、無反応のまま飲み込むと前進や横向きができなく
+	## なる。キャンセルの送り方は 0 やキャンセルボタンと
+	## 同じ "." 。
+	if digit - 1 < _list_lines.size():
+		_send_list_row(digit - 1)
+	else:
+		_send_list_answer(".")
 
 
 func _handle_list_check_key(code: String) -> bool:

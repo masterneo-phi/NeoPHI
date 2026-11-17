@@ -127,6 +127,7 @@ var _chara_popup: PopupMenu = null
 var _chara_menu_entries: Array = []
 ## キャラデータ読み込みのフォルダ選択と結果通知。
 var _import_dialog: FileDialog = null
+var _log_dir_dialog: FileDialog = null
 var _import_notice: AcceptDialog = null
 var _import_notice_label: Label = null
 var _register_dialog: ConfirmationDialog = null
@@ -614,6 +615,36 @@ func _show_import_dialog() -> void:
 	var want := Vector2(
 		maxf(760.0, root_size.x * 0.62), maxf(520.0, root_size.y * 0.62))
 	_import_dialog.popup_centered(Vector2i(UiStyle.fit_popup_size(want, Vector2(root_size))))
+
+
+func _show_log_dir_dialog() -> void:
+	## ログの保存先フォルダを選ばせる (第99段、利用者の要望)。
+	## 設定自体は [Log] LogSaveDir に前からあったが、画面から
+	## 変える手段が無かった。自動保存・手動保存・WireTrace の
+	## 記録はすべてこの保存先に従う。
+	if _log_dir_dialog == null:
+		_log_dir_dialog = FileDialog.new()
+		_log_dir_dialog.file_mode = FileDialog.FILE_MODE_OPEN_DIR
+		_log_dir_dialog.access = FileDialog.ACCESS_FILESYSTEM
+		_log_dir_dialog.title = "ログの保存先を選択"
+		_log_dir_dialog.transparent = true
+		_log_dir_dialog.dir_selected.connect(_on_log_dir_selected)
+		add_child(_log_dir_dialog)
+	_log_dir_dialog.theme = _import_dialog_theme()
+	var current := ProjectSettings.globalize_path(_config.log_save_dir)
+	if DirAccess.open(current) != null:
+		_log_dir_dialog.current_dir = current
+	var root_size := get_tree().root.size
+	var want := Vector2(
+		maxf(760.0, root_size.x * 0.62), maxf(520.0, root_size.y * 0.62))
+	_log_dir_dialog.popup_centered(Vector2i(UiStyle.fit_popup_size(want, Vector2(root_size))))
+
+
+func _on_log_dir_selected(folder: String) -> void:
+	## 選ばれたフォルダを保存先にして、設定に残す。
+	_config.log_save_dir = folder
+	_save_config()
+	_log_active("system", "ログの保存先を変更しました: " + folder)
 
 
 func _on_import_dir_selected(folder: String) -> void:
@@ -1979,6 +2010,8 @@ func _do_action(action_name: String) -> void:
 					_log_active("error", "ログの保存に失敗しました: " + _config.log_save_dir)
 				else:
 					_log_active("system", "ログを保存しました: " + saved_path)
+		"log-save-dir":
+			_show_log_dir_dialog()
 		"autosave-toggle":
 			_config.log_auto_save = not _config.log_auto_save
 			_update_action_states()
