@@ -970,11 +970,26 @@ func _find_tab_for_character(host: String, port: int, char_id: String, display_n
 	return null
 
 
+func _take_pristine_tab() -> PhiCharacter:
+	## まだ何にも使われていない未接続タブがあれば返す。
+	## 初回起動時の空タブを最初のキャラ接続で使い回し、
+	## 空タブが残り続けないようにする (第67段)。
+	for t in _tabs:
+		if t.host.is_empty() and t.restored_name.is_empty() \
+				and t.session.char_id.is_empty() and not t.is_session_open():
+			return t
+	return null
+
+
 func _connect_character(host: String, port: int, char_id: String, display_name: String = "") -> PhiCharacter:
 	## キャラへの接続。同じキャラのタブがあればそれを使い回し、
 	## 無ければ新しいタブを作る (Philly と同じ挙動)。接続中の
 	## タブがあれば、つなぎ直さずに切り替えるだけにする。
+	## 同じキャラのタブが無くても、未使用の空タブがあれば
+	## それを使い回す (初回起動時の空タブ対策、第67段)。
 	var tab := _find_tab_for_character(host, port, char_id, display_name)
+	if tab == null:
+		tab = _take_pristine_tab()
 	if tab == null:
 		tab = _create_tab()
 	elif tab.session.char_id != char_id:
@@ -2861,7 +2876,10 @@ func _on_register_confirmed() -> void:
 		_register_dialog.popup_centered(REGISTER_DIALOG_SIZE)
 		return
 	var password := PhiCharacters.make_password()
-	var tab := _create_tab()
+	# 未使用の空タブがあればそれで作成する (第67段)。
+	var tab := _take_pristine_tab()
+	if tab == null:
+		tab = _create_tab()
 	_activate_tab(tab)
 	tab.connect_register(host, port, char_name, password, mail, str(made["display_name"]), root)
 	_save_tab_session()

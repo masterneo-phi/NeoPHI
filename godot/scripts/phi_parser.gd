@@ -589,7 +589,10 @@ func _note_frame_size(size: int) -> void:
 	## 地図の大きさが変わったら、前フレームのキャラ行を捨てる。
 	## 大きさが同じ間は、行が来ないフレームでも前フレームの
 	## キャラを引き継ぐ (サーバは変化した行だけ送るため)。
-	if _last_frame_size != 0 and size != _last_frame_size:
+	## このフレームのキャラ行が既に届いている場合は捨てない
+	## (クラシック地図はキャラ行が地図行より先に来るため)。
+	if _last_frame_size != 0 and size != _last_frame_size \
+			and _chara_clear_pending:
 		_map_chars = []
 		_chara_clear_pending = false
 	_last_frame_size = size

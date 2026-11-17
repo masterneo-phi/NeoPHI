@@ -970,6 +970,18 @@ func _draw() -> void:
 			_draw_state_icon(ch, pair[1], z, false, po)
 		# 4.5 残像(この行)。ずらさず、この行のキャラの上に重ねます。
 		_draw_ghosts(row, dim, z)
+	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+	if scrolling:
+		# スクロール中は地図の四角の外へはみ出したセル・キャラの
+		# 描画を壁紙で覆い隠す (第65段、ユーザーの要望)。ただし
+		# 覆うのはここまで (セルとキャラ) で、ラベル・吹き出し・
+		# 演出は壁紙より手前に描く。最後に覆うと、上の線より上に
+		# 出た吹き出し等が一瞬壁紙の後ろに隠れてちらつくため
+		# (第67段、ユーザーの指摘「一瞬壁紙が前に来ている」)。
+		# 上の余白帯 (MAP_TOP) は内側に含める (帯まで隠す版は
+		# 張り出しが最後にぱっと現れてちらついたため戻した)。
+		_mask_outside_grid(_scroll_mask_rect(ox, oy, dim, z))
+	draw_set_transform(Vector2(ox + so.x, oy + so.y), 0.0, Vector2.ONE)
 	# 5. キャラ名ラベル(中心の自キャラは除外)。同じマスは後勝ち。
 	_draw_labels(chars, dim, z)
 	# 6. 戦闘の演出(点滅・斬撃・魔法弾・着弾・浮き数字・吹き出し)。
@@ -984,13 +996,6 @@ func _draw() -> void:
 			draw_line(from, to, Color(1, 1, 1, 0.55), 2.0)
 			draw_circle(to, 4.0, Color(1, 1, 1, 0.55))
 	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
-	if scrolling:
-		# スクロール中は地図の四角の外へはみ出した描画を壁紙で
-		# 覆い隠す (第65段、ユーザーの要望)。枠の内側だけが
-		# 滑って見えるようにする。上の余白帯 (MAP_TOP) は
-		# 内側に含める: 帯まで隠す版は張り出しが最後に
-		# ぱっと現れてちらついたため、ユーザーの判断で戻した。
-		_mask_outside_grid(_scroll_mask_rect(ox, oy, dim, z))
 
 
 func _scroll_mask_rect(ox: float, oy: float, dim: int, z: float) -> Rect2:

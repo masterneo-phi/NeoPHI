@@ -504,6 +504,7 @@ func _process(_delta: float) -> void:
 	_log_batching = true
 	session.poll_burst()
 	_log_batching = false
+	_check_m81_watchdog(Time.get_ticks_msec())
 	_flush_log_batch()
 	# 表示まで終えたら、届いているバイトだけ先に取り込んで
 	# おく (処理は次のフレーム)。ソケットを空けておく時間が
@@ -1341,10 +1342,36 @@ func _maybe_fallback_m81(event: Dictionary) -> void:
 		return
 	if int(event.get("size", 0)) == 9:
 		return
+	_do_fallback_m81()
+
+
+func _do_fallback_m81() -> void:
+	## 9x9 を諦めて 7x7 を要求し直す (この接続だけ)。
 	_m81_fell_back = true
 	session.map_size = 57
 	session.send_line("#ex-map size=57")
 	log_message("system", "このサーバは 9x9 マップに未対応のため、7x7 マップで表示します")
+
+
+## 9x9 の応答を見切るまでの時間 (ミリ秒)。rel5g 系サーバは
+## size=81 を無視して地図フレーム自体を送ってこないことが
+## あるため、フレーム駆動の落とし直し (_maybe_fallback_m81)
+## だけでは切り替わらない。一定時間 9x9 が届かなければ
+## 時間で見切って 7x7 へ落とす (第68段)。
+const M81_WATCHDOG_MSEC := 1500
+var _m81_watch_since := 0
+
+
+func _check_m81_watchdog(now_ms: int) -> void:
+	if session == null or not session.is_open() or _m81_fell_back \
+			or session.map_size != 81 or _map_dim_now == 9:
+		_m81_watch_since = 0
+		return
+	if _m81_watch_since == 0:
+		_m81_watch_since = now_ms
+	elif now_ms - _m81_watch_since >= M81_WATCHDOG_MSEC:
+		_m81_watch_since = 0
+		_do_fallback_m81()
 
 
 func connect_to(p_host: String, p_port: int, p_char_id: String) -> void:
@@ -1359,6 +1386,7 @@ func connect_to(p_host: String, p_port: int, p_char_id: String) -> void:
 	_close_handled = false
 	_cut_by_other = false
 	_m81_fell_back = false
+	_m81_watch_since = 0
 	log_message("system", "%s:%d に接続します..." % [host, port])
 	session.connect_to(host, port, p_char_id)
 	title_changed.emit(tab_title())
