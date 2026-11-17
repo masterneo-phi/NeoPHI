@@ -102,6 +102,10 @@ var _update_label: Label = null
 var _update_info: Dictionary = {}
 var _loud_dialog: ConfirmationDialog = null
 var _loud_tab: PhiCharacter = null
+## BGM ゲートの前回の状態 (第74段)。開閉が変わった時だけ
+## _apply_tab_bgm を呼び直すための覚え。
+var _bgm_gate_tab: PhiCharacter = null
+var _bgm_gate_suspended := false
 var _shortcut_dialog: ConfirmationDialog = null
 var _shortcut_inner_box: VBoxContainer = null
 var _shortcut_magic_edits: Array[LineEdit] = []
@@ -1782,11 +1786,20 @@ func _apply_tab_bgm(tab: PhiCharacter) -> void:
 	if not _config.play_bgm or tab.bgm_name.is_empty() or not tab.is_session_open():
 		_sound_engine.bgm_stop()
 		return
+	if tab.bgm_suspended():
+		# 重い処理の間は止めずに一時停止する (第74段)。
+		# 曲の位置を保ち、落ち着いたら続きから再開する。
+		_sound_engine.bgm_pause()
+		return
 	var path := tab.bgm_resolved_path()
 	if path.is_empty():
 		_sound_engine.bgm_stop()
 		return
-	_sound_engine.bgm_play(path)
+	if _sound_engine.bgm_state() == "paused" \
+			and _sound_engine.bgm_current_path() == path:
+		_sound_engine.bgm_resume()
+	else:
+		_sound_engine.bgm_play(path)
 	_sound_engine.bgm_set_speed(tab.bgm_speed)
 
 
@@ -3634,6 +3647,15 @@ func _on_alt_confirm_ok() -> void:
 
 
 func _process(delta: float) -> void:
+	# BGM ゲートの開閉に追随する (第74段)。重い処理の間は
+	# 一時停止し、落ち着いたら再開する。
+	var gate_tab := _active_tab()
+	if gate_tab != null:
+		var susp: bool = gate_tab.bgm_suspended()
+		if gate_tab != _bgm_gate_tab or susp != _bgm_gate_suspended:
+			_bgm_gate_tab = gate_tab
+			_bgm_gate_suspended = susp
+			_apply_tab_bgm(gate_tab)
 	if _fx_demo:
 		_fx_demo_in -= delta
 		if _fx_demo_in <= 0.0:

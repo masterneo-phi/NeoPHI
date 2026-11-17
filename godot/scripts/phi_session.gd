@@ -134,6 +134,11 @@ static func post_register_lines(p_map_size: int = 81, p_map_style: String = "sol
 	]
 
 
+func is_transferring() -> bool:
+	## 世界移動の手続き中か (第74段: BGM ゲート用)。
+	return _transfer_stage != ""
+
+
 func is_open() -> bool:
 	return _state == "open"
 

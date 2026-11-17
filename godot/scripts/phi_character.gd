@@ -333,6 +333,18 @@ func _bump_timeout_tick() -> void:
 		_play_bump()
 
 
+func bgm_suspended() -> bool:
+	## BGM を鳴らしてはいけない状態か (第74段)。未接続・
+	## 世界移動中・受信の流れが止まって間もない間は true。
+	## 重い処理と音の処理が競合して固まるのを避けるため、
+	## 特に起動・接続直後はログが止まるまで鳴らさない。
+	if session == null or not session.is_open():
+		return true
+	if session.is_transferring():
+		return true
+	return Time.get_ticks_msec() < _bgm_busy_until
+
+
 func bgm_resolved_path() -> String:
 	## 通知された BGM のファイルの場所。見つからなければ ""。
 	if bgm_name.is_empty() or _assets == null:
@@ -504,6 +516,13 @@ func _process(_delta: float) -> void:
 	_log_batching = true
 	session.poll_burst()
 	_log_batching = false
+	# 受信が流れている間は BGM ゲートの「忙しい」時刻を
+	# 伸ばす (第74段)。接続直後のログの洪水や世界移動の間は
+	# BGM を鳴らさず、止まって少し経ってから鳴らす。
+	if not session.is_open() or session.is_transferring() \
+			or session.pending_line_count() > BGM_BUSY_PENDING \
+			or not _log_batch.is_empty():
+		_bgm_busy_until = Time.get_ticks_msec() + BGM_SETTLE_MSEC
 	_check_m81_watchdog(Time.get_ticks_msec())
 	_flush_log_batch()
 	# 表示を間引いた分は、受信が捌けてから記録で揃える (第69段)。
@@ -1609,7 +1628,14 @@ func _on_event(event: Dictionary) -> void:
 			var channel := str(event.get("channel", "log"))
 			var raw := str(event.get("text", ""))
 			var plain := PhiTags.plain_text(raw)
-			_collect_image_refs(raw)
+			# 大量行の受信中は、行ごとの演出照合を止める
+			# (第73段)。浮き数字・戦闘演出・吹き出し・効果音は
+			# 1行ごとに全文を何度も走査する処理で、洪水時は
+			# 受信を滞らせる主因になる (実測: 通常行 199µs、
+			# 看板行 371µs / 行)。ログ自体は通常どおり残る。
+			var flooding_now := _flooding()
+			if not flooding_now:
+				_collect_image_refs(raw)
 			log_message(channel, plain, raw)
 			# サーバからの「ほかのクライアントが接続した」という
 			# 知らせ。切断時のログで理由が分かるよう覚えておく。
@@ -1626,12 +1652,13 @@ func _on_event(event: Dictionary) -> void:
 					_list_header.text = retitle
 			# 効果音(第5段)。ログ行ごとに照合する。削除フィルタで
 			# 表示されない行でも鳴る(Philly と同じく表示とは独立)。
-			if _sound_engine != null:
+			# 洪水時は止める (第73段)。
+			if not flooding_now and _sound_engine != null:
 				for se_line in plain.split("\n"):
 					_sound_engine.play_se_for_line(se_line)
 			if not _is_active:
 				set_unread(true)
-			if channel == "log":
+			if not flooding_now and channel == "log":
 				map_view.spawn_floats(plain)
 				map_view.spawn_combat_fx(plain)
 				map_view.spawn_death_fx(plain)
@@ -2027,6 +2054,10 @@ const LOG_FLUSH_CATCHUP_BUDGET_MSEC := 12
 ## 受信が滞ると送信バッファ溢れや無進捗タイムアウトで切断
 ## するため、表示の凍結より接続の維持を優先する。
 const FLOOD_PENDING_LINES := 300
+# BGM ゲート (第74段): 受信待ちがこの行数を超えている間と、
+# 流れが止まってから BGM_SETTLE_MSEC の間は BGM を鳴らさない。
+const BGM_BUSY_PENDING := 30
+const BGM_SETTLE_MSEC := 1200
 ## 洪水の最中は、ログ欄がこの行数を超えたら表示待ちの古い行を
 ## 表示から間引く (第69段)。記録 (_log_lines) と自動保存には
 ## 全行残るので、捌けた後に描き直せば表示も揃う。文書が育つ
@@ -2042,6 +2073,8 @@ const LOG_BATCH_HARD_KEEP := 2000
 var _view_gap := false
 ## 洪水の間に表示から外した行数 (進捗表示用、第71段)。
 var _flood_received := 0
+## BGM を鳴らしてよいのはこの時刻以降 (第74段)。
+var _bgm_busy_until := 0
 ## 洪水の進捗行を最後に出した時刻 (msec)。
 var _flood_progress_at := 0
 ## ログ欄の行数がこれを超えたら、記録 (上限2000行) から

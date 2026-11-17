@@ -7,6 +7,10 @@ extends RefCounted
 
 ## タグを除いた表示用の文字を返す。`/*br*/` は改行になる。
 static func plain_text(text: String) -> String:
+	# 高速路: タグ (/*...*/) も「はーと」も無ければ素通り。
+	# 以下の置換はすべてタグ相手なので結果は同じ (第73段)。
+	if not text.contains("/*") and not text.contains("はーと"):
+		return text
 	var out := _replace_br(text)
 	out = _strip_img_wnd(out)
 	out = _replace_img(out)
