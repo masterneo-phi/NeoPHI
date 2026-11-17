@@ -3504,6 +3504,10 @@ func _input(event: InputEvent) -> void:
 	# (2)OS のキー繰り返しは無視する。繰り返しは地図の到着で刻む。
 	if key_event.echo:
 		return
+	# IME の変換中は、キーをすべて入力欄 (IME) に任せる。変換確定の
+	# Enter などをショートカットや送信と取り違えないため (第79段)。
+	if not DisplayServer.ime_get_text().is_empty():
+		return
 	var code := PhiKeys.code_name(key_event.physical_keycode)
 	if code.is_empty():
 		code = PhiKeys.code_name(key_event.keycode)

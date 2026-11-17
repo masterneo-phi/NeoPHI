@@ -225,6 +225,9 @@ var _list_lines: Array[String] = []
 var _list_checks: Dictionary = {}
 ## 直近のリストのマウス押下がチェック欄の中だったか。
 var _list_press_in_check := false
+## 第78段: リストをクリックで決定した時刻。直後の地図クリック
+## (ダブルクリックの2打目) を移動にしないために使う。
+var _list_click_decided_at := 0
 ## チェック印のアイコン(実行時に描く。チェックあり・なし)。
 static var _check_icon_on: Texture2D = null
 static var _talk_icon: Texture2D = null
@@ -2696,8 +2699,8 @@ func _toggle_selected_and_move(delta: int) -> void:
 
 func _on_list_box_gui_input(event: InputEvent) -> void:
 	## 行の左端(チェック欄)を押したらチェックを切り替える。
-	## それ以外の場所は従来どおり、クリック=選択だけ。
-	## チェック欄でのダブルクリックは決定にしない。
+	## それ以外の場所は、クリックでそのまま決定する (第78段)。
+	## キーボード (カーソル移動＋Enter で決定) は従来どおり。
 	var mb := event as InputEventMouseButton
 	if mb == null or mb.button_index != MOUSE_BUTTON_LEFT or not mb.pressed:
 		return
@@ -2705,6 +2708,12 @@ func _on_list_box_gui_input(event: InputEvent) -> void:
 	_list_press_in_check = index >= 0 and mb.position.x < LIST_CHECK_AREA
 	if _list_press_in_check:
 		_toggle_list_check(index)
+		return
+	if index < 0 or not _list_active:
+		return
+	_list_click_decided_at = Time.get_ticks_msec()
+	if not _send_list_decision():
+		_send_list_row(index)
 
 
 func _send_list_decision() -> bool:
@@ -2720,9 +2729,10 @@ func _send_list_decision() -> bool:
 
 
 func _on_list_row_activated(index: int) -> void:
-	## ダブルクリック(または Enter)で決定する。シングルクリックは
-	## 選択(ハイライト)だけ。チェック欄でのダブルクリックは
-	## 決定にしない。チェックがあればチェックした項目が優先。
+	## ダブルクリック(または Enter)で決定する。第78段でシングル
+	## クリックでも決定するようになったので、通常は1打目で閉じて
+	## ここには来ない。チェック欄でのダブルクリックは決定に
+	## しない。チェックがあればチェックした項目が優先。
 	if _list_press_in_check:
 		_list_press_in_check = false
 		return
@@ -3490,6 +3500,10 @@ func handle_mouse_button(ev: InputEventMouseButton) -> void:
 
 func _start_mouse_hold(ev: InputEventMouseButton) -> void:
 	## 地図の長押し移動を始める。押した時点で1歩送る。
+	## リストをクリックで決定した直後の押しは、ダブルクリックの
+	## 2打目かもしれないので移動にしない (第78段)。
+	if Time.get_ticks_msec() - _list_click_decided_at < 500:
+		return
 	_mouse_held = false
 	if not _over_map(ev.position):
 		return
@@ -3601,12 +3615,28 @@ func _update_map_hover() -> void:
 
 # -- キー処理 ------------------------------------------------------------------
 
+## テスト用に IME 状態を固定する (-1=実状態、0=変換中でない、1=変換中)。
+var _ime_test_forced := -1
+
+
+func ime_composing() -> bool:
+	## IME が変換中 (未確定の文字列がある) か (第79段)。
+	if _ime_test_forced >= 0:
+		return _ime_test_forced == 1
+	return not DisplayServer.ime_get_text().is_empty()
+
+
 func handle_key(key_event: InputEventKey) -> bool:
 	## キー処理。扱ったら true。Ctrl+Tab・Shift+F6・Alt+G は
 	## 全体にかかるのでメイン画面が先に取り、ここには来ない。
 	## 順序: (3)Esc (4)Tab (5)Enter (7)入力欄フォーカス時は
 	## TextEdit 任せ (8)F1〜F12 (9)リストのキー (10)移動キー
 	## (11)その他の送信キー。Ctrl+C はログの選択をそのまま写す。
+	## IME の変換中はキーを一切横取りしない (第79段)。Windows では
+	## 変換確定の Enter が通常キーとして届き、送信と取り違えて
+	## 変換前の文字列を送ったり変換を打ち切ったりしていた。
+	if ime_composing():
+		return false
 	var code := PhiKeys.code_name(key_event.physical_keycode)
 	if code.is_empty():
 		code = PhiKeys.code_name(key_event.keycode)
