@@ -2025,6 +2025,17 @@ func _do_action(action_name: String) -> void:
 				t.apply_map_align()
 			_update_action_states()
 			_save_config()
+		"layout-to-all-tabs":
+			# 窓配置を全タブにそろえる (第107段、ユーザーの要望)。
+			# アクティブなタブの窓の位置・大きさを正として設定へ
+			# 書き戻し、全タブへ反映する。フォント設定は元々
+			# 全タブ共通なので、付け直しだけ行う。
+			if tab != null:
+				tab.sync_float_rects_to_config()
+				for t in _tabs:
+					t.apply_float_layout_from_config()
+				_save_config()
+				_log_active("system", "窓の配置を全タブにそろえました")
 		"disp-magic-toggle":
 			# 魔法表示の受け取りを切り替える(第3段)。接続中なら即座に伝える。
 			_config.disp_magic = not _config.disp_magic

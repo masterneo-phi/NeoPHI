@@ -349,7 +349,7 @@ func _test_toolbar_structure() -> void:
 	_check(panel_box != null and panel_box.corner_radius_top_left == UiStyle.FLOAT_RADIUS, "layout toolbar panel rounded")
 	var buttons := _tab.get("_toolbar_buttons") as Array
 	# 第93段で BGM 再生・ログ記録のスイッチ2つが増えた。
-	_check_eq(buttons.size(), 24, "layout toolbar button count")
+	_check_eq(buttons.size(), 25, "layout toolbar button count")
 	var rows := panel.get_child(0) as VBoxContainer
 	_check(rows != null, "layout toolbar rows box")
 	if rows == null:
@@ -360,7 +360,7 @@ func _test_toolbar_structure() -> void:
 	var title := rows.get_child(0) as Label
 	_check(title != null and title.text == "Command Pallet", "layout toolbar title text")
 	_check(title != null and title.get_theme_font_size("font_size") == PhiFont.ui_size_for_zoom(_tab.map_view.zoom), "layout toolbar title font size")
-	var want := [2, 8, 5, 6, 1, 2]
+	var want := [2, 8, 5, 6, 1, 3]
 	for i in 6:
 		_check_eq(rows.get_child(i + 1).get_child_count(), want[i], "layout toolbar row " + str(i) + " size")
 	# 大声ボタンはトグル。ボタンは UI 文字サイズに追従する。

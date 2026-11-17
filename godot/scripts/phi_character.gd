@@ -276,6 +276,12 @@ var _log_float_band: PanelContainer = null
 var _input_float_band: PanelContainer = null
 var _log_float_title: Label = null
 var _input_float_title: Label = null
+var _log_band_button: Button = null
+var _input_band_button: Button = null
+var _font_window: Window = null
+var _font_win_title: Label = null
+var _font_spin: SpinBox = null
+var _font_target_log := true
 var _log_float_content: MarginContainer = null
 var _input_float_content: MarginContainer = null
 var _float_mode := false
@@ -952,6 +958,7 @@ func _on_talk_button_gui_input(event: InputEvent) -> void:
 	## 離したらクリック (Talk) とみなす。
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 		if event.pressed:
+			_mouse_held = false
 			_talk_dragging = true
 			_talk_drag_moved = false
 			_talk_press_global = event.global_position
@@ -981,9 +988,13 @@ func _finish_talk_press() -> void:
 func _style_talk_button(size: int) -> void:
 	## Talk ボタンの大きさと丸い見た目を、UI の文字サイズに合わせる。
 	## 中身はスキンの Talk アイコン (無ければ "Talk" の文字)。
+	## 新スタイルでは 1.5 倍にする (第106段、ユーザーの指定。
+	## 地図が画面全域になって相対的に小さく見えるため)。
 	if _talk_button == null:
 		return
 	var d := clampi(size * 2 + 40, 68, 100)
+	if _float_mode:
+		d = int(round(float(d) * 1.5))
 	_talk_d = d
 	_place_talk_button()
 	_talk_button.add_theme_font_size_override("font_size", size)
@@ -1151,8 +1162,10 @@ static func _float_band_box(tint: Color) -> StyleBoxFlat:
 
 
 func _make_float_panel(border: Color, tint: Color, title: String) -> Array:
-	## フロート窓を組み立てる。[窓, 帯, 題名ラベル, 中身の入れ物]。
+	## フロート窓を組み立てる。[窓, 帯, 題名ラベル, 中身の入れ物, 帯のボタン]。
 	## 帯がドラッグのつかみどころ (ユーザーの指定で明示した)。
+	## 帯の右端のボタンから、その窓の文字サイズ変更ミニ窓を開く
+	## (第104段。設定を増やしすぎないための置き場所)。
 	var panel := PanelContainer.new()
 	panel.add_theme_stylebox_override("panel", _float_box(border))
 	panel.mouse_filter = Control.MOUSE_FILTER_STOP
@@ -1166,12 +1179,22 @@ func _make_float_panel(border: Color, tint: Color, title: String) -> Array:
 	band.mouse_filter = Control.MOUSE_FILTER_STOP
 	band.mouse_default_cursor_shape = Control.CURSOR_MOVE
 	vbox.add_child(band)
+	var band_row := HBoxContainer.new()
+	band_row.add_theme_constant_override("separation", 6)
+	band_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	band.add_child(band_row)
 	var label := Label.new()
 	label.text = title
 	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	label.add_theme_color_override("font_color", Color.WHITE)
-	band.add_child(label)
+	band_row.add_child(label)
+	var size_button := Button.new()
+	size_button.text = "フォントサイズ変更"
+	size_button.focus_mode = Control.FOCUS_NONE
+	size_button.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	band_row.add_child(size_button)
 	var content := MarginContainer.new()
 	content.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	content.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -1180,7 +1203,7 @@ func _make_float_panel(border: Color, tint: Color, title: String) -> Array:
 	content.add_theme_constant_override("margin_top", 4)
 	content.add_theme_constant_override("margin_bottom", 8)
 	vbox.add_child(content)
-	return [panel, band, label, content]
+	return [panel, band, label, content, size_button]
 
 
 func _build_float_panels() -> void:
@@ -1191,13 +1214,17 @@ func _build_float_panels() -> void:
 	_log_float_band = log_parts[1]
 	_log_float_title = log_parts[2]
 	_log_float_content = log_parts[3]
+	_log_band_button = log_parts[4]
 	map_view.add_child(_log_float)
 	var input_parts := _make_float_panel(FLOAT_INPUT_BORDER, Color(0.78, 0.22, 0.22, 0.5), "Chat Window")
 	_input_float = input_parts[0]
 	_input_float_band = input_parts[1]
 	_input_float_title = input_parts[2]
 	_input_float_content = input_parts[3]
+	_input_band_button = input_parts[4]
 	map_view.add_child(_input_float)
+	_log_band_button.pressed.connect(func() -> void: _show_font_window(true))
+	_input_band_button.pressed.connect(func() -> void: _show_font_window(false))
 	_log_float.gui_input.connect(_on_float_gui_input.bind(_log_float))
 	_input_float.gui_input.connect(_on_float_gui_input.bind(_input_float))
 	_log_float_band.gui_input.connect(_on_float_band_gui_input.bind(_log_float))
@@ -1331,23 +1358,203 @@ static func float_font_for(panel_size: Vector2) -> int:
 	return clampi(int(roundf(panel_size.x / 34.0)), 11, 30)
 
 
+func _float_window_font(manual: int, panel: PanelContainer) -> int:
+	## フロート窓の実効文字サイズ。設定で数値が指定されていれば
+	## それに固定し (第104段)、0 (自動) なら窓の大きさから決める。
+	if manual > 0:
+		return clampi(manual, 8, 48)
+	return float_font_for(panel.size)
+
+
+func refresh_float_fonts() -> void:
+	## 文字サイズ設定が変わった時に、適用済みキャッシュを捨てて
+	## フロート窓の文字を付け直す (設定画面から呼ばれる)。
+	_applied_log_font = -1
+	_applied_input_font = -1
+	if _float_mode:
+		_apply_float_fonts()
+
+
+func sync_float_rects_to_config() -> void:
+	## いまのフロート窓の位置・大きさを設定へ書き戻す
+	## (第107段。全タブへそろえる時の「正」にするため)。
+	if _log_float != null:
+		_save_float_rect(_log_float)
+	if _input_float != null:
+		_save_float_rect(_input_float)
+
+
+func apply_float_layout_from_config() -> void:
+	## 設定にある窓配置 (位置・大きさ) を、このタブのフロート窓へ
+	## 反映する (第107段「窓配置を全タブにそろえる」から呼ばれる)。
+	## フォントも付け直す (自動の場合は大きさで変わるため)。
+	if not _float_mode or _log_float == null or _config == null:
+		return
+	if _config.log_float_rect.size.x > 0.0 and _config.log_float_rect.size.y > 0.0:
+		_log_float.position = _config.log_float_rect.position
+		_log_float.size = _config.log_float_rect.size
+	if _config.input_float_rect.size.x > 0.0 and _config.input_float_rect.size.y > 0.0:
+		_input_float.position = _config.input_float_rect.position
+		_input_float.size = _config.input_float_rect.size
+	_clamp_float_panels()
+	refresh_float_fonts()
+
+
 func _apply_float_fonts() -> void:
-	## フロート窓の文字サイズを、それぞれの窓の大きさに合わせる。
+	## フロート窓の文字サイズを、それぞれの窓ごとに決める。
+	## 設定の数値指定があればそれ、無ければ窓の大きさから。
 	## 題名帯の文字も、その窓の文字サイズに合わせる。
 	if not _float_mode or _log_float == null or _input_float == null:
 		return
-	var ls := float_font_for(_log_float.size)
+	var ls := _float_window_font(_config.log_font_size if _config != null else 0, _log_float)
 	if ls != _applied_log_font:
 		_applied_log_font = ls
 		_apply_log_font_size(ls)
 		if _log_float_title != null:
 			_log_float_title.add_theme_font_size_override("font_size", ls)
-	var isz := float_font_for(_input_float.size)
+		if _log_band_button != null:
+			_log_band_button.add_theme_font_size_override("font_size", ls)
+	var isz := _float_window_font(_config.input_font_size if _config != null else 0, _input_float)
 	if isz != _applied_input_font:
 		_applied_input_font = isz
 		input_box.add_theme_font_size_override("font_size", isz)
 		if _input_float_title != null:
 			_input_float_title.add_theme_font_size_override("font_size", isz)
+		if _input_band_button != null:
+			_input_band_button.add_theme_font_size_override("font_size", isz)
+
+
+func _show_font_window(for_log: bool) -> void:
+	## 帯の「フォントサイズ変更」ボタンから開く、その窓専用の
+	## ミニ窓 (第104段)。数値欄には現在のフォントサイズが
+	## あらかじめ入っていて、OK で確定する (ユーザーの指定)。
+	## 0 は自動 (窓の大きさから決める従来の方式)。
+	_font_target_log = for_log
+	if _font_window == null:
+		_build_font_window()
+	_font_win_title.text = ("Log Window" if for_log else "Chat Window") + " のフォントサイズ"
+	var panel := _log_float if for_log else _input_float
+	var manual := 0
+	if _config != null:
+		manual = _config.log_font_size if for_log else _config.input_font_size
+	_font_spin.set_value_no_signal(float(_float_window_font(manual, panel)))
+	var need := Vector2i(380, 176)
+	if _font_window.visible:
+		_font_window.grab_focus()
+	else:
+		_font_window.popup_centered(need)
+
+
+func _build_font_window() -> void:
+	_font_window = Window.new()
+	_font_window.visible = false
+	_font_window.transparent = true
+	_font_window.title = ""
+	_font_window.transient = true
+	_font_window.min_size = Vector2i(380, 176)
+	_font_window.close_requested.connect(func() -> void: _font_window.hide())
+	# 埋め込み窓の帯は使わず、中身の題名行で掴む (他の窓と同じ)。
+	var theme := Theme.new()
+	theme.default_font = _font
+	theme.default_font_size = 15
+	var empty_img := Image.create(1, 1, false, Image.FORMAT_RGBA8)
+	empty_img.fill(Color(0, 0, 0, 0))
+	var empty_icon := ImageTexture.create_from_image(empty_img)
+	theme.set_icon("close", "Window", empty_icon)
+	theme.set_icon("close_pressed", "Window", empty_icon)
+	theme.set_constant("title_height", "Window", 0)
+	var border := UiStyle.window_plate_stylebox()
+	border.content_margin_left = 10
+	border.content_margin_top = 6
+	border.content_margin_right = 10
+	border.content_margin_bottom = 8
+	theme.set_stylebox("embedded_border", "Window", border)
+	var border_dim := UiStyle.window_plate_stylebox()
+	border_dim.bg_color.a = 0.78
+	border_dim.content_margin_left = 10
+	border_dim.content_margin_top = 6
+	border_dim.content_margin_right = 10
+	border_dim.content_margin_bottom = 8
+	theme.set_stylebox("embedded_unfocused_border", "Window", border_dim)
+	_font_window.theme = theme
+	var frame := UiStyle.window_frame()
+	frame.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_font_window.add_child(frame)
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 10)
+	frame.add_child(box)
+	var head := HBoxContainer.new()
+	head.add_theme_constant_override("separation", 6)
+	box.add_child(UiStyle.title_band(head))
+	_font_win_title = Label.new()
+	_font_win_title.add_theme_color_override("font_color", Color.WHITE)
+	_font_win_title.add_theme_font_size_override("font_size", 17)
+	head.add_child(_font_win_title)
+	var head_spacer := Control.new()
+	head_spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	head.add_child(head_spacer)
+	var head_close := Button.new()
+	head_close.text = "×"
+	head_close.focus_mode = Control.FOCUS_NONE
+	head_close.pressed.connect(func() -> void: _font_window.hide())
+	head.add_child(head_close)
+	PhiWindowDrag.attach(head, _font_window)
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 8)
+	box.add_child(row)
+	var row_label := Label.new()
+	row_label.text = "フォントサイズ"
+	row.add_child(row_label)
+	_font_spin = SpinBox.new()
+	_font_spin.min_value = 0
+	_font_spin.max_value = 48
+	_font_spin.step = 1
+	_font_spin.custom_minimum_size = Vector2(90, 0)
+	row.add_child(_font_spin)
+	var auto_label := Label.new()
+	auto_label.text = "(0 = 自動)"
+	row.add_child(auto_label)
+	var buttons := HBoxContainer.new()
+	buttons.add_theme_constant_override("separation", 8)
+	buttons.alignment = BoxContainer.ALIGNMENT_END
+	box.add_child(buttons)
+	var auto_button := Button.new()
+	auto_button.text = "自動に戻す"
+	auto_button.focus_mode = Control.FOCUS_NONE
+	auto_button.pressed.connect(_on_font_auto)
+	buttons.add_child(auto_button)
+	var cancel_button := Button.new()
+	cancel_button.text = "キャンセル"
+	cancel_button.focus_mode = Control.FOCUS_NONE
+	cancel_button.pressed.connect(func() -> void: _font_window.hide())
+	buttons.add_child(cancel_button)
+	var ok_button := Button.new()
+	ok_button.text = "OK"
+	ok_button.focus_mode = Control.FOCUS_NONE
+	ok_button.pressed.connect(_on_font_ok)
+	buttons.add_child(ok_button)
+	add_child(_font_window)
+
+
+func _apply_font_value(value: int) -> void:
+	## ミニ窓で確定した数値を、その窓の設定へ反映する。
+	if _config == null:
+		return
+	if _font_target_log:
+		_config.log_font_size = value
+	else:
+		_config.input_font_size = value
+	refresh_float_fonts()
+
+
+func _on_font_ok() -> void:
+	_apply_font_value(int(_font_spin.value))
+	_font_window.hide()
+
+
+func _on_font_auto() -> void:
+	_apply_font_value(0)
+	_font_window.hide()
 
 
 func _apply_float_log_look() -> void:
@@ -1392,6 +1599,7 @@ func _on_float_band_gui_input(event: InputEvent, panel: PanelContainer) -> void:
 	## 統一した。第103段、ユーザーの指定)。
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 		if event.pressed:
+			_mouse_held = false
 			_float_drag_panel = panel
 			_float_drag_offset = event.global_position - panel.global_position
 			var vp := get_viewport()
@@ -1412,6 +1620,7 @@ func _on_float_gui_input(event: InputEvent, panel: PanelContainer) -> void:
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 		if event.pressed:
 			if _float_in_grip(panel, event.position):
+				_mouse_held = false
 				_float_resize_panel = panel
 				_float_resize_mouse_start = event.global_position
 				_float_resize_start_size = panel.size
@@ -1674,6 +1883,7 @@ func _on_toolbar_panel_gui_input(event: InputEvent) -> void:
 		return
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 		if event.pressed:
+			_mouse_held = false
 			if _toolbar_in_grip(event.position):
 				if event.double_click:
 					if _config != null:
@@ -1757,6 +1967,7 @@ func _on_list_header_gui_input(event: InputEvent) -> void:
 	## ボタン処理でも拾う(見出しの外で離しても止まる)。
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 		if event.pressed:
+			_mouse_held = false
 			_list_dragging = true
 			_list_drag_offset = event.global_position - _list_panel.global_position
 			var vp := get_viewport()
@@ -4120,6 +4331,33 @@ func _over_toolbar_panel(pos: Vector2) -> bool:
 	return _toolbar_panel != null and _toolbar_panel.get_global_rect().has_point(pos)
 
 
+func _over_float_panel(pos: Vector2) -> bool:
+	## フロート窓 (ログ/入力) の上かどうか。窓の上の押しは
+	## 地図への操作にしない (第105段。窓をドラッグすると後ろの
+	## 地図のキャラが長押し移動してしまう問題への対策)。
+	if not _float_mode:
+		return false
+	if _log_float != null and _log_float.visible and _log_float.get_global_rect().has_point(pos):
+		return true
+	if _input_float != null and _input_float.visible and _input_float.get_global_rect().has_point(pos):
+		return true
+	return false
+
+
+func _panel_drag_active() -> bool:
+	## 窓やパネルのドラッグ/大きさ変更の最中かどうか。
+	## この間は地図のマウス移動を止める (第105段)。
+	return _float_drag_panel != null or _float_resize_panel != null \
+		or _toolbar_dragging or _toolbar_resizing \
+		or _list_dragging or _talk_dragging
+
+
+func _over_talk_button(pos: Vector2) -> bool:
+	## Talk ボタンの上かどうか。ボタンの押し (クリックも
+	## ドラッグも) は地図の操作にしない (第105段)。
+	return _talk_button != null and _talk_button.visible and _talk_button.get_global_rect().has_point(pos)
+
+
 func handle_mouse_button(ev: InputEventMouseButton) -> void:
 	if ev.button_index == MOUSE_BUTTON_LEFT:
 		if ev.pressed:
@@ -4134,14 +4372,15 @@ func handle_mouse_button(ev: InputEventMouseButton) -> void:
 			_end_float_drag()
 			_finish_talk_press()
 	elif ev.button_index == MOUSE_BUTTON_RIGHT and ev.pressed:
-		# 右クリックは攻撃(Philly の MapForm)。ツールバーの上は除く。
-		if _over_map(ev.position) and not _over_toolbar_panel(ev.position):
+		# 右クリックは攻撃(Philly の MapForm)。ツールバーと
+		# フロート窓と Talk ボタンの上は除く。
+		if _over_map(ev.position) and not _over_toolbar_panel(ev.position) and not _over_float_panel(ev.position) and not _over_talk_button(ev.position):
 			session.send_line("hit")
 			get_viewport().set_input_as_handled()
 	elif ev.button_index == MOUSE_BUTTON_MIDDLE and ev.pressed:
 		# 中クリックはマップ画像の保存(Philly の SSMap)。
-		# ツールバーの上は除く。
-		if _over_map(ev.position) and not _over_toolbar_panel(ev.position):
+		# ツールバーとフロート窓と Talk ボタンの上は除く。
+		if _over_map(ev.position) and not _over_toolbar_panel(ev.position) and not _over_float_panel(ev.position) and not _over_talk_button(ev.position):
 			screenshot_requested.emit()
 			get_viewport().set_input_as_handled()
 
@@ -4160,6 +4399,14 @@ func _start_mouse_hold(ev: InputEventMouseButton) -> void:
 		return
 	if _over_toolbar_panel(ev.position):
 		# ツールバーの上のクリックはツールバー任せ。
+		return
+	if _over_float_panel(ev.position):
+		# フロート窓の上のクリックは窓任せ (ドラッグ等)。
+		# 地図の長押し移動を始めない (第105段)。
+		return
+	if _over_talk_button(ev.position):
+		# Talk ボタンの上のクリックはボタン任せ (クリックも
+		# ドラッグも)。地図の長押し移動を始めない (第105段)。
 		return
 	var cursor := _mouse_cursor_at(ev.position)
 	if cursor.is_empty():
@@ -4185,6 +4432,9 @@ func _mouse_send_step() -> void:
 func _mouse_repeat_send_if_ready() -> void:
 	## 地図が届いた時の、長押し移動の次の一歩(Philly の MapRecv)。
 	if not _mouse_held:
+		return
+	if _panel_drag_active():
+		# 窓のドラッグ/大きさ変更の間は移動しない (第105段)。
 		return
 	if _list_active or input_box.has_focus():
 		return

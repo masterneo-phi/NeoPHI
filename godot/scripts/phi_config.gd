@@ -106,6 +106,11 @@ var map_align := 0
 ## 大きさ 0 は未設定で、その場合は既定の置き方にする。
 var log_float_rect := Rect2(0, 0, 0, 0)
 var input_float_rect := Rect2(0, 0, 0, 0)
+## フロート窓の文字サイズ (第104段)。0 は自動で、窓の大きさ
+## から決める (従来)。1 以上はその数値に固定する (実効は
+## 8〜48)。設定画面で数値を指定する (ユーザーの指定)。
+var log_font_size := 0
+var input_font_size := 0
 var talk_button_pos := Vector2(-1, -1)
 ## 入力欄の高さ(ピクセル)。-1 は未設定で、その場合は既定の
 ## 3行ぶんにする。境目のドラッグで更新され、保存はメイン画面の
@@ -197,6 +202,8 @@ func reset() -> void:
 	toolbar_cols = 0
 	ui_style = "new"
 	map_align = 0
+	log_font_size = 0
+	input_font_size = 0
 	log_float_rect = Rect2(0, 0, 0, 0)
 	input_float_rect = Rect2(0, 0, 0, 0)
 	talk_button_pos = Vector2(-1, -1)
@@ -277,6 +284,8 @@ func load_file(path: String = DEFAULT_PATH) -> bool:
 	toolbar_cols = clampi(int(cfg.get_value("Disp", "ToolbarCols", 0)), 0, 64)
 	ui_style = "old" if str(cfg.get_value("Disp", "UiStyle", "new")) == "old" else "new"
 	map_align = clampi(int(cfg.get_value("Disp", "MapAlign", 0)), 0, 2)
+	log_font_size = clampi(int(cfg.get_value("Disp", "LogFontSize", 0)), 0, 48)
+	input_font_size = clampi(int(cfg.get_value("Disp", "InputFontSize", 0)), 0, 48)
 	# フロート窓の位置と大きさ。幅と高さがそろって正なら採用する。
 	if cfg.has_section_key("Disp", "LogFloatW") and cfg.has_section_key("Disp", "LogFloatH"):
 		var lw := float(cfg.get_value("Disp", "LogFloatW", 0))
@@ -350,6 +359,8 @@ func save_file(path: String = DEFAULT_PATH) -> bool:
 	cfg.set_value("Disp", "ToolbarCols", toolbar_cols)
 	cfg.set_value("Disp", "UiStyle", ui_style)
 	cfg.set_value("Disp", "MapAlign", map_align)
+	cfg.set_value("Disp", "LogFontSize", log_font_size)
+	cfg.set_value("Disp", "InputFontSize", input_font_size)
 	cfg.set_value("Disp", "LogFloatX", log_float_rect.position.x)
 	cfg.set_value("Disp", "LogFloatY", log_float_rect.position.y)
 	cfg.set_value("Disp", "LogFloatW", log_float_rect.size.x)

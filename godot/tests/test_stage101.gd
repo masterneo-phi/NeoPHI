@@ -131,6 +131,9 @@ func _run() -> void:
 	# (5b) 題名帯: ログは "Log Window"、入力は "Chat Window"。
 	check_eq(str((_tab.get("_log_float_title") as Label).text), "Log Window", "s101 log band title")
 	check_eq(str((_tab.get("_input_float_title") as Label).text), "Chat Window", "s101 input band title")
+	# (5c) Talk ボタンは新スタイルで 1.5 倍 (第106段)。
+	var talk_base := clampi(PhiFont.ui_size_for_zoom(_tab.map_view.zoom) * 2 + 40, 68, 100)
+	check_eq(int(_tab.get("_talk_d")), int(round(float(talk_base) * 1.5)), "s101 talk button 1.5x in new style")
 	# (6) 文字は白。ログの既定色と入力欄の文字色。
 	check_eq(_tab.log_view.get_theme_color("default_color"), Color.WHITE, "s101 log text white")
 	check_eq(_tab.input_box.get_theme_color("font_color"), Color.WHITE, "s101 input text white")
@@ -178,6 +181,7 @@ func _run() -> void:
 	check_eq(_tab.input_split.get_child(1), _tab.input_box, "s101 input second in split")
 	check((_tab.get("_right_col") as Control).visible, "s101 right column back")
 	check(not log_float.visible and not input_float.visible, "s101 floats hidden")
+	check_eq(int(_tab.get("_talk_d")), talk_base, "s101 talk button base size in old style")
 	check(not _tab.log_view.has_theme_color_override("default_color") or _tab.log_view.get_theme_color("default_color") != Color.WHITE, "s101 log color restored")
 	# (11) 新スタイルへ戻すと、保存した位置と大きさで復元する。
 	_tab.map_view.size = Vector2(1380, 700)

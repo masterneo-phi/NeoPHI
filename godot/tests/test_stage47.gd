@@ -32,7 +32,7 @@ const DISPATCH_KINDS := [
 	"delete-filter-toggle", "image-window", "screenshot",
 	"scroll-toggle", "smooth-scroll-toggle", "disp-magic-toggle", "bgm-toggle", "se-toggle",
 	"master-magic-toggle", "open-config-folder", "update-check",
-	"about", "image-toggle", "ui-style-toggle", "map-align",
+	"about", "image-toggle", "ui-style-toggle", "map-align", "layout-to-all-tabs",
 ]
 
 

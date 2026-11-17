@@ -77,7 +77,7 @@ func _run() -> void:
 	check(panel != null, "s100 panel exists")
 	var config = main.get("_config")
 	# (1) 既定は従来どおりグループごとに1段。
-	check_eq(_row_sizes(), [2, 8, 5, 6, 1, 2], "s100 default rows")
+	check_eq(_row_sizes(), [2, 8, 5, 6, 1, 3], "s100 default rows")
 	var w0 := panel.size.x
 	var h0 := panel.size.y
 	# (2) 3列にすると全段が3以下になり、横は狭く縦は長く。
@@ -86,20 +86,20 @@ func _run() -> void:
 	_tab._fit_toolbar_panel()
 	var sizes3 := _row_sizes()
 	check(sizes3.all(func(s): return int(s) <= 3), "s100 3col rows <= 3: " + str(sizes3))
-	check_eq(_total_buttons(), 24, "s100 3col keeps all buttons")
+	check_eq(_total_buttons(), 25, "s100 3col keeps all buttons")
 	check(panel.size.x < w0, "s100 3col narrower")
 	check(panel.size.y > h0, "s100 3col taller")
-	# (3) 24列で1段 (横長)。
+	# (3) 24列 (横長)。最後のグループは丸ごと次の段へ。
 	config.toolbar_cols = 24
 	_tab._layout_toolbar()
 	_tab._fit_toolbar_panel()
-	check_eq(_row_sizes(), [24], "s100 24col single row")
+	check_eq(_row_sizes(), [22, 3], "s100 24col rows keep last group whole")
 	check(panel.size.y < h0, "s100 24col shorter")
 	# (4) 0 に戻すと従来の並び。
 	config.toolbar_cols = 0
 	_tab._layout_toolbar()
 	_tab._fit_toolbar_panel()
-	check_eq(_row_sizes(), [2, 8, 5, 6, 1, 2], "s100 reset rows")
+	check_eq(_row_sizes(), [2, 8, 5, 6, 1, 3], "s100 reset rows")
 	# (5) 右下の隅を左へドラッグすると列数が減る。
 	var grip := panel.size - Vector2(4, 4)
 	_tab._on_toolbar_panel_gui_input(_press(grip))
@@ -116,7 +116,7 @@ func _run() -> void:
 	# (6) 隅のダブルクリックで既定に戻る。
 	_tab._on_toolbar_panel_gui_input(_press(panel.size - Vector2(4, 4), true))
 	check_eq(config.toolbar_cols, 0, "s100 double click resets cols")
-	check_eq(_row_sizes(), [2, 8, 5, 6, 1, 2], "s100 double click rows")
+	check_eq(_row_sizes(), [2, 8, 5, 6, 1, 3], "s100 double click rows")
 	# (7) 列数は ini に残る。
 	config.toolbar_cols = 5
 	config.save_file("user://stage100_cfg.ini")

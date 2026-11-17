@@ -107,6 +107,7 @@ const ACTIONS := {
 	"SmoothScroll": {"caption": "スムーズマップスクロール", "hint": "移動時に地図をドット単位で滑らかにスクロールする(北固定の時だけ)", "kind": "smooth-scroll-toggle"},
 	"DispMagic": {"caption": "魔法表示", "hint": "魔法の軌跡や着弾を地図に表示する(サーバーからの表示情報)", "kind": "disp-magic-toggle"},
 	"UiStyleFloat": {"caption": "新スタイル (フロート表示)", "hint": "ログと入力欄を地図の上に浮かせて表示する新スタイル。外すと従来の配置 (旧スタイル) になる", "kind": "ui-style-toggle"},
+	"LayoutToAllTabs": {"caption": "窓配置を全タブにそろえる", "hint": "いまのタブのログ窓と入力窓の位置・大きさ・フォントを、全タブに同じく適用する", "kind": "layout-to-all-tabs"},
 	"MapAlignCenter": {"caption": "マップ配置: 中央", "hint": "地図を画面の中央に表示する (新スタイル)", "kind": "map-align", "align": 0},
 	"MapAlignLeft": {"caption": "マップ配置: 左寄せ", "hint": "地図を画面の左に寄せて表示する (新スタイル)", "kind": "map-align", "align": 1},
 	"MapAlignRight": {"caption": "マップ配置: 右寄せ", "hint": "地図を画面の右に寄せて表示する (新スタイル)", "kind": "map-align", "align": 2},
@@ -125,12 +126,12 @@ const MENUS := [
 	{"name": "操作", "items": ["NewPrivWindow", "Loud", "TalkAdd", "SayAllTabs"]},
 	{"name": "行動", "items": ["Equip", "Unequip", "-", "Talk", "Read", "Write", "Erase", "Board", "-", "Get", "Put", "Use", "Sort", "FloorItem", "-", "Spells", "Pay", "Hit", "Check", "Skills"]},
 	{"name": "魔法", "items": ["WizardEye", "PartyEye", "EagleEye", "Identify", "Search", "WizardLock", "Unlock", "Detect", "Create", "Analyze", "Forget", "Call", "Return", "-", "WizardLight", "EagleEyeText", "List", "Destroy", "ChargeSpell", "Appear", "Disappear", "-", "Cast", "Cast1", "Cast2", "Cast3", "Cast4", "Cast5", "Cast6", "Cast7"]},
-	{"name": "表示", "items": ["M9x9", "M7x7", "M5x5", "MSolid", "MTurn", "MapAlignCenter", "MapAlignLeft", "MapAlignRight", "-", "UiStyleFloat", "-", "SSMap", "LogScrollStop", "SmoothScroll", "DispMagic", "LogImage", "PlayBGM", "PlaySE", "MasterMagicAlways", "-", "LogAutoSave", "LogSave", "LogSaveDir", "LogDeleteFilter", "ImageWindow"]},
+	{"name": "表示", "items": ["M9x9", "M7x7", "M5x5", "MSolid", "MTurn", "MapAlignCenter", "MapAlignLeft", "MapAlignRight", "-", "UiStyleFloat", "LayoutToAllTabs", "-", "SSMap", "LogScrollStop", "SmoothScroll", "DispMagic", "LogImage", "PlayBGM", "PlaySE", "MasterMagicAlways", "-", "LogAutoSave", "LogSave", "LogSaveDir", "LogDeleteFilter", "ImageWindow"]},
 	{"name": "ツール", "items": ["UnewPanel", "SoundTest", "ChipViewer", "CharaViewer", "ShortcutConfig", "OpenConfigFolder", "CheckUpdate", "VersionInfo"]},
 ]
 
 ## ツールバーに並べるアクション。"-" は区切り。
-const TOOLBAR := ["Open", "Close", "-", "Equip", "Unequip", "Read", "Write", "Erase", "Get", "Put", "Use", "-", "Spells", "Hit", "Check", "NewPrivWindow", "Loud", "-", "Cast", "M9x9", "M7x7", "M5x5", "MSolid", "MTurn", "-", "SSMap", "-", "PlayBGM", "LogAutoSave"]
+const TOOLBAR := ["Open", "Close", "-", "Equip", "Unequip", "Read", "Write", "Erase", "Get", "Put", "Use", "-", "Spells", "Hit", "Check", "NewPrivWindow", "Loud", "-", "Cast", "M9x9", "M7x7", "M5x5", "MSolid", "MTurn", "-", "SSMap", "-", "PlayBGM", "LogAutoSave", "LayoutToAllTabs"]
 
 
 ## メニュー項目の右端に表示するショートカット（アクセラレータ）。
