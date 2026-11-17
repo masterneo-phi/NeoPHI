@@ -99,6 +99,9 @@ var input_height := -1
 var scroll_stop := false
 ## ログをファイルに自動保存するか(Philly LogAutoSave。既定 off)。
 var log_auto_save := false
+## 送受信の生バイトを Logs/wire_*.log に記録するか (第82段、
+## 診断用)。NeoPHI.ini の [Debug] WireTrace=true で有効化。
+var wire_trace := false
 ## ログ表示に行頭の時刻 [HH:MM] を付けるか(Philly LogDispTime。
 ## 既定 on)。
 var log_disp_time := true
@@ -262,6 +265,7 @@ func load_file(path: String = DEFAULT_PATH) -> bool:
 	smooth_scroll = bool(cfg.get_value("Disp", "SmoothMapScroll", true))
 	scroll_stop = bool(cfg.get_value("Log", "ScrollStop", false))
 	log_auto_save = bool(cfg.get_value("Log", "LogAutoSave", false))
+	wire_trace = bool(cfg.get_value("Debug", "WireTrace", false))
 	log_disp_time = bool(cfg.get_value("Log", "LogDispTime", true))
 	log_image_disp = bool(cfg.get_value("Log", "LogImageDisp", true))
 	var lsd := str(cfg.get_value("Log", "LogSaveDir", PhiLogFile.DEFAULT_DIR)).strip_edges()

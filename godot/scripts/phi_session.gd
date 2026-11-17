@@ -395,7 +395,7 @@ func _drain_available() -> void:
 			_last_recv_msec = Time.get_ticks_msec()
 			_keepalive_sent = false
 			_warned = false
-			_pending_lines.append_array(_lines.feed(chunk))
+			_feed_lines(chunk)
 		return
 	var guard := 0
 	while _tcp.get_available_bytes() > 0 and guard < 64:
@@ -409,7 +409,17 @@ func _drain_available() -> void:
 		_last_recv_msec = Time.get_ticks_msec()
 		_keepalive_sent = false
 		_warned = false
-		_pending_lines.append_array(_lines.feed(chunk))
+		_feed_lines(chunk)
+
+
+func _feed_lines(chunk: PackedByteArray) -> void:
+	## 届いた塊を行へ分け、未処理行へ足す。トレース有効時は
+	## 分けた行の生バイトも残す (第82段)。
+	var got := _lines.feed(chunk)
+	if wire_trace:
+		for ln in got:
+			_trace_wire("RECV", ln)
+	_pending_lines.append_array(got)
 
 
 func drain_socket() -> void:
@@ -497,8 +507,11 @@ func _reader_loop() -> void:
 					out_rest = PackedByteArray()
 				elif sent > 0:
 					out_rest = out_rest.slice(sent)
-			else:
-				out_rest = PackedByteArray()
+			# 送れなかった時 (0 バイト・エラーを含む) は残りを
+			# 捨てずに次回へ持ち越す (第82段)。以前はエラーの時に
+			# 丸ごと捨てており、一時的な送信不可で 行が欠ける
+			# 恐れがあった。恒常的なエラーなら接続状態の監視が
+			# 切断として処理する。
 		var avail := peer.get_available_bytes()
 		if avail > 0:
 			var res := peer.get_data(avail)
@@ -610,10 +623,28 @@ func _process_line(line: PackedByteArray) -> void:
 			event_received.emit(bgm_event)
 
 
+## 送受信トレース (第82段、診断用)。有効な間、送る行と受けた行の
+## 生バイト (16進) を wire_trace_lines に溜める。書き出しは
+## キャラクター側が Logs/wire_*.log へ行う。
+var wire_trace := false
+var wire_trace_lines: Array[String] = []
+var _wire_trace_count := 0
+const WIRE_TRACE_CAP := 20000
+
+
+func _trace_wire(kind: String, bytes: PackedByteArray) -> void:
+	if not wire_trace or _wire_trace_count >= WIRE_TRACE_CAP:
+		return
+	_wire_trace_count += 1
+	wire_trace_lines.append("%d %s %s" % [Time.get_ticks_msec(), kind, bytes.hex_encode()])
+
+
 func _flush_queue() -> void:
 	for line in _send_queue:
-		_out_buffer.append_array(Cp932.encode(line))
-		_out_buffer.append(10)
+		var enc := Cp932.encode(line)
+		enc.append(10)
+		_trace_wire("SENT", enc)
+		_out_buffer.append_array(enc)
 	_send_queue.clear()
 
 

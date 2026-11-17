@@ -349,6 +349,14 @@ func _bump_timeout_tick() -> void:
 		_play_bump()
 
 
+func _bgm_activity_busy() -> bool:
+	## 受信が「流れている」と言える量か (第80段)。受信待ち行か
+	## 表示待ちのログがしきい値を超えている時だけ true。
+	## 発言のエコーのような数行では true にならない。
+	return session.pending_line_count() > BGM_BUSY_PENDING \
+		or _log_batch.size() > BGM_BUSY_PENDING
+
+
 func bgm_suspended() -> bool:
 	## BGM を鳴らしてはいけない状態か (第74段)。未接続・
 	## 世界移動中・受信の流れが止まって間もない間は true。
@@ -359,6 +367,43 @@ func bgm_suspended() -> bool:
 	if session.is_transferring():
 		return true
 	return Time.get_ticks_msec() < _bgm_busy_until
+
+
+var _wire_was_open := false
+
+
+func _flush_wire_trace() -> void:
+	## 送受信トレースの書き出し (第82段、診断用)。設定が有効な間、
+	## セッションに溜まった生バイト記録を Logs/wire_*.log へ足す。
+	if session == null or _config == null:
+		return
+	if session.wire_trace != _config.wire_trace:
+		session.wire_trace = _config.wire_trace
+	if not _config.wire_trace:
+		return
+	var open_now := session.is_open()
+	if open_now != _wire_was_open:
+		session.wire_trace_lines.append("%d %s" % [Time.get_ticks_msec(), "OPEN" if open_now else "CLOSED"])
+		_wire_was_open = open_now
+	if session.wire_trace_lines.is_empty():
+		return
+	var lines := session.wire_trace_lines
+	session.wire_trace_lines = []
+	var dir := _config.log_save_dir
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(dir))
+	var cname := player_name()
+	if cname.is_empty():
+		cname = "unknown"
+	var path := dir.path_join("wire_%s_%s.log" % [PhiLogFile.sanitize_name(cname), PhiLogFile.date_stamp()])
+	var f := FileAccess.open(path, FileAccess.READ_WRITE)
+	if f == null:
+		f = FileAccess.open(path, FileAccess.WRITE)
+	if f == null:
+		return
+	f.seek_end()
+	for ln in lines:
+		f.store_line(ln)
+	f.close()
 
 
 func bgm_resolved_path() -> String:
@@ -533,9 +578,11 @@ func _process(_delta: float) -> void:
 	# 受信が流れている間は BGM ゲートの「忙しい」時刻を
 	# 伸ばす (第74段)。接続直後のログの洪水や世界移動の間は
 	# BGM を鳴らさず、止まって少し経ってから鳴らす。
+	# 第80段: 判定は「たくさん溜まっている時」だけにした。
+	# 発言のエコー (数行) でも伸ばしていたため、発言のたびに
+	# 曲が 1.2 秒止まってしまっていた。
 	if not session.is_open() or session.is_transferring() \
-			or session.pending_line_count() > BGM_BUSY_PENDING \
-			or not _log_batch.is_empty():
+			or _bgm_activity_busy():
 		_bgm_busy_until = Time.get_ticks_msec() + BGM_SETTLE_MSEC
 	_check_m81_watchdog(Time.get_ticks_msec())
 	_flush_log_batch()
@@ -548,6 +595,7 @@ func _process(_delta: float) -> void:
 	# おく (処理は次のフレーム)。ソケットを空けておく時間が
 	# 長いほど、サーバ側の送信バッファが溢れにくい。
 	session.drain_socket()
+	_flush_wire_trace()
 	# ログ欄の行数が増えすぎたら、受信も表示待ちも捌けた
 	# タイミングで記録から描き直して切り詰める。洪水で捌け
 	# ないまま上限を超えたら、文書の増大を止めるため即座に
@@ -1896,7 +1944,7 @@ func _append_log_entry(entry: Dictionary) -> void:
 		log_view.push_color(color)
 	for segment in segments:
 		if segment.has("img"):
-			_append_log_image(str(segment["img"]))
+			_append_log_image(str(segment["img"]), int(segment.get("w", 0)), int(segment.get("h", 0)))
 		else:
 			log_view.append_text(str(segment["bb"]))
 	log_view.append_text("\n")
@@ -1948,7 +1996,7 @@ func _log_line_segments(entry: Dictionary) -> Array:
 			segments.append({"bb": _segment_bbcode(raw_seg, font_size)})
 		elif first:
 			segments.append({"bb": ""})
-		segments.append({"img": str(span["url"])})
+		segments.append({"img": str(span["url"]), "w": int(span.get("width", 0)), "h": int(span.get("height", 0))})
 		pos = int(span["end"])
 		first = false
 	if pos < raw_line.length():
@@ -1971,21 +2019,31 @@ func _segment_bbcode(raw_seg: String, font_size: int) -> String:
 	return bbcode_line(plain_seg)
 
 
-func _append_log_image(url: String) -> void:
-	## 取得済みの画像を行内へ出す。ログ欄の幅いっぱいに合わせる
-	## (小さい画像は拡大する。他クライアントのバナー表示と同じ)。
-	## 極端に背の高い画像は高さでも制限する。タグに width/height
-	## の指定は今は使わない (Philly と同じく欄幅に合わせる)。
+func _append_log_image(url: String, want_w: int = 0, want_h: int = 0) -> void:
+	## 取得済みの画像を行内へ出す。大きさは WPHI と同じ規則:
+	## タグに width/height の指定があればそれ (上限 1000)、
+	## 無ければ画像そのままの大きさ。拡大はしない。欄より
+	## 幅広い時と、極端に背が高い時 (320) だけ縮める (第83段。
+	## 以前は欄幅いっぱいに拡大していて、小さい顔グラなどが
+	## 異常に大きく出ていた)。
 	var tex: Texture2D = _img_textures.get(url, null)
 	if tex == null:
 		log_view.append_text(bbcode_line("[画像: " + url + "]"))
 		return
 	var natural := Vector2(tex.get_width(), tex.get_height())
+	var disp := natural
+	if want_w > 0 and want_h > 0:
+		disp = Vector2(mini(want_w, 1000), mini(want_h, 1000))
+	elif want_w > 0:
+		disp = Vector2(mini(want_w, 1000), natural.y * mini(want_w, 1000) / maxf(1.0, natural.x))
+	elif want_h > 0:
+		disp = Vector2(natural.x * mini(want_h, 1000) / maxf(1.0, natural.y), mini(want_h, 1000))
 	var avail := maxf(40.0, log_view.size.x - 20.0)
-	var scale := avail / maxf(1.0, natural.x)
-	if natural.y * scale > 320.0:
-		scale = 320.0 / maxf(1.0, natural.y)
-	log_view.add_image(tex, int(natural.x * scale), int(natural.y * scale))
+	if disp.x > avail:
+		disp *= avail / disp.x
+	if disp.y > 320.0:
+		disp *= 320.0 / disp.y
+	log_view.add_image(tex, maxi(1, int(disp.x)), maxi(1, int(disp.y)))
 
 
 static func store_image_texture(url: String, tex: Texture2D) -> void:
@@ -2575,6 +2633,15 @@ func _hide_list_overlay() -> void:
 	_list_active = false
 	_list_dragging = false
 	if _list_panel != null:
+		# リストがフォーカスを持ったまま隠すと、Godot が次の
+		# コントロール (入力欄) へフォーカスを移してしまう。
+		# 選択のあとはキー操作をゲーム側に戻すため、先に外す
+		# (第81段)。入力欄にあった場合はそのまま残す。
+		var vp := get_viewport()
+		if vp != null:
+			var focused := vp.gui_get_focus_owner()
+			if focused != null and _list_panel.is_ancestor_of(focused):
+				vp.gui_release_focus()
 		_list_panel.visible = false
 
 

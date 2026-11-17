@@ -98,7 +98,7 @@ func _run() -> void:
 	check(tab.log_view.get_content_height() < h3 + 60, "toggle off adds no height")
 	check(tab.image_state(url3) == "cached", "state still cached when off")
 	config.log_image_disp = true
-	# 小さい画像はログ欄の幅に合わせて拡大する。
+	# 小さい画像は拡大せず、そのままの大きさで出す (第83段)。
 	var small := Image.create(100, 40, false, Image.FORMAT_RGBA8)
 	small.fill(Color(0, 0.6, 0))
 	var url4 := "http://example.com/small.png"
@@ -108,6 +108,13 @@ func _run() -> void:
 	var raw4 := "/*img=" + url4 + "*/"
 	tab.log_message("log", PhiTags.plain_text(raw4), raw4)
 	await process_frame
-	check(tab.log_view.get_content_height() >= h4 + 80, "small image scales up to log width")
+	var grew4: int = tab.log_view.get_content_height() - h4
+	check(grew4 >= 36 and grew4 < 80, "small image stays natural size")
+	# タグで width/height を指定すれば、その大きさで出す。
+	var h5: int = tab.log_view.get_content_height()
+	var raw5 := "/*img=" + url4 + " width=200 height=100*/"
+	tab.log_message("log", PhiTags.plain_text(raw5), raw5)
+	await process_frame
+	check(tab.log_view.get_content_height() >= h5 + 96, "tag size attrs honored")
 	print("stage48: ", _checks, " checks, ", _failures, " failures")
 	quit(1 if _failures > 0 else 0)
