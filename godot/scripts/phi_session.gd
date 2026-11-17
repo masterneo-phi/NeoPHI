@@ -61,6 +61,25 @@ var login_override: Array[String] = []
 var has_login_override := false
 
 var _tcp := StreamPeerTCP.new()
+# -- 受信スレッド (第75段) -----------------------------------------
+## ソケットの読み取りを専用スレッドで常時回し、メインスレッドが
+## 描画や保存で一瞬止まっても読みが滞らないようにする。サーバの
+## 送信バッファ (16KB) は、検索結果のような一括送信では「読み
+## 続けているか」だけで溢れが決まるため。スレッドはバイトの
+## 塊を _inbox_chunks へ運ぶだけで、行分割・解釈は従来どおり
+## メインスレッドが行う。送信もスレッド側の outbox 経由にし、
+## _tcp へ触るのは原則スレッドだけにする (世界移動の手順中は
+## スレッドを止め、従来どおりメインスレッドが直接読み書きする)。
+## false にすると従来のメインスレッド受信になる (テスト用)。
+var threaded_reader := true
+var _reader_thread: Thread = null
+var _reader_stop := false
+var _inbox_mutex := Mutex.new()
+var _inbox_chunks: Array[PackedByteArray] = []
+var _outbox_mutex := Mutex.new()
+var _outbox_bytes := PackedByteArray()
+## スレッドが観測した接続状態 (StreamPeerTCP.STATUS_*)。
+var _status_cache := 0
 var _lines := LineBuffer.new()
 var _parser := PhiParser.new()
 var _send_queue: Array[String] = []
@@ -147,9 +166,11 @@ func connect_to(p_host: String, p_port: int, p_char_id: String) -> void:
 	host = p_host
 	port = p_port
 	char_id = p_char_id
+	_stop_reader()
 	_cancel_transfer_for_close()
 	_lines.reset()
 	_pending_lines.clear()
+	_clear_inbox()
 	_parser = PhiParser.new()
 	_send_queue.clear()
 	_out_buffer = PackedByteArray()
@@ -165,7 +186,9 @@ func connect_to(p_host: String, p_port: int, p_char_id: String) -> void:
 		session_closed.emit()
 		return
 	_state = "connecting"
+	_status_cache = StreamPeerTCP.STATUS_CONNECTING
 	_last_recv_msec = Time.get_ticks_msec()
+	_start_reader()
 
 
 ## 1行を送る。`\r` や `\n` を含む行は送らない。
@@ -243,6 +266,9 @@ func disconnect_graceful() -> void:
 			return
 		_out_buffer.append_array(Cp932.encode("#x") + PackedByteArray([10]))
 		_try_flush()
+	# 受信スレッドを止め、outbox に残った分も送ってから閉じる。
+	_stop_reader_draining_outbox()
+	_try_flush()
 	_tcp.disconnect_from_host()
 	_state = "closed"
 
@@ -256,6 +282,8 @@ func is_logout_pending() -> bool:
 func _finish_logout() -> void:
 	_logout_pending = false
 	_logout_close_seen = false
+	_stop_reader_draining_outbox()
+	_try_flush()
 	_tcp.disconnect_from_host()
 	_state = "closed"
 	session_closed.emit()
@@ -268,6 +296,7 @@ func disconnect_force() -> void:
 	_cancel_transfer_for_close()
 	_send_queue.clear()
 	_out_buffer = PackedByteArray()
+	_stop_reader()
 	_tcp.disconnect_from_host()
 	_state = "closed"
 
@@ -276,8 +305,15 @@ func disconnect_force() -> void:
 func poll() -> void:
 	if _state == "closed" or _state == "idle":
 		return
-	_tcp.poll()
-	var status := _tcp.get_status()
+	# 受信スレッドが回している間は、状態はスレッドの観測を使う
+	# (第75段)。世界移動の手順中はスレッドが止まるので従来どおり
+	# ここで poll する。
+	var status: int
+	if _reader_active():
+		status = _status_cache
+	else:
+		_tcp.poll()
+		status = _tcp.get_status()
 	if _state == "connecting":
 		if status == StreamPeerTCP.STATUS_CONNECTED:
 			_state = "open"
@@ -291,11 +327,13 @@ func poll() -> void:
 			_try_flush()
 		elif status == StreamPeerTCP.STATUS_ERROR:
 			_state = "closed"
+			_stop_reader()
 			session_error.emit("接続出来ません")
 			session_closed.emit()
 		return
 	if status != StreamPeerTCP.STATUS_CONNECTED:
 		_state = "closed"
+		_stop_reader()
 		if _logout_pending:
 			# 正常ログアウトの完了としてサーバが閉じた。異常ではない。
 			_logout_pending = false
@@ -344,6 +382,21 @@ func poll() -> void:
 
 func _drain_available() -> void:
 	## ソケットに届いているバイトを未処理行へ移す。
+	if _reader_active():
+		# スレッドが運んできた塊を行へ分ける (第75段)。
+		var chunks: Array[PackedByteArray] = []
+		_inbox_mutex.lock()
+		chunks = _inbox_chunks
+		_inbox_chunks = []
+		_inbox_mutex.unlock()
+		for chunk in chunks:
+			if chunk.is_empty():
+				continue
+			_last_recv_msec = Time.get_ticks_msec()
+			_keepalive_sent = false
+			_warned = false
+			_pending_lines.append_array(_lines.feed(chunk))
+		return
 	var guard := 0
 	while _tcp.get_available_bytes() > 0 and guard < 64:
 		guard += 1
@@ -365,8 +418,107 @@ func drain_socket() -> void:
 	## (第62段)。接続が開いていて世界移動中でない時だけ。
 	if _state != "open" or _transfer_stage != "":
 		return
-	_tcp.poll()
+	if not _reader_active():
+		_tcp.poll()
 	_drain_available()
+
+
+# -- 受信スレッドの本体 (第75段) -----------------------------------
+
+func _reader_active() -> bool:
+	## 受信スレッドが今ソケットを担当しているか。世界移動の
+	## 手順中はスレッドを止めるので、その間は false。
+	return _reader_thread != null and _transfer_stage == ""
+
+
+func _start_reader() -> void:
+	if not threaded_reader or _reader_thread != null:
+		return
+	_reader_stop = false
+	_reader_thread = Thread.new()
+	if _reader_thread.start(Callable(self, "_reader_loop")) != OK:
+		_reader_thread = null
+
+
+func _stop_reader() -> void:
+	if _reader_thread == null:
+		return
+	_reader_stop = true
+	_reader_thread.wait_to_finish()
+	_reader_thread = null
+
+
+func _stop_reader_draining_outbox() -> void:
+	## スレッドを止める前に、outbox に残った送信分を
+	## _out_buffer の先頭へ戻す (呼び出し側が直接送る)。
+	_outbox_mutex.lock()
+	var rest := _outbox_bytes
+	_outbox_bytes = PackedByteArray()
+	_outbox_mutex.unlock()
+	_stop_reader()
+	if not rest.is_empty():
+		_out_buffer = rest + _out_buffer
+
+
+func _clear_inbox() -> void:
+	_inbox_mutex.lock()
+	_inbox_chunks = []
+	_inbox_mutex.unlock()
+	_outbox_mutex.lock()
+	_outbox_bytes = PackedByteArray()
+	_outbox_mutex.unlock()
+
+
+func _reader_loop() -> void:
+	## ソケットの読み取りと outbox の送出だけを行う。
+	## 行への分割や解釈はメインスレッド (従来どおり)。
+	var out_rest := PackedByteArray()
+	while not _reader_stop:
+		if _transfer_stage != "":
+			# 世界移動の手順中はメインスレッドが直接読む。
+			OS.delay_msec(2)
+			continue
+		var peer := _tcp
+		if peer == null:
+			OS.delay_msec(2)
+			continue
+		peer.poll()
+		_status_cache = peer.get_status()
+		_outbox_mutex.lock()
+		if not _outbox_bytes.is_empty():
+			out_rest.append_array(_outbox_bytes)
+			_outbox_bytes = PackedByteArray()
+		_outbox_mutex.unlock()
+		if not out_rest.is_empty():
+			var r := peer.put_partial_data(out_rest)
+			if r[0] == OK:
+				var sent: int = r[1]
+				if sent >= out_rest.size():
+					out_rest = PackedByteArray()
+				elif sent > 0:
+					out_rest = out_rest.slice(sent)
+			else:
+				out_rest = PackedByteArray()
+		var avail := peer.get_available_bytes()
+		if avail > 0:
+			var res := peer.get_data(avail)
+			if res[0] == OK:
+				var chunk: PackedByteArray = res[1]
+				if not chunk.is_empty():
+					_inbox_mutex.lock()
+					_inbox_chunks.append(chunk)
+					_inbox_mutex.unlock()
+			continue
+		OS.delay_msec(1)
+	# 止まる前に、拾った送信分だけは出し切る。
+	if not out_rest.is_empty() and _tcp != null:
+		_tcp.put_partial_data(out_rest)
+
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_PREDELETE:
+		# 解放時にスレッドを残さない (通常は切断処理で停止済み)。
+		_reader_stop = true
 
 
 func has_pending_lines() -> bool:
@@ -467,6 +619,14 @@ func _flush_queue() -> void:
 
 func _try_flush() -> void:
 	if _out_buffer.is_empty():
+		return
+	if _reader_active():
+		# 送信も受信スレッドに任せる (第75段)。スレッドが
+		# outbox を拾って put_partial_data する。
+		_outbox_mutex.lock()
+		_outbox_bytes.append_array(_out_buffer)
+		_outbox_mutex.unlock()
+		_out_buffer = PackedByteArray()
 		return
 	var result := _tcp.put_partial_data(_out_buffer)
 	if result[0] != OK:
@@ -595,6 +755,7 @@ func _complete_transfer() -> void:
 	port = _transfer_port
 	_send_queue.clear()
 	_pending_lines.clear()
+	_clear_inbox()
 	_out_buffer = _dst_out
 	_dst_out = PackedByteArray()
 	_skipped_lines.clear()
