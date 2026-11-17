@@ -123,6 +123,9 @@ func _test_list_focus() -> void:
 	_check(tab.handle_key(_key(KEY_DOWN)), "s77 down handled in list")
 	_check_eq(Array(box.get_selected_items()), [1], "s77 down moves list selection")
 	# (9) リストが扱わない文字キーは入力欄へ流れる (消費しない)。
+	# 第86段で「選択後は入力欄のフォーカスも外れる」ようになった
+	# ので、この場面の前提としてフォーカスを入れ直す。
+	tab.input_box.grab_focus()
 	_check(not tab.handle_key(_key(KEY_H)), "s77 letter passes to input")
 	tab.set("_list_active", false)
 	tab._hide_list_overlay()

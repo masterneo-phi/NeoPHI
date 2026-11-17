@@ -12,8 +12,9 @@ const PERSON_ATTR := 0x58
 const PERSON_GRA := "t_man"
 const PERSON_DEFAULT := 0x40
 const UNKNOWN_CHIP := 0x3F # '?'
-## 盤面の表示上限 (px)。これを超える倍率は落とす。
-const MAX_BOARD_PX := 1120.0
+## 盤面の表示上限 (px)。盤全体がこの大きさに収まるよう、
+## 大きい盤だけ縮める (第87段で 1120 から引き下げ)。
+const MAX_BOARD_PX := 560.0
 
 var _dim := 0
 var _cells: Array = [] # 正方形に整えた {chip, attr}
@@ -61,7 +62,11 @@ func set_event(event: Dictionary, assets: GameAssets, mapset: String, zoom: floa
 		_items_tex = assets.items()
 		if not _persons.is_empty():
 			_person_tex = assets.chara("", PERSON_GRA, PERSON_DEFAULT)
-	_scale = clampf(minf(maxf(zoom, 1.0), MAX_BOARD_PX / float(_dim * MapView.CHIP_SIZE)), 1.0, 4.0)
+	# 広域図は俯瞰用なので、地図の倍率には連動させない
+	# (第87段。倍率 4 の地図だと盤が 1000px を超えて邪魔に
+	# なっていた)。チップ実寸 (32px) を上限に、盤全体が
+	# MAX_BOARD_PX に収まるよう必要なら縮めるだけにする。
+	_scale = clampf(MAX_BOARD_PX / float(_dim * MapView.CHIP_SIZE), 0.25, 1.0)
 	custom_minimum_size = board_pixel_size()
 	queue_redraw()
 

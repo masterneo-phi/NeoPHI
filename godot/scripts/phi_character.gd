@@ -1830,8 +1830,10 @@ func _on_event(event: Dictionary) -> void:
 				edit_requested.emit("multi")
 			elif edit_mode == "single":
 				# 1行の答え (Philly 自身は空実装、Python 版の振る舞い)。
+				# フォーカスは移さない (第91段)。番号はテンキーで
+				# 選べ、文字の答えが要る時はプレイヤーが自分で
+				# 入力欄へ移る (手動だけ、の決まり)。
 				log_message("system", "1行の答えを打ってください。")
-				input_box.grab_focus()
 			else:
 				edit_requested.emit("end")
 		"connection":
@@ -2633,10 +2635,13 @@ func _hide_list_overlay() -> void:
 	_list_active = false
 	_list_dragging = false
 	if _list_panel != null:
-		# リストがフォーカスを持ったまま隠すと、Godot が次の
-		# コントロール (入力欄) へフォーカスを移してしまう。
-		# 選択のあとはキー操作をゲーム側に戻すため、先に外す
-		# (第81段)。入力欄にあった場合はそのまま残す。
+		# フォーカスはプレイヤーが手動で切り替えるものとし、
+		# プログラムが勝手に移さない (第90段)。ただしリスト
+		# 自身がフォーカスを持ったまま隠すと、Godot が次の
+		# コントロール (入力欄) へ自動で移してしまうので、
+		# リスト側のフォーカスだけは外して「なし」に戻す
+		# (第81段)。入力欄にフォーカスがあるまま選んだ場合は
+		# そのまま入力欄に残る。
 		var vp := get_viewport()
 		if vp != null:
 			var focused := vp.gui_get_focus_owner()
@@ -3179,14 +3184,12 @@ func confirm_loud() -> void:
 	_note_sent("*" + _loud_pending)
 	session.send_text("*" + _loud_pending)
 	_loud_pending = ""
-	input_box.release_focus()
 	set_loud(false)
 	_advance_history()
 
 
 func cancel_loud() -> void:
 	_loud_pending = ""
-	input_box.release_focus()
 	set_loud(false)
 
 
@@ -3195,7 +3198,6 @@ func confirm_loud_all() -> void:
 	_note_sent("*" + _loud_pending)
 	session.send_text("*" + _loud_pending)
 	_loud_pending = ""
-	input_box.release_focus()
 	_advance_history()
 
 
@@ -3227,9 +3229,9 @@ func submit_input(party: bool = false) -> void:
 	var draft := PhiInputHistory.draft_of(input_box.text, _history_boundary)
 	if draft.is_empty():
 		return
-	# 送ったら入力欄のフォーカスを外す。外さないと矢印キーが
-	# TextEdit に奪われ、移動できなくなる。
-	input_box.release_focus()
+	# 送信してもフォーカスは入力欄に残す (第89段、Philly と
+	# 同じ)。連続して発言できるのが本来の姿で、移動モードへ
+	# 戻るのは Esc / Tab / 地図クリックの役割。
 	mark_list_answered()
 	# 空行は `/**/` にする(最終行の空行は除く)。
 	# Philly の EditSendNullLine にあたる。下書きだけに適用する。
@@ -3704,9 +3706,7 @@ func handle_key(key_event: InputEventKey) -> bool:
 	## 変換前の文字列を送ったり変換を打ち切ったりしていた。
 	if ime_composing():
 		return false
-	var code := PhiKeys.code_name(key_event.physical_keycode)
-	if code.is_empty():
-		code = PhiKeys.code_name(key_event.keycode)
+	var code := PhiKeys.code_name_for(key_event.keycode, key_event.physical_keycode, key_event.unicode)
 	var shift := key_event.shift_pressed
 	var ctrl := key_event.ctrl_pressed
 	var alt := key_event.alt_pressed

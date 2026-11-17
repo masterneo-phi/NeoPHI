@@ -639,6 +639,14 @@ func _trace_wire(kind: String, bytes: PackedByteArray) -> void:
 	wire_trace_lines.append("%d %s %s" % [Time.get_ticks_msec(), kind, bytes.hex_encode()])
 
 
+func trace_text(text: String) -> void:
+	## トレースへ注記行を足す (第85段、キーイベントなどの記録用)。
+	if not wire_trace or _wire_trace_count >= WIRE_TRACE_CAP:
+		return
+	_wire_trace_count += 1
+	wire_trace_lines.append("%d %s" % [Time.get_ticks_msec(), text])
+
+
 func _flush_queue() -> void:
 	for line in _send_queue:
 		var enc := Cp932.encode(line)

@@ -66,9 +66,11 @@ func _test_list_focus() -> void:
 
 
 func _test_input_focus_kept() -> void:
+	# 第90段: フォーカスはプレイヤーが手動で切り替える。
+	# 入力欄にフォーカスがあるまま選んだら、そのまま残る。
 	var tab := _tab
 	tab.input_box.grab_focus()
-	_check(tab.input_box.has_focus(), "s81 input has focus before decide")
+	_check(tab.input_box.has_focus(), "s90 input has focus before decide")
 	tab._send_list_row(0)
-	_check(not tab.get("_list_active"), "s81 list closed again")
-	_check(tab.input_box.has_focus(), "s81 input focus kept")
+	_check(not tab.get("_list_active"), "s90 list closed again")
+	_check(tab.input_box.has_focus(), "s90 input focus kept after decide")

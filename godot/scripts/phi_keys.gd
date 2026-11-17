@@ -145,6 +145,36 @@ const _CTRL_SEND := {
 
 
 ## Godot のキーコード → Philly のコード名。対応が無ければ ""。
+static func code_name_for(keycode: Key, physical: Key, unicode: int) -> String:
+	## イベントからキー名を決める。確定文字 (unicode) を持つ
+	## イベントでは、物理キーの名前を信用しない (第88段)。
+	## Windows の IME は全角スペースの確定を physical=Pause・
+	## unicode=U+3000 で届けることがあり、物理キー優先だと
+	## 強制切断キーと取り違える (実測: wire ログの KEY 行)。
+	## 文字としての名前が付くものはそちらを正とする。
+	if unicode >= 0x20 and unicode != 0x7F:
+		var by_char := _code_name_for_char(unicode)
+		if not by_char.is_empty():
+			return by_char
+	var code := code_name(physical)
+	if code.is_empty():
+		code = code_name(keycode)
+	return code
+
+
+static func _code_name_for_char(unicode: int) -> String:
+	## 文字コードから付けられるキー名。付けられない文字は ""。
+	if unicode == 0x20 or unicode == 0x3000:
+		return "Space"
+	if unicode >= 0x61 and unicode <= 0x7A: # a-z
+		return "Key" + String.chr(unicode - 0x20)
+	if unicode >= 0x41 and unicode <= 0x5A: # A-Z
+		return "Key" + String.chr(unicode)
+	if unicode >= 0x30 and unicode <= 0x39: # 0-9
+		return "Digit" + String.chr(unicode)
+	return ""
+
+
 static func code_name(keycode: Key) -> String:
 	match keycode:
 		KEY_UP:

@@ -38,6 +38,12 @@ func _run() -> void:
 	check(PhiImages.decode_image(PackedByteArray([1, 2, 3])) == null, "decode rejects garbage")
 
 	var main: Node = Main.new()
+	var iso := ProjectSettings.globalize_path("user://stage48_tabs.ini")
+	OS.execute("rm", ["-f", iso])
+	main.set("_tab_session_path", "user://stage48_tabs.ini")
+	var isoc := ProjectSettings.globalize_path("user://stage48_cfg.ini")
+	OS.execute("rm", ["-f", isoc])
+	main.set("_config_path", "user://stage48_cfg.ini")
 	root.add_child(main)
 	await process_frame
 	await process_frame

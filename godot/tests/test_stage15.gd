@@ -59,7 +59,7 @@ func _test_view_board() -> void:
 	_check_eq(int(persons[0]["y"]), 1, "人の y")
 	_check_eq(view.board_pixel_size(), Vector2(160, 176), "倍率1の大きさ (5*32, 5*32+16)")
 	view.set_event(_sample_event(), null, "", 4.0)
-	_check_eq(view.board_pixel_size(), Vector2(640, 704), "倍率4の大きさ")
+	_check_eq(view.board_pixel_size(), Vector2(160, 176), "地図の倍率には連動しない (第87段)")
 	# 大きい盤面では上限に合わせて倍率が落ちる。
 	var big := {"type": "eagleEye", "width": 15, "height": 15, "cells": []}
 	var big_cells: Array = []

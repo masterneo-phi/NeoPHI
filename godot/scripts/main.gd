@@ -3504,13 +3504,17 @@ func _input(event: InputEvent) -> void:
 	# (2)OS のキー繰り返しは無視する。繰り返しは地図の到着で刻む。
 	if key_event.echo:
 		return
+	var code := PhiKeys.code_name_for(key_event.keycode, key_event.physical_keycode, key_event.unicode)
+	# 送受信トレースが有効なら、届いたキーも記録する (第85段、
+	# 診断用)。IME の変換中に横取りしない判定より前に残す
+	# (変換に紛れて届くキーも見えるように)。
+	var ime_text := DisplayServer.ime_get_text()
+	if tab.session != null and tab.session.wire_trace:
+		tab.session.trace_text("KEY kc=%d phys=%d uni=%d code=%s shift=%s ctrl=%s alt=%s ime=%s" % [key_event.keycode, key_event.physical_keycode, key_event.unicode, code, str(key_event.shift_pressed), str(key_event.ctrl_pressed), str(key_event.alt_pressed), str(not ime_text.is_empty())])
 	# IME の変換中は、キーをすべて入力欄 (IME) に任せる。変換確定の
 	# Enter などをショートカットや送信と取り違えないため (第79段)。
-	if not DisplayServer.ime_get_text().is_empty():
+	if not ime_text.is_empty():
 		return
-	var code := PhiKeys.code_name(key_event.physical_keycode)
-	if code.is_empty():
-		code = PhiKeys.code_name(key_event.keycode)
 	if not _keytest.is_empty():
 		print("key: keycode=", key_event.keycode, " physical=", key_event.physical_keycode, " code=[", code, "] focus=", tab.debug_input_focus())
 	var shift := key_event.shift_pressed
@@ -3534,15 +3538,17 @@ func _input(event: InputEvent) -> void:
 		return
 	# 強制切断のキー(WPHI と同じ割り当て)。Pause / Shift+F1 は
 	# アクティブなタブを、Alt+Pause は全タブを強制切断する。
-	# フォーカスに関わらず効く。
-	if code == "Pause" and not ctrl and not meta:
+	# フォーカスに関わらず効く。ただし確定文字 (unicode) を持つ
+	# イベントは文字入力であり、切断キーにはしない (第88段。
+	# IME の確定が Pause 等の物理コードで届くことがあるため)。
+	if code == "Pause" and not ctrl and not meta and key_event.unicode == 0:
 		if alt:
 			_disconnect_all_tabs(true)
 		elif tab.is_session_open():
 			tab.disconnect_force()
 		get_viewport().set_input_as_handled()
 		return
-	if code == "F1" and shift and not ctrl and not alt and not meta:
+	if code == "F1" and shift and not ctrl and not alt and not meta and key_event.unicode == 0:
 		if tab.is_session_open():
 			tab.disconnect_force()
 		get_viewport().set_input_as_handled()
