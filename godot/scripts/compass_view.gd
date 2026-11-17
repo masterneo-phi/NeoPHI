@@ -9,6 +9,22 @@ var direction_tex: Texture2D = null
 var label_font: Font = null
 var dir_num := 0
 var north_fix := true
+## 地図の様式("turn"=回転 / "solid"=北固定)。文字の描画は MapView 側の
+## オーバーレイが行う(本体は半透明で文字が薄れて読みにくいため)。
+## ここは状態と文言だけを持つ。
+var mode_style := "solid"
+
+
+func mode_text() -> String:
+	## 様式の表示文言(MapView のオーバーレイが使う)。
+	return "回転" if mode_style == "turn" else "北固定"
+
+
+func set_mode_style(p_style: String) -> void:
+	if p_style == mode_style:
+		return
+	mode_style = p_style
+	queue_redraw()
 
 
 func _init() -> void:
@@ -32,12 +48,51 @@ func set_direction(p_dir_num: int, p_north_fix: bool) -> void:
 	queue_redraw()
 
 
+const CELL := 50
+const CELL_RADIUS := 10.0
+
+static var _rounded_cache: Dictionary = {}
+
+
+static func rounded_direction_texture(tex: Texture2D) -> Texture2D:
+	## Direction.bmp(50x50 のセルが横に並ぶ)の各セルの角を
+	## 丸めたテクスチャを返す。角の外側を透明にする
+	## (ユーザーの要望)。結果はキャッシュする。
+	if tex == null:
+		return null
+	var rid := tex.get_rid()
+	if _rounded_cache.has(rid):
+		return _rounded_cache[rid]
+	var img := tex.get_image()
+	if img == null or img.get_height() != CELL or img.get_width() % CELL != 0:
+		_rounded_cache[rid] = tex
+		return tex
+	img = img.duplicate()
+	if img.get_format() != Image.FORMAT_RGBA8:
+		img.convert(Image.FORMAT_RGBA8)
+	var center := Vector2(CELL, CELL) * 0.5
+	for cx in range(0, img.get_width(), CELL):
+		for y in CELL:
+			for x in CELL:
+				var p := Vector2(x + 0.5, y + 0.5) - center
+				var q := Vector2(absf(p.x), absf(p.y)) - (center - Vector2(CELL_RADIUS, CELL_RADIUS))
+				var dist := Vector2(maxf(q.x, 0.0), maxf(q.y, 0.0)).length() + minf(maxf(q.x, q.y), 0.0) - CELL_RADIUS
+				var alpha := clampf(0.5 - dist, 0.0, 1.0)
+				if alpha < 1.0:
+					var col := img.get_pixel(cx + x, y)
+					col.a *= alpha
+					img.set_pixel(cx + x, y, col)
+	var out := ImageTexture.create_from_image(img)
+	_rounded_cache[rid] = out
+	return out
+
+
 func _draw() -> void:
 	var idx := cell_index(dir_num, north_fix)
 	if direction_tex != null and direction_tex.get_width() >= (idx + 1) * 50 and direction_tex.get_height() >= 50:
 		draw_texture_rect_region(direction_tex, Rect2(Vector2.ZERO, size), Rect2(idx * 50, 0, 50, 50))
-		return
-	_draw_fallback(idx)
+	else:
+		_draw_fallback(idx)
 
 
 func _draw_fallback(idx: int) -> void:

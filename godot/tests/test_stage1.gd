@@ -182,7 +182,7 @@ func _test_config() -> void:
 	_check_eq(cfg.host, "127.0.0.1", "config default host")
 	_check_eq(cfg.port, 20017, "config default port")
 	_check_eq(cfg.skin, "Mine", "config default skin")
-	_check_eq(cfg.map_size, 57, "config default map size")
+	_check_eq(cfg.map_size, 81, "config default map size")
 	_check_eq(cfg.map_style, "solid", "config default map style")
 	_check_eq(cfg.window_width, 1280, "config default window width")
 	_check_eq(cfg.window_height, 1024, "config default window height")
@@ -248,7 +248,7 @@ func _test_config() -> void:
 	_check_eq(cfg3.host, "127.0.0.1", "config bad host")
 	_check_eq(cfg3.port, 20017, "config bad port")
 	_check_eq(cfg3.skin, "Mine", "config bad skin")
-	_check_eq(cfg3.map_size, 57, "config bad map size")
+	_check_eq(cfg3.map_size, 81, "config bad map size")
 	_check_eq(cfg3.map_style, "solid", "config bad map style")
 	_check_eq(cfg3.window_width, 1280, "config bad window width")
 	_check_eq(cfg3.window_height, 1024, "config bad window height")
@@ -273,7 +273,7 @@ func _test_config() -> void:
 
 	cfg2.reset()
 	_check_eq(cfg2.host, "127.0.0.1", "config reset host")
-	_check_eq(cfg2.map_size, 57, "config reset map size")
+	_check_eq(cfg2.map_size, 81, "config reset map size")
 	_check_eq(cfg2.scroll_stop, false, "config reset scroll stop")
 
 
@@ -470,12 +470,13 @@ func _test_game_assets_skin() -> void:
 	# キャッシュ初期化の後は読み直す
 	assets.clear_cache()
 	_check(assets.button_icon("Equip") != null, "assets after clear cache")
-	# LANU は読まない
+	# LANU 系もキャラグラとして読む (第34段で解禁。Philly の
+	# 既定グラが LANU 系のため)。
 	var lanu_dir := OS.get_temp_dir().path_join("neophi-test-lanu")
 	_write_tmp(lanu_dir.path_join("lanu_test.bmp"), _make_bmp24(2, 2, [[5, 5, 5], [5, 5, 5], [5, 5, 5], [5, 5, 5]]))
 	var assets2 := GameAssets.new()
 	assets2.setup([], [], [lanu_dir], "Mine")
-	_check_eq(assets2.chara("nobody", "lanu_test", 0x00), null, "assets lanu not read")
+	_check(assets2.chara("nobody", "lanu_test", 0x00) != null, "assets lanu read as chara")
 
 
 # -- Philly の実ファイル ------------------------------------------------------
@@ -529,6 +530,30 @@ func _test_actions() -> void:
 		if str(item) == "-":
 			continue
 		_check(not PhiActions.get_action(str(item)).is_empty(), "actions toolbar item exists: " + str(item))
+	# メニューに表示するショートカット（アクセラレータ）の対応
+	_check_eq(PhiActions.accelerator_for("Cast1"), KEY_F1, "accel Cast1 = F1")
+	_check_eq(PhiActions.accelerator_for("Cast7"), KEY_F7, "accel Cast7 = F7")
+	_check_eq(PhiActions.accelerator_for("M5x5"), KEY_5 | KEY_MASK_SHIFT, "accel M5x5 = Shift+5")
+	_check_eq(PhiActions.accelerator_for("M7x7"), KEY_7 | KEY_MASK_SHIFT, "accel M7x7 = Shift+7")
+	_check_eq(PhiActions.accelerator_for("MTurn"), KEY_T, "accel MTurn = T")
+	_check_eq(PhiActions.accelerator_for("MSolid"), KEY_T | KEY_MASK_SHIFT, "accel MSolid = Shift+T")
+	_check_eq(PhiActions.accelerator_for("NewPrivWindow"), KEY_F6 | KEY_MASK_SHIFT, "accel priv = Shift+F6")
+	_check_eq(PhiActions.accelerator_for("Cast"), 0, "accel none for Cast")
+	# Alt / Shift+Alt の魔法キー(Philly KeyBindAlt / KeyBindShiftAlt)
+	_check_eq(PhiActions.accelerator_for("WizardEye"), KEY_W | KEY_MASK_ALT, "accel WizardEye = Alt+W")
+	_check_eq(PhiActions.accelerator_for("WizardLight"), KEY_W | KEY_MASK_ALT | KEY_MASK_SHIFT, "accel WizardLight = Shift+Alt+W")
+	_check_eq(PhiActions.accelerator_for("List"), KEY_L | KEY_MASK_ALT | KEY_MASK_SHIFT, "accel List = Shift+Alt+L")
+	_check_eq(PhiActions.accelerator_for("Appear"), KEY_A | KEY_MASK_ALT | KEY_MASK_SHIFT, "accel Appear = Shift+Alt+A")
+	_check_eq(PhiActions.alt_action_for("KeyW", false), "WizardEye", "alt KeyW")
+	_check_eq(PhiActions.alt_action_for("KeyW", true), "WizardLight", "shift-alt KeyW")
+	_check_eq(PhiActions.alt_action_for("KeyE", true), "EagleEyeText", "shift-alt KeyE")
+	_check_eq(PhiActions.alt_action_for("KeyL", false), "WizardLock", "alt KeyL")
+	_check_eq(PhiActions.alt_action_for("KeyL", true), "List", "shift-alt KeyL")
+	_check_eq(PhiActions.alt_action_for("KeyP", false), "PartyEye", "alt KeyP")
+	_check_eq(PhiActions.alt_action_for("KeyS", false), "Search", "alt KeyS")
+	_check_eq(PhiActions.alt_action_for("KeyG", false), "", "alt KeyG is greeting, not an action")
+	_check(PhiActions.ALT_CONFIRMS.has("Call"), "alt confirm for Call")
+	_check(PhiActions.ALT_CONFIRMS.has("Return"), "alt confirm for Return")
 	for action_name in PhiActions.ACTIONS:
 		var action: Dictionary = PhiActions.ACTIONS[action_name]
 		_check(not str(action.get("caption", "")).is_empty(), "actions caption: " + action_name)
@@ -576,7 +601,7 @@ func _test_actions() -> void:
 
 func _test_login_lines() -> void:
 	var lines := PhiSession.login_lines("guest")
-	_check(lines.has("#ex-map size=57"), "login default size")
+	_check(lines.has("#ex-map size=81"), "login default size")
 	_check(lines.has("#ex-map style=solid"), "login default style")
 	_check(lines.has("#open guest"), "login open")
 	var lines40 := PhiSession.login_lines("guest", 40, "turn")

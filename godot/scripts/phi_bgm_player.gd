@@ -5,7 +5,7 @@ extends Node
 ## 拡張子で振り分ける:
 ## - `.mid` / `.midi` … 同梱の GDScript 製 MIDI プレイヤー
 ##   (addons/midi、MIT ライセンス)と SF2 サウンドフォント
-##   (GeneralUser GS)で合成して鳴らす。サウンドフォントが
+##   (FluidR3 GM)で合成して鳴らす。サウンドフォントが
 ##   無ければ MIDI は無音(他の形式は鳴らせる)。
 ## - `.wav` / `.ogg` / `.mp3` … AudioStreamPlayer で鳴らす。
 ##

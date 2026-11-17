@@ -13,10 +13,17 @@ extends Node
 ## 判断はメイン画面が行う。
 
 signal se_requested(path: String)
+## 効果音が鳴り始めた / 鳴り終わった (サウンドテストの
+## ハイライト用)。path は解決済みのファイルパス。
+signal se_started(path: String)
+signal se_finished(path: String)
 signal flash_requested
 
 ## 同時に鳴らせる効果音の数。
 const SE_CHANNELS := 4
+## 効果音の音量 (dB)。合成波形の効果音は BGM (MIDI) より大きく
+## 聞こえるので、振幅で 1/4 程度に落とす (ユーザーの指定)。
+const SE_VOLUME_DB := -12.0
 
 var _config: PhiConfig = null
 var _roots: Array = []
@@ -25,6 +32,7 @@ var _bgm := PhiBgmPlayer.new()
 var _se_players: Array[AudioStreamPlayer] = []
 var _se_streams: Dictionary = {} # path -> AudioStream(読めなかったら null)
 var _se_next := 0
+var _se_playing_paths: Array[String] = [] # チャンネルごとの再生中パス
 
 
 func _init() -> void:
@@ -32,8 +40,16 @@ func _init() -> void:
 	for i in range(SE_CHANNELS):
 		var player := AudioStreamPlayer.new()
 		player.bus = "Master"
+		player.volume_db = SE_VOLUME_DB
 		add_child(player)
 		_se_players.append(player)
+		_se_playing_paths.append("")
+		var ch := i
+		player.finished.connect(func() -> void:
+			var done := _se_playing_paths[ch]
+			_se_playing_paths[ch] = ""
+			if not done.is_empty():
+				se_finished.emit(done))
 
 
 func setup(p_config: PhiConfig, roots: Array) -> void:
@@ -73,6 +89,19 @@ func play_se_for_line(line: String) -> void:
 	_play_se(path)
 
 
+func play_se_entry(entry: String) -> void:
+	## ログ行を介さない直接の効果音 (壁ぶつかり・選択・priv 受信
+	## など、クライアント側の出来事用)。表記は SoundFile.ini と
+	## 同じ (ルートからの相対か絶対)。
+	if _config == null or not _config.sound_play:
+		return
+	var path := PhiSoundPaths.resolve_se(entry, _roots)
+	if path.is_empty():
+		return
+	se_requested.emit(path)
+	_play_se(path)
+
+
 func _play_se(path: String) -> void:
 	var stream: Variant = _se_streams.get(path, false)
 	if stream is bool:
@@ -80,10 +109,18 @@ func _play_se(path: String) -> void:
 		_se_streams[path] = stream
 	if stream == null:
 		return
-	var player := _se_players[_se_next]
+	var ch := _se_next
 	_se_next = (_se_next + 1) % _se_players.size()
+	var player := _se_players[ch]
+	# 使い回すチャンネルで前の音がまだ鳴っていたら、そちらの
+	# 終了として先に知らせる (finished は来ないため)。
+	var prev := _se_playing_paths[ch]
+	if player.playing and not prev.is_empty():
+		se_finished.emit(prev)
 	player.stream = stream
 	player.play()
+	_se_playing_paths[ch] = path
+	se_started.emit(path)
 
 
 # -- BGM の橋渡し ------------------------------------------------------------

@@ -156,6 +156,14 @@ func _test_input_history() -> void:
 	var cleared := PhiInputHistory.clear_history("hello\nworld", 6)
 	_check_eq(str(cleared["text"]), "world", "history clear keeps draft")
 	_check_eq(int(cleared["boundary"]), 0, "history clear boundary")
+	# 送信済みの行を書き換えると、その行が下書きに戻る。
+	_check_eq(PhiInputHistory.retreat_boundary("bgm NEO_town\n", "bgm NEO_rest1\n", 13), 0, "history retreat edited sent line")
+	_check_eq(PhiInputHistory.retreat_boundary("one\ntwo\n", "one\n2\n", 8), 4, "history retreat second line")
+	_check_eq(PhiInputHistory.retreat_boundary("one\ntwo\n", "one\nto\n", 8), 4, "history retreat deletion in history")
+	# 下書きだけの編集では境界は動かない。
+	_check_eq(PhiInputHistory.retreat_boundary("one\ntw", "one\ntwo", 4), 4, "history no retreat in draft")
+	_check_eq(PhiInputHistory.retreat_boundary("one\ntwo\n", "one\ntwo\n", 8), 8, "history no change")
+	_check_eq(PhiInputHistory.retreat_boundary("one\ntwo\n", "one\ntwo", 8), 7, "history shrink clamps")
 	# 200行で古い方から切り捨てる。
 	var long_text := ""
 	for i in range(250):
@@ -266,25 +274,23 @@ func _test_config() -> void:
 
 
 func _test_actions() -> void:
-	for action_name in ["NewTab", "CloseTab", "SayAllTabs", "LogAutoSave", "LogDeleteFilter", "ImageWindow"]:
+	for action_name in ["SayAllTabs", "LogAutoSave", "LogDeleteFilter", "ImageWindow"]:
 		var action := PhiActions.get_action(action_name)
 		_check(not action.is_empty(), "actions has " + action_name)
 		_check(not str(action.get("caption", "")).is_empty(), "actions caption " + action_name)
 		_check(not str(action.get("hint", "")).is_empty(), "actions hint " + action_name)
-	_check_eq(PhiActions.kind_of("NewTab"), "new-tab", "actions kind new-tab")
 	_check_eq(PhiActions.kind_of("SayAllTabs"), "say-all-tabs", "actions kind say-all-tabs")
 	_check_eq(PhiActions.kind_of("LogAutoSave"), "autosave-toggle", "actions kind autosave")
 	_check(PhiActions.enabled_when("SayAllTabs", true), "actions say-all enabled connected")
 	_check(not PhiActions.enabled_when("SayAllTabs", false), "actions say-all disabled offline")
-	_check(PhiActions.enabled_when("NewTab", false), "actions new-tab always enabled")
 	_check(PhiActions.enabled_when("ImageWindow", false), "actions image-window always enabled")
 
 
 func _test_font_sizes() -> void:
 	_check_eq(PhiFont.ui_size_for_zoom(1), 6, "font ui zoom1")
-	_check_eq(PhiFont.ui_size_for_zoom(3), 18, "font ui zoom3")
-	_check_eq(PhiFont.chrome_size_for_zoom(1), 16, "font chrome zoom1 floor")
-	_check_eq(PhiFont.chrome_size_for_zoom(3), 21, "font chrome zoom3")
+	_check_eq(PhiFont.ui_size_for_zoom(3), 16, "font ui zoom3")
+	_check_eq(PhiFont.chrome_size_for_zoom(1), 6, "font chrome zoom1 unified")
+	_check_eq(PhiFont.chrome_size_for_zoom(3), 16, "font chrome zoom3 unified")
 
 
 func _test_digits() -> void:
@@ -325,7 +331,7 @@ func _test_priv_window() -> void:
 	win.set_checked("2", true)
 	win.rebuild_recipients(users, "")
 	_check_eq(win.checked_keys(), ["2"], "priv check preserved")
-	_check_eq(win.title, "他人", "priv title checked name")
+	_check_eq(win._title_label.text, "他人", "priv title checked name")
 	win.queue_free()
 
 
@@ -387,7 +393,9 @@ func _test_version() -> void:
 	_check_eq(str(action.get("caption", "")), "NeoPHI " + PhiVersion.VERSION, "version menu caption")
 	_check_eq(str(action.get("hint", "")), "バージョン情報を表示する", "version menu hint kept")
 	var body := PhiVersion.about_text()
-	_check(body.begins_with("NeoPHI " + PhiVersion.VERSION), "version about first line")
+	_check(body.begins_with("NeoPHI"), "version about app name line")
+	_check(body.contains("Phantasmal Island Client"), "version about subtitle")
+	_check(body.contains("バージョン " + PhiVersion.VERSION), "version about version line")
 	_check(body.contains("Godot "), "version about engine line")
 	_check(not body.contains("Philly"), "version about no description")
 	# 作者名は About ダイアログにだけ入れる(メニュー項目名には入れない)。

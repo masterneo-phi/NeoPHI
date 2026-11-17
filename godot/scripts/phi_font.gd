@@ -1,103 +1,71 @@
 class_name PhiFont
 extends RefCounted
-## OS 既定の UI フォントを使うための設定。
+## UI フォントの設定。
 ##
-## 方針: 各 OS の既定フォントを最優先にする。Mac では San Francisco
-## (SF Pro Text)＋ヒラギノ、Windows では Segoe UI＋BIZ UDPゴシック/
-## 游ゴシック、Linux では Noto Sans CJK JP。欧文フォントに無い字は
-## フォールバックの日本語フォントで出す。
-##
-## 以前は WPHI の CSS(`--ui-font`)と同じ順番(Noto Sans JP 最優先)で
-## 探していたが、Mac では結局ヒラギノが選ばれて見た目が変わらな
-## かったため、OS 既定の方針に変えた(2026-11-15)。
+## 方針: WPHI の CSS(`--ui-font`)とまったく同じ名前・同じ順番で
+## 探す(2026-11-16、ユーザーの「WPHI と同じにしたい」で変更)。
+## WPHI はフォントを同梱しておらず、環境にあるフォントが
+## 使われる。Mac に Noto Sans JP が無ければ欧文は San Francisco、
+## 日本語はヒラギノに落ちる(WPHI でも NeoPHI でも同じ)。
 ##
 ## 注意: WPHI の `font-feature-settings: "palt"` は、Godot で有効に
 ## すると MenuButton の末尾の字(「ファイル」のルなど)が描かれなく
 ## なるため使わない(2026-11-15 に実機確認)。
 
-## Mac: SF Pro Text が見つかれば欧文はそれになり、無い字は
-## フォールバックのヒラギノで出る。SF が見つからなければ
-## ヒラギノが主フォントになる(従来どおり)。
-const MAC_FONT_NAMES: Array[String] = [
+## WPHI の --ui-font の並び + 無い字のための後続候補。
+## 最初に見つかったものが主フォントになり、残りは
+## フォールバック側でも同じ並びで探す。
+const WPHI_FONT_NAMES: Array[String] = [
+	"Noto Sans JP",
+	"Noto Sans CJK JP",
+	"Segoe UI Variable Text",
+	"Segoe UI",
+	"BIZ UDPGothic",
 	"SF Pro Text",
 	".AppleSystemUIFont",
 	"SF Pro",
 	"Hiragino Sans",
 	"Hiragino Kaku Gothic ProN",
-	"Noto Sans JP",
-	"Noto Sans CJK JP",
-]
-
-const WINDOWS_FONT_NAMES: Array[String] = [
-	"Segoe UI Variable Text",
-	"Segoe UI",
-	"BIZ UDPGothic",
 	"Yu Gothic UI",
 	"Yu Gothic",
 	"Meiryo UI",
 	"Meiryo",
-	"Noto Sans JP",
-	"Noto Sans CJK JP",
-]
-
-const LINUX_FONT_NAMES: Array[String] = [
-	"Noto Sans JP",
-	"Noto Sans CJK JP",
 	"Noto Sans CJK",
 	"TakaoGothic",
 	"IPAexGothic",
 ]
 
 ## 主フォントに無い字(主に日本語)を出すフォールバック。
-## OS ごとに最初に見つかったものが使われる。
-const CJK_FALLBACK_NAMES: Array[String] = [
-	"Hiragino Sans",
-	"Hiragino Kaku Gothic ProN",
-	"Noto Sans JP",
-	"Noto Sans CJK JP",
-	"BIZ UDPGothic",
-	"Yu Gothic UI",
-	"Yu Gothic",
-	"Meiryo UI",
-	"Meiryo",
-	"Noto Sans CJK",
-	"TakaoGothic",
-	"IPAexGothic",
-]
+## WPHI と同じ並びをそのまま使う。
+const CJK_FALLBACK_NAMES: Array[String] = WPHI_FONT_NAMES
 
 
 static func primary_font_names() -> Array[String]:
-	match OS.get_name():
-		"macOS":
-			return MAC_FONT_NAMES
-		"Windows":
-			return WINDOWS_FONT_NAMES
-		_:
-			return LINUX_FONT_NAMES
+	return WPHI_FONT_NAMES
 
 
 ## 地図の倍率から UI の文字サイズを決める。第4段で少し小さくし、
-## レイアウト変更でもうひと回り小さくした。ログ・入力欄などは 6*zoom。
+## レイアウト変更でもうひと回り小さくし、さらに全体を2ポイント
+## 小さくした(2026-11-16、ユーザーの要望)。ログ・入力欄など。
 static func ui_size_for_zoom(zoom: int) -> int:
-	return 6 * zoom
+	return maxi(6 * zoom - 2, 6)
 
 
 ## メニューバー・プルダウンメニュー・ツールチップの文字サイズ。
-## 7*zoom で、最低 16。
+## ログと同じ大きさに統一した(2026-11-16、ユーザーの要望)。
 static func chrome_size_for_zoom(zoom: int) -> int:
-	return maxi(7 * zoom, 16)
+	return ui_size_for_zoom(zoom)
 
 
-## HP/MP ゲージの数字の大きさ。UI 文字より大きくする
-## (小さくすると読めないため)。8*zoom で、最低 14。
+## HP/MP ゲージの数字の大きさ。ログと同じ大きさに統一した。
 static func gauge_size_for_zoom(zoom: int) -> int:
-	return maxi(8 * zoom, 14)
+	return ui_size_for_zoom(zoom)
 
 
 ## ゲージの下のステータス行(F/W/M/C/GP)の文字の大きさ。
-## 7*zoom で、最低 14。
+## ログと同じ大きさに統一した。
 static func status_size_for_zoom(zoom: int) -> int:
-	return maxi(7 * zoom, 14)
+	return ui_size_for_zoom(zoom)
 
 
 static func make_system_font() -> SystemFont:
@@ -129,4 +97,27 @@ static func make_bold_font(system_font: SystemFont = null) -> Font:
 	variation.base_font = base
 	variation.fallbacks = [make_fallback_font()]
 	variation.variation_embolden = 1.0
+	return variation
+
+
+static func make_italics_font(system_font: SystemFont = null) -> Font:
+	## 変形で傾けた疑似イタリックフォント。RichTextLabel の
+	## [i] は italics_font を引くので、明示しないと既定テーマの
+	## フォント (日本語を持たない) に落ちて傾きも太さも出ない。
+	var base := system_font if system_font != null else make_system_font()
+	var variation := FontVariation.new()
+	variation.base_font = base
+	variation.fallbacks = [make_fallback_font()]
+	variation.variation_transform = Transform2D(Vector2(1, 0), Vector2(-0.22, 1), Vector2.ZERO)
+	return variation
+
+
+static func make_bold_italics_font(system_font: SystemFont = null) -> Font:
+	## 太字+イタリック ([b][i] の重ね掛け用)。
+	var base := system_font if system_font != null else make_system_font()
+	var variation := FontVariation.new()
+	variation.base_font = base
+	variation.fallbacks = [make_fallback_font()]
+	variation.variation_embolden = 1.0
+	variation.variation_transform = Transform2D(Vector2(1, 0), Vector2(-0.22, 1), Vector2.ZERO)
 	return variation

@@ -12,4 +12,4 @@ const AUTHOR := "Master NEO"
 ## About ダイアログの本文。1行目が名前と番号、2行目が作者、
 ## 3行目がエンジン。
 static func about_text() -> String:
-	return "NeoPHI " + VERSION + "\n作者 " + AUTHOR + "\nGodot " + str(Engine.get_version_info()["string"])
+	return "NeoPHI\nPhantasmal Island Client\nバージョン " + VERSION + "\n作者 " + AUTHOR + "\nGodot " + str(Engine.get_version_info()["string"])

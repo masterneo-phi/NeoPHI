@@ -15,6 +15,9 @@ extends VBoxContainer
 ## 渡して実行してもらう。
 
 signal title_changed(title: String)
+## ステータス (#status) が更新された。超魔法メニューの出し分け
+## (EXP 判定) などで Main が使う。
+signal status_changed
 signal unread_changed(unread: bool)
 signal connection_changed(open: bool)
 signal zoom_changed(zoom: int)
@@ -23,6 +26,14 @@ signal priv_received(plain: String)
 signal loud_confirm_requested(text: String, party: bool)
 signal action_requested(action_name: String)
 signal bgm_changed
+signal eagle_eye_received(event: Dictionary, assets: GameAssets, mapset: String, zoom: float, defines: Dictionary)
+## 看板編集 (#m-edit / #.) の開始と終了。Main が窓を持つ。
+signal edit_requested(mode: String)
+## 世界移動 (違うホスト) の確認。Main がダイアログを出し、
+## 答えを answer_transfer() で返す。
+signal transfer_confirm_requested(host: String, port: int)
+## 新規キャラクター作成が完了した(表示名を渡す。第7段)。
+signal register_completed(display_name: String)
 
 ## 第2段: 移動の繰り返し(Philly classMoveCommand)。
 const REPEAT_START_MS := 200
@@ -61,6 +72,9 @@ const _FX_DEMO_PHRASES := [
 var session := PhiSession.new()
 var map_view: MapView = null
 var log_view: RichTextLabel = null
+## ログの下端に余白を持たせるための、地の複製。
+## テーマの地は共有なので、複製にだけ下マージンを付ける。
+var _log_box: StyleBox = null
 var input_box: TextEdit = null
 ## ログと入力欄の上下の分割。境目で入力欄の高さを変える。
 var input_split: VSplitContainer = null
@@ -83,23 +97,84 @@ var _assets: GameAssets = null
 var _config: PhiConfig = null
 var _font: Font = null
 var _bold_font: Font = null
+## ログの [i] / [b][i] 用 (Main が setup の前に渡す)。
+var italics_font: Font = null
+var bold_italics_font: Font = null
 var _log_filter: PhiLogFilter = null
 var _tag_tree := {}
 var _system_color: Variant = null
 var _error_color: Variant = null
+## ログ行頭の時刻の色 (スキンの Log.css の .class_time、無ければ teal)。
+var _time_color: Variant = null
 var _is_active := false
 var _was_open := false
+## MapView へ最後に伝えたアニメーション可否 (第65段)。
+var _live_synced := false
+## 手動の切断でアニメーションを止めたか (第65段)。
+## ログアウト完了待ちの間、再び動かさないために使う。
+var _live_stopped := false
+## 切断処理が済んだ接続か (二重にログを出さないための印)。
+var _close_handled := false
+## ほかのクライアントに接続を切り替えられたか (サーバの
+## "accessed by other" の知らせを受けたら立てる)。
+var _cut_by_other := false
 var _applied_size := 0
 
 var _player_name := ""
+## 現在の EXP (#status 由来)。超魔法の出し分けに使う。
+var _exp := 0
 var _world := ""
 var _area := ""
 var _mapset := ""
+## #mapset-define のスロット (1〜3) → マップセット名。
+var _defines: Dictionary = {}
 var _users: Array[Dictionary] = []
 var _priv_history: Array[String] = []
 var _log_lines: Array[Dictionary] = []
 var _image_refs: Array[Dictionary] = []
+## ログ埋め込み画像 (第48段): 取得済みテクスチャと失敗記録は
+## 全タブで共有する (同じバナーをタブごとに取りに行かない)。
+static var _img_textures := {}
+static var _img_failed := {}
+## このタブが取得中の画像 (URL → HTTPRequest) と待ち行列。
+var _img_requests := {}
+var _img_queue: Array[String] = []
+var _img_rebuild_queued := false
+## 埋め込み画像を合わせた時のログ欄の幅 (幅変更での描き直し判定用)。
+var _img_fit_width := 0.0
+## ログを最後に描いた時の本文サイズ (時刻サイズ統一のための描き直し判定用)。
+var _log_render_size := -1
+## この時刻 (秒) まではログのスクロールを最下部に留め続ける
+## (接続直後とログ描き直しの後のスクロール外れ対策)。
+var _stick_log_bottom_until := 0.0
+## 行を追加した直後のフレームで最下部へ合わせる予約 (第63段)。
+## 追加の瞬間はスクロールバーの最大値がまだ育っておらず、その場で
+## 合わせると半端な位置で止まって追随が切れるため、レイアウトが
+## 落ち着いた次のフレームで合わせる。
+var _pin_bottom_pending := false
+## 受信処理の間、ログ行をまとめて出すための蓄積 (第61段)。
+## 第62段: 1行ごとの bbcode 文字列のキューにした。出す時は
+## 行数と時間で区切って少しずつ出す (残りは次のフレーム)。
+## 一度に全部出すと表示処理でフレームが止まり、その間に
+## 受信が止まってサーバ側が溢れて切断されるため。
+var _log_batching := false
+## 表示待ちのログ行。第65段からは、描画の下準備 (タグ解析と
+## bbcode 化) を済ませた文字列ではなく、entry そのものを
+## 溜める (受信中の行ごとの下準備が受信を詰まらせるため)。
+## 文字列が入っている場合は下準備済みとしてそのまま出す。
+var _log_batch: Array = []
+## ログ欄に今入っている行数 (概算)。増えすぎたら記録から
+## 描き直して切り詰める (文書が大きいと描画が重くなる)。
+var _log_view_lines := 0
+## 描き直しの最中はキューに入れず即時に出す。
+var _log_rebuilding := false
 var _save_failed := false
+## ログ自動保存の書き出し待ち行と、その保存先キー
+## ([dir, char_name, html])。行ごとにファイルを開くと大量行の
+## 受信時に処理が追い付かず切断の原因になるので、まとめて書く。
+var _save_pending: Array[String] = []
+var _save_key: Array = []
+var _save_flush_acc := 0.0
 
 ## サーバーから通知された BGM のファイル名(第5段。`.mid` 補完済み)。
 ## 切断で空に戻る。鳴らすかどうかの判断はメイン画面がする。
@@ -108,6 +183,13 @@ var bgm_name := ""
 var bgm_speed := 100
 ## 音の司令塔(全タブ共有)。メイン画面が setup の後に渡す。
 var _sound_engine: PhiSoundEngine = null
+# 壁ぶつかり検出 (第18段)。移動を送るたびに武装し、次の盤面が
+# 前と同じ (地形+向き) なら、動けなかったとみなして鳴らす。
+# 盤面が来ない場合の予備に締切も見る。
+var _bump_sig := ""
+var _bump_pending := false
+var _bump_deadline := 0
+var _bump_last_played := 0
 
 var _mouse_held := false
 var _mouse_hold_cursor := ""
@@ -121,6 +203,7 @@ var _held_moves: Array[Dictionary] = []
 var _held_since := 0
 var _last_repeat_send := 0
 var _map_dim_now := 0
+var _m81_fell_back := false
 var _map_style_now := ""
 var _loud := false
 var _loud_all := false
@@ -136,6 +219,7 @@ var _list_checks: Dictionary = {}
 var _list_press_in_check := false
 ## チェック印のアイコン(実行時に描く。チェックあり・なし)。
 static var _check_icon_on: Texture2D = null
+static var _talk_icon: Texture2D = null
 static var _check_icon_off: Texture2D = null
 var _list_panel: PanelContainer = null
 var _list_box: ItemList = null
@@ -143,15 +227,27 @@ var _list_header: Label = null
 var _list_cancel_button: Button = null
 var _list_dragging := false
 var _list_drag_offset := Vector2.ZERO
+## 地図の左下に置く丸い Talk ボタン (NPC に『hi』と話しかける)。
+## ドラッグで好きな場所へ動かせる (ツールバーと同じ流儀)。
+var _talk_button: Button = null
+var _talk_dragging := false
+var _talk_drag_offset := Vector2.ZERO
+var _talk_press_global := Vector2.ZERO
+var _talk_drag_moved := false
+## 保持したボタン位置 (地図の中の座標)。(-1,-1) は未設定で左下。
+var _talk_pos := Vector2(-1, -1)
+var _talk_d := 56
 ## 入力欄の角丸の地(大声の黄地から戻す時に使う)。
 var _input_normal_box: StyleBox = null
 var _input_focus_box: StyleBox = null
 var _toolbar_panel: PanelContainer = null
+var _toolbar_title: Label = null
 var _toolbar_buttons: Array[Button] = []
 var _toolbar_dragging := false
 var _toolbar_drag_offset := Vector2.ZERO
 var _last_command := ""
 var _history_boundary := 0
+var _input_snapshot := ""
 ## 追加発言(TalkAdd)。実行中だけの保持で、保存はしない。
 var _talk_add := ""
 var _tag_popup: PopupMenu = null
@@ -160,6 +256,12 @@ var _copy_popup: PopupMenu = null
 var _demo_chars: Array = []
 var _demo_dim := 7
 var _fx_demo_step := 0
+
+## 新規キャラクター作成の進行状態(第7段)。作成中でなければ null。
+var _register: PhiRegister = null
+## 作成中の表示名と、`.phirc` の書き込み先ルート。
+var _register_display_name := ""
+var _register_root := ""
 
 
 func setup(p_assets: GameAssets, p_config: PhiConfig, p_font: Font, p_bold_font: Font, p_log_filter: PhiLogFilter, p_tag_tree: Dictionary) -> void:
@@ -175,6 +277,8 @@ func setup(p_assets: GameAssets, p_config: PhiConfig, p_font: Font, p_bold_font:
 	session.event_received.connect(_on_event)
 	session.session_error.connect(_on_session_error)
 	session.session_closed.connect(_on_session_closed)
+	session.transfer_confirm_requested.connect(
+		func(h: String, p: int) -> void: transfer_confirm_requested.emit(h, p))
 
 
 func set_log_filter(filter: PhiLogFilter) -> void:
@@ -183,6 +287,50 @@ func set_log_filter(filter: PhiLogFilter) -> void:
 
 func set_sound_engine(engine: PhiSoundEngine) -> void:
 	_sound_engine = engine
+
+
+func _play_se(file_name: String) -> void:
+	## クライアント側の出来事の効果音 (sound/se/ のファイル名)。
+	if _sound_engine != null:
+		_sound_engine.play_se_entry("sound\\se\\" + file_name)
+
+
+func _board_signature(event: Dictionary) -> String:
+	## 盤面の同一判定用 (地形と向きだけ。人やアイテムは含めない)。
+	var parts: Array[String] = [str(int(event.get("size", 0))), str(int(event.get("dir", 0)))]
+	for cell in event.get("cells", []):
+		parts.append(str(int((cell as Dictionary).get("chip", 0))) + ":" + str(int((cell as Dictionary).get("attr", 0))))
+	return ",".join(parts)
+
+
+func _arm_bump_watch() -> void:
+	## 移動コマンドを送ったので、ぶつかり監視を武装する。
+	_bump_pending = true
+	_bump_deadline = Time.get_ticks_msec() + 600
+
+
+func _play_bump() -> void:
+	var now := Time.get_ticks_msec()
+	if now - _bump_last_played < 250:
+		return
+	_bump_last_played = now
+	_play_se("bump.wav")
+
+
+func _resolve_bump_watch(event: Dictionary) -> void:
+	## 盤面が届いた。動けていなければ (盤面が前と同一) 鳴らす。
+	var sig := _board_signature(event)
+	if _bump_pending and not _bump_sig.is_empty() and sig == _bump_sig:
+		_play_bump()
+	_bump_pending = false
+	_bump_sig = sig
+
+
+func _bump_timeout_tick() -> void:
+	## 盤面が来ないまま締切を過ぎたら、ぶつかったとみなす。
+	if _bump_pending and Time.get_ticks_msec() > _bump_deadline:
+		_bump_pending = false
+		_play_bump()
 
 
 func bgm_resolved_path() -> String:
@@ -198,6 +346,11 @@ func set_active(active: bool) -> void:
 		set_unread(false)
 		if map_view != null:
 			map_view.request_zoom_growth()
+			# タブを閉じた直後などは、レイアウトが落ち着くのが
+			# 次フレームになることがある。即時の要求だけだと
+			# 追いかけ期間 (1 秒) が空振りして倍率が小さいまま
+			# 残るので、次フレームにもう一度要求する。
+			map_view.request_zoom_growth.call_deferred()
 		# ツールバーの位置は全タブ共通(設定の保持値)にそろえる。
 		if _toolbar_panel != null:
 			_toolbar_panel.position = _toolbar_home_position()
@@ -226,8 +379,18 @@ func tab_title() -> String:
 	return "未接続"
 
 
+func set_restored_name(p_name: String) -> void:
+	## 登録済みキャラクターで開いた時に、ログインするまでの
+	## タブの題名を表示名にする。
+	restored_name = p_name
+	title_changed.emit(tab_title())
+
+
 func session_state() -> Dictionary:
-	return {"host": host, "port": port, "name": _player_name}
+	## 保存する名前は、ログイン名が無ければ復元名で代用する
+	## (接続に失敗したタブでも、キャラ名が消えないように)。
+	var saved_name := _player_name if not _player_name.is_empty() else restored_name
+	return {"host": host, "port": port, "name": saved_name}
 
 
 func is_session_open() -> bool:
@@ -293,6 +456,7 @@ func _fill_draft_with_talk_add() -> void:
 		input_box.text += "\n"
 		_history_boundary = input_box.text.length()
 	input_box.text += _talk_add
+	_sync_input_snapshot()
 	var last := maxi(input_box.get_line_count() - 1, 0)
 	input_box.set_caret_line(last, true, true, 0, false)
 	input_box.set_caret_column(input_box.get_line(last).length())
@@ -315,21 +479,78 @@ func _try_talk_add_recall(code: String, shift: bool, ctrl: bool, alt: bool, meta
 		return false
 	input_box.text = text.substr(0, last_start) + _talk_add
 	_history_boundary = PhiInputHistory.clamp_boundary(input_box.text, _history_boundary)
+	_sync_input_snapshot()
 	var last := maxi(input_box.get_line_count() - 1, 0)
 	input_box.set_caret_line(last, true, true, 0, false)
 	input_box.set_caret_column(input_box.get_line(last).length())
 	return true
 
 
+func _exit_tree() -> void:
+	## タブを閉じる・アプリ終了の時に、自動保存の残りを書き出す。
+	_flush_log_save()
+
+
 func _process(_delta: float) -> void:
-	session.poll()
+	# 前のフレームで追加した行のレイアウトが落ち着いている
+	# ここで最下部へ合わせる (追加の直後に合わせると、バー
+	# の最大値が古いまま半端な位置で止まるため。第63段)。
+	if _pin_bottom_pending:
+		_pin_bottom_pending = false
+		_pin_log_bottom()
+	# バースト中は poll_burst が 1 フレームに複数回受信を回す
+	# (サーバの送信バッファ溢れ切断への対策)。受信で出るログ行は
+	# まとめて1回で表示する (行ごとの append が一番重いため)。
+	_log_batching = true
+	session.poll_burst()
+	_log_batching = false
+	_flush_log_batch()
+	# 表示まで終えたら、届いているバイトだけ先に取り込んで
+	# おく (処理は次のフレーム)。ソケットを空けておく時間が
+	# 長いほど、サーバ側の送信バッファが溢れにくい。
+	session.drain_socket()
+	# ログ欄の行数が増えすぎたら、受信も表示待ちも捌けた
+	# タイミングで記録から描き直して切り詰める。
+	if _log_view_lines > LOG_VIEW_TRIM_LINES and _log_batch.is_empty() \
+			and session.pending_line_count() == 0:
+		_queue_log_rebuild()
+	# ログ自動保存は 1 秒ごとにまとめて書き出す (行ごとの
+	# ファイル開閉が大量行の受信を詰まらせるため)。
+	if not _save_pending.is_empty():
+		_save_flush_acc += _delta
+		if _save_flush_acc >= 1.0:
+			_save_flush_acc = 0.0
+			_flush_log_save()
 	var now_open := session.is_open()
+	# 切断中はキャラの歩行アニメーションを止める (第65段)。
+	# session_closed シグナル側が先に _was_open を戻すと変化
+	# 検出が行き違えるため、検出は _was_open ではなく、最後に
+	# MapView へ伝えた値 (_live_synced) との食い違いで行う。
+	# 手動の切断で止めた間 (_live_stopped) は、ログアウト完了
+	# 待ちで接続が生きていても動かし直さない。
+	if now_open and not _live_stopped:
+		if map_view != null and not _live_synced:
+			_live_synced = true
+			map_view.set_session_live(true)
+	elif not now_open:
+		_live_stopped = false
+		if map_view != null and _live_synced:
+			_live_synced = false
+			map_view.set_session_live(false)
 	if now_open != _was_open:
 		_was_open = now_open
 		refresh_toolbar_states()
 		connection_changed.emit(now_open)
+		if now_open:
+			# 接続直後はバナー等の行が押し寄せ、途中の描き直しで
+			# スクロールが最下部から外れることがある。しばらく
+			# 最下部に留め続ける。
+			_stick_log_bottom_until = Time.get_ticks_msec() / 1000.0 + 2.5
+	if Time.get_ticks_msec() / 1000.0 < _stick_log_bottom_until:
+		_pin_log_bottom()
 	_repeat_fallback_tick()
 	_mouse_repeat_fallback_tick()
+	_bump_timeout_tick()
 
 
 func clear_held_input() -> void:
@@ -339,6 +560,35 @@ func clear_held_input() -> void:
 	_end_toolbar_drag()
 	_mouse_cursor_now = ""
 	Input.set_custom_mouse_cursor(null)
+
+
+var _ss_overlay_prev: Array = []
+
+
+func set_map_overlays_visible(v: bool) -> void:
+	## フロートツールバーとコンパス、リストのパネルの表示切り替え
+	## (スクショ用)。戻すときは隠す前の状態にそのまま復元する。
+	if v:
+		if _ss_overlay_prev.size() == 3:
+			if _toolbar_panel != null:
+				_toolbar_panel.visible = bool(_ss_overlay_prev[0])
+			if map_view != null and map_view.compass != null:
+				map_view.compass.visible = bool(_ss_overlay_prev[1])
+			if _list_panel != null:
+				_list_panel.visible = bool(_ss_overlay_prev[2])
+			_ss_overlay_prev.clear()
+		return
+	_ss_overlay_prev = [
+		_toolbar_panel.visible if _toolbar_panel != null else false,
+		map_view.compass.visible if map_view != null and map_view.compass != null else false,
+		_list_panel.visible if _list_panel != null else false,
+	]
+	if _toolbar_panel != null:
+		_toolbar_panel.visible = false
+	if map_view != null and map_view.compass != null:
+		map_view.compass.visible = false
+	if _list_panel != null:
+		_list_panel.visible = false
 
 
 func reload_cached_textures() -> void:
@@ -399,15 +649,21 @@ func _build_ui() -> void:
 	header_box.content_margin_bottom = 0
 	world_header.add_theme_stylebox_override("normal", header_box)
 	world_header.add_theme_color_override("font_color", WORLD_HEADER_FG)
+	# 地は金属プレートの質感にする(大きさが決まったら貼る)。
+	world_header.resized.connect(_update_world_header_plate)
 	left_col.add_child(world_header)
 	map_view = MapView.new()
+	map_view.set_session_live(false)  # 接続するまでアニメーションしない
+	apply_smooth_scroll()
 	map_view.label_font = _font
+	map_view.bold_font = _bold_font
 	map_view.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	map_view.zoom_changed.connect(_on_map_zoom_changed)
 	left_col.add_child(map_view)
 	map_view.compass.label_font = _font
 	map_view.set_compass_texture(_assets.skin_image("Direction"))
 	_build_list_overlay()
+	_build_talk_button()
 	_build_toolbar_overlay()
 	status_panel = StatusPanel.new()
 	status_panel.label_font = _font
@@ -449,6 +705,18 @@ func _build_ui() -> void:
 	log_view.focus_mode = Control.FOCUS_NONE
 	log_view.gui_input.connect(_on_log_gui_input)
 	log_view.meta_clicked.connect(_on_log_meta_clicked)
+	log_view.resized.connect(_on_log_view_resized)
+	# タグの [b] [i] が効くよう、本文フォントと対の太字・斜体を
+	# 明示する (無いと既定テーマのフォントに落ち、日本語では
+	# 太さも傾きも出ない)。
+	if _font != null:
+		log_view.add_theme_font_override("normal_font", _font)
+	if _bold_font != null:
+		log_view.add_theme_font_override("bold_font", _bold_font)
+	if italics_font != null:
+		log_view.add_theme_font_override("italics_font", italics_font)
+	if bold_italics_font != null:
+		log_view.add_theme_font_override("bold_italics_font", bold_italics_font)
 	input_split.add_child(log_view)
 	input_box = TextEdit.new()
 	input_box.placeholder_text = "入力欄 (Enter で送信、Shift+Enter で改行、Esc で移動キーへ、Tab で入力欄へ)"
@@ -476,12 +744,129 @@ func _build_ui() -> void:
 
 static func _round_panel(panel: PanelContainer) -> void:
 	## フロートパネルの地を角丸にする(テーマの地は共有なので、
-	## 複製してから角を丸める)。
+	## 複製してから角を丸める)。フロートは目立つように
+	## 通常より大きめの半径にする(ユーザーの要望)。
 	var base := panel.get_theme_stylebox("panel") as StyleBoxFlat
 	if base != null:
 		var rounded := base.duplicate() as StyleBoxFlat
-		UiStyle.round_box(rounded)
+		UiStyle.round_box(rounded, UiStyle.FLOAT_RADIUS)
 		panel.add_theme_stylebox_override("panel", rounded)
+
+
+func _build_talk_button() -> void:
+	## 地図の左下に置く丸い Talk ボタン。クリックで近くの NPC に
+	## 『hi』と話しかける (NPC との会話は基本これで始まる)。
+	## ショートカットは H キー (キー割り当てにも初めから入っている)。
+	## ドラッグすると好きな場所へ動かせて、位置は設定に残る。
+	_talk_button = Button.new()
+	_talk_button.text = "Talk"
+	_talk_button.focus_mode = Control.FOCUS_NONE
+	_talk_button.tooltip_text = str(PhiActions.get_action("Talk").get("hint", "")) + "\nドラッグで移動できます"
+	_talk_button.set_anchors_preset(Control.PRESET_TOP_LEFT)
+	_talk_button.gui_input.connect(_on_talk_button_gui_input)
+	if _config != null and _config.talk_button_pos.x >= 0.0 and _config.talk_button_pos.y >= 0.0:
+		_talk_pos = _config.talk_button_pos
+	map_view.add_child(_talk_button)
+	if not map_view.resized.is_connected(_place_talk_button):
+		map_view.resized.connect(_place_talk_button)
+	_style_talk_button(PhiFont.ui_size_for_zoom(map_view.zoom))
+
+
+func _place_talk_button() -> void:
+	## ボタンの置き場所を決める。保持した位置があればそこ、
+	## 無ければ地図の左下。地図からはみ出していたら中へ戻す。
+	if _talk_button == null or map_view == null:
+		return
+	_talk_button.size = Vector2(_talk_d, _talk_d)
+	if map_view.size.x <= 0.0 or map_view.size.y <= 0.0:
+		if _talk_pos.x >= 0.0:
+			_talk_button.position = _talk_pos
+		return
+	var pos := _talk_pos
+	if pos.x < 0.0 or pos.y < 0.0:
+		pos = Vector2(10, map_view.size.y - float(_talk_d) - 10.0)
+	var lim := Vector2(maxf(0.0, map_view.size.x - float(_talk_d)), maxf(0.0, map_view.size.y - float(_talk_d)))
+	_talk_button.position = Vector2(clampf(pos.x, 0.0, lim.x), clampf(pos.y, 0.0, lim.y))
+
+
+func _move_talk_button(target_global: Vector2) -> void:
+	## ボタンを地図ビューの中に収まる位置へ動かす (ツールバーと同じ)。
+	if _talk_button == null or map_view == null:
+		return
+	var local: Vector2 = map_view.get_global_transform().affine_inverse() * target_global
+	var max_pos := Vector2(maxf(0.0, map_view.size.x - float(_talk_d)), maxf(0.0, map_view.size.y - float(_talk_d)))
+	_talk_button.position = Vector2(clampf(local.x, 0.0, max_pos.x), clampf(local.y, 0.0, max_pos.y))
+
+
+func _on_talk_button_gui_input(event: InputEvent) -> void:
+	## 左プレスでドラッグの構え。少しでも動いたら移動、動かずに
+	## 離したらクリック (Talk) とみなす。
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
+		if event.pressed:
+			_talk_dragging = true
+			_talk_drag_moved = false
+			_talk_press_global = event.global_position
+			_talk_drag_offset = event.global_position - _talk_button.global_position
+			var vp := get_viewport()
+			if vp != null:
+				vp.set_input_as_handled()
+		else:
+			_finish_talk_press()
+
+
+func _finish_talk_press() -> void:
+	## ドラッグの終わり (ボタンの外で離した時はマウスのボタン
+	## 処理からも呼ばれる)。動かしていたら位置を設定へ覚え、
+	## 動かしていなければ Talk を送る (接続中だけ)。
+	if not _talk_dragging:
+		return
+	_talk_dragging = false
+	if _talk_drag_moved:
+		_talk_pos = _talk_button.position
+		if _config != null:
+			_config.talk_button_pos = _talk_pos
+	elif is_session_open():
+		do_send_action("Talk")
+
+
+func _style_talk_button(size: int) -> void:
+	## Talk ボタンの大きさと丸い見た目を、UI の文字サイズに合わせる。
+	## 中身はスキンの Talk アイコン (無ければ "Talk" の文字)。
+	if _talk_button == null:
+		return
+	var d := clampi(size * 2 + 40, 68, 100)
+	_talk_d = d
+	_place_talk_button()
+	_talk_button.add_theme_font_size_override("font_size", size)
+	# 中身は「話してる絵 + TALK」の専用アイコン (assets/talk.png)。
+	if _talk_icon == null:
+		_talk_icon = load("res://assets/talk.png") as Texture2D
+	if _talk_icon != null:
+		_talk_button.icon = _talk_icon
+		_talk_button.expand_icon = true
+		_talk_button.text = ""
+	else:
+		_talk_button.icon = null
+		_talk_button.text = "Talk"
+	_talk_button.add_theme_color_override("font_color", Color.WHITE)
+	_talk_button.add_theme_color_override("font_hover_color", Color.WHITE)
+	_talk_button.add_theme_color_override("font_disabled_color", Color(0.75, 0.75, 0.75))
+	var normal := StyleBoxFlat.new()
+	normal.bg_color = Color(0.13, 0.22, 0.52, 0.92)
+	normal.set_corner_radius_all(d / 2)
+	normal.set_border_width_all(1)
+	normal.border_color = Color(0.05, 0.08, 0.2, 0.9)
+	var hover := normal.duplicate() as StyleBoxFlat
+	hover.bg_color = Color(0.2, 0.32, 0.68, 0.95)
+	var pressed := normal.duplicate() as StyleBoxFlat
+	pressed.bg_color = Color(0.08, 0.14, 0.36, 0.95)
+	var disabled := normal.duplicate() as StyleBoxFlat
+	disabled.bg_color = Color(0.25, 0.25, 0.28, 0.75)
+	_talk_button.add_theme_stylebox_override("normal", normal)
+	_talk_button.add_theme_stylebox_override("hover", hover)
+	_talk_button.add_theme_stylebox_override("pressed", pressed)
+	_talk_button.add_theme_stylebox_override("disabled", disabled)
+	_talk_button.add_theme_stylebox_override("focus", StyleBoxEmpty.new())
 
 
 func _build_list_overlay() -> void:
@@ -505,6 +890,7 @@ func _build_list_overlay() -> void:
 	_list_box.select_mode = ItemList.SELECT_SINGLE
 	_list_box.allow_reselect = true
 	_list_box.item_activated.connect(_on_list_row_activated)
+	_list_box.item_selected.connect(func(_index: int) -> void: _play_se("select.wav"))
 	_list_box.gui_input.connect(_on_list_box_gui_input)
 	box.add_child(_list_box)
 	var buttons := HBoxContainer.new()
@@ -515,6 +901,7 @@ func _build_list_overlay() -> void:
 	_list_cancel_button = Button.new()
 	_list_cancel_button.text = "キャンセル"
 	_list_cancel_button.focus_mode = Control.FOCUS_NONE
+	UiStyle.apply_metal_button(_list_cancel_button)
 	_list_cancel_button.pressed.connect(_on_list_cancel_pressed)
 	buttons.add_child(_list_cancel_button)
 
@@ -523,7 +910,7 @@ func _build_toolbar_overlay() -> void:
 	## ツールバー。地図の上に浮くパネルに、Philly のツールバーの
 	## 並びを、種類(区切りのグループ)ごとに1段ずつ並べる。
 	## パネルの地(ボタンでない所)のドラッグで地図の中を動かせ、
-	## 位置は設定に保持する(全タブ共通。既定は左上)。
+	## 位置は設定に保持する(全タブ共通。既定は右上)。
 	## ボタンの実行はメイン画面の _do_action に任せる。
 	_toolbar_panel = PanelContainer.new()
 	_round_panel(_toolbar_panel)
@@ -534,6 +921,15 @@ func _build_toolbar_overlay() -> void:
 	rows.add_theme_constant_override("separation", 2)
 	rows.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_toolbar_panel.add_child(rows)
+	# パネルの一番上に題名を出す。ドラッグで動かせるよう、
+	# マウスは素通しにしてパネル側で受ける。
+	_toolbar_title = Label.new()
+	_toolbar_title.text = "Command Pallet"
+	_toolbar_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_toolbar_title.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_toolbar_title.add_theme_color_override("font_color", Color(0.85, 0.85, 0.85))
+	_toolbar_title.add_theme_font_size_override("font_size", PhiFont.ui_size_for_zoom(map_view.zoom))
+	rows.add_child(_toolbar_title)
 	var row: HBoxContainer = null
 	for item in PhiActions.TOOLBAR:
 		var action_name := str(item)
@@ -587,6 +983,10 @@ func refresh_toolbar_states() -> void:
 	## ツールバーのボタンの有効・無効と、大声ボタンの押下状態を、
 	## このタブの接続状態に合わせる。
 	var connected := is_session_open()
+	if _talk_button != null:
+		# 無効にはしない (未接続でもドラッグで動かせるように)。
+		# 見た目だけ薄くして、押しても発言しない。
+		_talk_button.modulate = Color.WHITE if connected else Color(0.55, 0.55, 0.6, 0.85)
 	for button in _toolbar_buttons:
 		var action_name := str(button.get_meta("action"))
 		button.disabled = not PhiActions.enabled_when(action_name, connected)
@@ -596,10 +996,21 @@ func refresh_toolbar_states() -> void:
 
 func _toolbar_home_position() -> Vector2:
 	## ツールバーの置き場所。設定に保持した位置があればそれ、
-	## 無ければ地図の左上。
+	## 無ければ地図の右上 (ユーザーの指定 2026-11-17。リスト
+	## パネルの初期位置は左上のまま)。
 	if _config != null and _config.toolbar_pos.x >= 0.0 and _config.toolbar_pos.y >= 0.0:
 		return _config.toolbar_pos
-	return Vector2(8, 8)
+	var panel_w := 0.0
+	if _toolbar_panel != null:
+		panel_w = _toolbar_panel.size.x
+		if panel_w <= 0.0:
+			panel_w = _toolbar_panel.get_combined_minimum_size().x
+	var map_w := 0.0
+	if map_view != null:
+		map_w = map_view.size.x
+	if map_w <= 0.0 or panel_w <= 0.0:
+		return Vector2(8, 8)
+	return Vector2(maxf(8.0, map_w - panel_w - 8.0), 8)
 
 
 func _fit_toolbar_panel() -> void:
@@ -688,7 +1099,7 @@ static func list_title_for_command(command: String, prompt := "") -> String:
 		return "魔法リスト"
 	if prompt.contains("装備"):
 		return "装備リスト"
-	if prompt.contains("アイテム"):
+	if prompt.contains("アイテム") or prompt.contains("宝石"):
 		return "アイテムリスト"
 	return "リスト"
 
@@ -743,6 +1154,8 @@ func _apply_log_css() -> void:
 	_system_color = SkinFiles.parse_css_color(str(ok.get("color", "")))
 	var ng: Dictionary = classes.get("class_system_ng", {})
 	_error_color = SkinFiles.parse_css_color(str(ng.get("color", "")))
+	var time_cls: Dictionary = classes.get("class_time", {})
+	_time_color = SkinFiles.parse_css_color(str(time_cls.get("color", "")))
 
 
 func _on_map_zoom_changed(new_zoom: int) -> void:
@@ -759,12 +1172,30 @@ func refresh_ui_font_size() -> void:
 	if size == _applied_size:
 		return
 	_applied_size = size
+	_style_talk_button(size)
 	log_view.add_theme_font_size_override("font_size", size)
 	log_view.add_theme_font_size_override("normal_font_size", size)
 	log_view.add_theme_font_size_override("bold_font_size", size)
 	log_view.add_theme_font_size_override("italics_font_size", size)
 	log_view.add_theme_font_size_override("bold_italics_font_size", size)
 	log_view.add_theme_font_size_override("mono_font_size", size)
+	# ログの最終行が枠の下端に張り付いて見づらいので、地の
+	# 下マージンで余白を作る。大きさは文字サイズに比例させる。
+	# 地はテーマ共有なので複製して差し替えてから触る。スキンの
+	# 地が付け直されたら、付け直された方を取り直す (取りっぱなし
+	# だと余白が孤児の地に付いて見えなくなる)。
+	var attached_box := log_view.get_theme_stylebox("normal")
+	if attached_box != _log_box:
+		_log_box = attached_box.duplicate() as StyleBox
+		log_view.add_theme_stylebox_override("normal", _log_box)
+	_log_box.content_margin_bottom = maxf(6.0, roundf(float(size) * 0.7))
+	# 行頭の時刻 [HH:MM] は行ごとに絶対サイズで焼き込まれる。
+	# 本文サイズが変わったら (窓リサイズ→ズーム変化など) ログ
+	# 全体を描き直し、時刻の大きさが混ざらないようにする。
+	if _log_render_size != size:
+		_log_render_size = size
+		if not _log_lines.is_empty():
+			_queue_log_rebuild()
 	input_box.add_theme_font_size_override("font_size", size)
 	if world_header != null:
 		world_header.add_theme_font_size_override("font_size", size)
@@ -780,12 +1211,15 @@ func refresh_ui_font_size() -> void:
 	if _list_box != null:
 		_apply_list_font_size(size)
 	# ツールバーのボタンも UI 文字サイズに追従させる
-	# (アイコン付きは 6*zoom + 16 の正方形)。
+	# (アイコン付きは正方形。少し大きくしたいという要望で
+	# 文字サイズ+20 にした)。
+	if _toolbar_title != null:
+		_toolbar_title.add_theme_font_size_override("font_size", size)
 	for button in _toolbar_buttons:
 		button.add_theme_font_size_override("font_size", size)
 		var min_size := Vector2(0, size + 12)
 		if button.icon != null:
-			min_size = Vector2(size + 16, size + 16)
+			min_size = Vector2(size + 20, size + 20)
 		button.custom_minimum_size = min_size
 	_fit_toolbar_panel()
 	# 入力欄の最小の高さは今の文字で2行ぶん。高さ自体は
@@ -803,6 +1237,12 @@ func refresh_ui_font_size() -> void:
 func apply_scroll_stop() -> void:
 	if log_view != null:
 		log_view.scroll_following = not _config.scroll_stop
+
+
+func apply_smooth_scroll() -> void:
+	## 表示メニュー「スムーズマップスクロール」の反映 (第65段)。
+	if map_view != null and _config != null:
+		map_view.smooth_scroll = _config.smooth_scroll
 
 
 func _on_split_resized() -> void:
@@ -888,21 +1328,142 @@ func _on_input_split_dragged(offset: int) -> void:
 
 # -- 接続 --------------------------------------------------------------------
 
+func _maybe_fallback_m81(event: Dictionary) -> void:
+	## 9x9 を要求したのに 9x9 でない地図が届いたら、そのサーバは
+	## size=81 に未対応なので、7x7 を要求し直して表示を続ける。
+	## 落とすのはこの接続のセッションだけで、設定の希望 (81) は
+	## 残すので、対応サーバでは次回も 9x9 で入れる。
+	if _m81_fell_back or session.map_size != 81:
+		return
+	if int(event.get("size", 0)) == 9:
+		return
+	_m81_fell_back = true
+	session.map_size = 57
+	session.send_line("#ex-map size=57")
+	log_message("system", "このサーバは 9x9 マップに未対応のため、7x7 マップで表示します")
+
+
 func connect_to(p_host: String, p_port: int, p_char_id: String) -> void:
 	## 地図の大きさ・様式・魔法表示は、呼ぶ側(_connect_tab)が
 	## セッションに付けてある。
+	if _register != null:
+		_clear_register()
 	host = p_host
 	port = p_port
 	restored_name = ""
 	_save_failed = false
+	_close_handled = false
+	_cut_by_other = false
+	_m81_fell_back = false
 	log_message("system", "%s:%d に接続します..." % [host, port])
 	session.connect_to(host, port, p_char_id)
 	title_changed.emit(tab_title())
 
 
+func connect_register(p_host: String, p_port: int, p_name: String, p_password: String, p_mail: String, p_display_name: String, p_root: String) -> void:
+	## 新規キャラクター作成の接続(第7段、Philly の classNewCharacter)。
+	## ログイン行を作成用に差し替え、受信行フックでサーバの
+	## プロンプトに応答する。成功すると `.phirc` を書いて、
+	## そのまま通常プレイのセッションに移行する。
+	host = p_host
+	port = p_port
+	_close_handled = false
+	_cut_by_other = false
+	restored_name = p_display_name
+	_save_failed = false
+	_register = PhiRegister.new(p_name, p_password, p_mail)
+	_register_display_name = p_display_name
+	_register_root = p_root
+	session.map_size = _config.map_size
+	session.map_style = _config.map_style
+	session.disp_magic = _config.disp_magic
+	session.has_login_override = true
+	session.login_override = PhiRegister.login_lines()
+	session.line_observer = Callable(self, "_on_register_line")
+	log_message("system", "サーバーに接続します...")
+	session.connect_to(host, port, "newuser")
+	title_changed.emit(tab_title())
+
+
+func _clear_register() -> void:
+	## 作成モードを畳む。セッションの差し替えとフックを戻す。
+	_register = null
+	_register_display_name = ""
+	_register_root = ""
+	session.line_observer = Callable()
+	session.has_login_override = false
+	session.login_override = []
+
+
+func _on_register_line(line: String) -> void:
+	## 作成セッションの受信行フック。プロンプトへの応答と、
+	## 成功・失敗の判定をする。プロンプト行そのものは通常どおり
+	## パーサを通ってログに表示される。
+	if _register == null:
+		return
+	for answer in _register.feed(line):
+		session.send_line(answer)
+	if _register.failed:
+		_clear_register()
+		log_message("system", "--- キャラクターの作成に失敗しました ---")
+		disconnect_graceful()
+	elif _register.done:
+		_finish_register()
+
+
+func _finish_register() -> void:
+	## 作成成功。`.phirc` を書き、発行 ID をログに明示して、
+	## 通常セッション用の残りの設定を送る。
+	var id := _register.issued_id
+	var display_name := _register_display_name
+	var root := _register_root
+	_clear_register()
+	_hide_list_overlay()
+	if PhiCharacters.write_phirc(root, display_name, id, host, port):
+		log_message("system", "--- キャラクターの作成が完了しました ---")
+		log_message("system", "発行された ID: %s" % id)
+		log_message("system", "ID は %s として保存しました。この ID でログインします。" % display_name)
+	else:
+		log_message("error", "ID ファイル(.phirc)の保存に失敗しました。発行された ID は %s です。必ず控えてください。" % id)
+	for line in PhiSession.post_register_lines(session.map_size, session.map_style, session.disp_magic):
+		session.send_line(line)
+	register_completed.emit(display_name)
+
+
 func disconnect_graceful() -> void:
+	# ログアウトの完了を待つ間も、押した時点でアニメーションは
+	# 止める (第65段)。
+	_live_stopped = true
+	_live_synced = false
+	if map_view != null:
+		map_view.set_session_live(false)
 	session.disconnect_graceful()
+	# 正常ログアウトの完了待ちなら、閉じた処理は session_closed
+	# シグナルに任せる (サーバのセーブと `#close` を待つ)。
+	if not session.is_logout_pending():
+		_on_session_closed()
+
+
+func disconnect_force() -> void:
+	_live_synced = false
+	if map_view != null:
+		map_view.set_session_live(false)
+	session.disconnect_force()
 	_on_session_closed()
+
+
+## 世界移動の確認への答え (Main のダイアログから)。
+func answer_transfer(yes: bool) -> void:
+	session.answer_transfer(yes)
+
+
+func can_reconnect() -> bool:
+	## 全キャラ接続の対象か。前回の接続先と ID が残っていて、
+	## 接続中でも作成セッション中でもないタブだけが対象になる
+	## (ID はファイルに保存しない決まりなので、復元しただけの
+	## タブは対象外)。
+	return not is_session_open() and _register == null \
+		and not host.is_empty() and not session.char_id.is_empty()
 
 
 func send_line(line: String) -> void:
@@ -912,6 +1473,11 @@ func send_line(line: String) -> void:
 
 func send_text(text: String) -> void:
 	_note_sent(text)
+	# 固定魔法 (cast + 詠唱をまとめて送る) では、サーバが出す
+	# 魔法選択リストは詠唱で答え済みなので表示を抑える (選ぶ
+	# 前から答えが決まっているリストが地図に残らないように)。
+	if PhiActions.is_fixed_spell_text(text):
+		_suppress_lists = 1
 	session.send_text(text)
 
 
@@ -919,8 +1485,30 @@ func _on_session_error(message: String) -> void:
 	log_message("error", message)
 
 
+func _teardown_from_server_close() -> void:
+	## `#close` を受けた時の後始末。まだ開いている扱いなら
+	## セッションを閉じ、切断処理 (ログ含む) を済ませる。
+	if is_session_open():
+		session.disconnect_force()
+	_on_session_closed()
+
+
 func _on_session_closed() -> void:
-	log_message("system", "接続が閉じました")
+	if _close_handled:
+		return
+	_close_handled = true
+	# 切断が確定した時点でアニメーションも止める (第65段)。
+	_live_synced = false
+	if map_view != null:
+		map_view.set_session_live(false)
+	# 作成の途中で切れたら、失敗としてログに出す(第7段)。
+	if _register != null:
+		_clear_register()
+		log_message("system", "--- キャラクターの作成に失敗しました ---")
+	if _cut_by_other:
+		log_message("system", "ほかのクライアントでログインされたため、接続が切り替わりました")
+	else:
+		log_message("system", "接続が閉じました")
 	_held_moves.clear()
 	_hide_list_overlay()
 	# BGM は切断で止める(Philly と同じく曲名も空に戻す)。
@@ -932,6 +1520,8 @@ func _on_session_closed() -> void:
 	refresh_toolbar_states()
 	connection_changed.emit(false)
 	title_changed.emit(tab_title())
+	# 切断時の行まで含めて、自動保存の残りを書き出す。
+	_flush_log_save()
 
 # -- 受信イベント ------------------------------------------------------------
 
@@ -943,6 +1533,19 @@ func _on_event(event: Dictionary) -> void:
 			var plain := PhiTags.plain_text(raw)
 			_collect_image_refs(raw)
 			log_message(channel, plain, raw)
+			# サーバからの「ほかのクライアントが接続した」という
+			# 知らせ。切断時のログで理由が分かるよう覚えておく。
+			if plain.contains("accessed by other"):
+				_cut_by_other = true
+			# リストの見出しの付け直し。サーバはリスト本体の後に
+			# 「〜を選択して下さい」の文を送る (装備を外すリスト
+			# など)。開いた時点では直前に送ったコマンドからしか
+			# 種類を決められないので、選択の文が届いたら、それに
+			# 合わせて見出しを直す。
+			if _list_active and _list_header != null and plain.contains("選択して下さい"):
+				var retitle := list_title_for_command("", plain)
+				if retitle != "リスト":
+					_list_header.text = retitle
 			# 効果音(第5段)。ログ行ごとに照合する。削除フィルタで
 			# 表示されない行でも鳴る(Philly と同じく表示とは独立)。
 			if _sound_engine != null:
@@ -957,6 +1560,8 @@ func _on_event(event: Dictionary) -> void:
 				map_view.show_log_bubble(raw, plain)
 			elif channel in ["talk", "priv"]:
 				var from_ := str(event.get("from", ""))
+				if channel == "priv" and not from_.is_empty() and from_ != _player_name:
+					_play_se("priv.wav")
 				if not from_.is_empty():
 					var body := PhiBubbles.bubble_body(plain)
 					if not body.is_empty():
@@ -977,10 +1582,14 @@ func _on_event(event: Dictionary) -> void:
 				_area = str(event["area"])
 			if event.has("mapset"):
 				_mapset = str(event["mapset"])
+			if event.has("mapsetDefine"):
+				var md: Array = event["mapsetDefine"]
+				if md.size() >= 2:
+					_defines[int(md[0])] = str(md[1])
 			_update_side_info()
 		"cond":
 			if status_panel != null:
-				status_panel.set_conditions(bool(event.get("poison", false)), bool(event.get("panic", false)))
+				status_panel.set_conditions_all(event)
 		"dispMagic":
 			map_view.spawn_disp_magic(event["data"])
 		"bgm":
@@ -996,16 +1605,25 @@ func _on_event(event: Dictionary) -> void:
 				bgm_speed = new_speed
 				bgm_changed.emit()
 		"map":
+			_maybe_fallback_m81(event)
+			_resolve_bump_watch(event)
+			_learn_self_gra(event)
+			if int(event.get("size", 7)) == 5:
+				_fixup_classic_self(event)
 			_demo_chars = event.get("chars", [])
 			_demo_dim = MapView.grid_dim(int(event.get("size", 7)))
 			_map_dim_now = int(event.get("size", 0))
 			if event.has("style"):
 				_map_style_now = str(event["style"])
-			map_view.set_map(event, _assets, _mapset)
+			map_view.set_map(event, _assets, _mapset, _defines)
 			map_view.set_compass_direction(int(event.get("dir", 0)), north_fix_now())
+			map_view.set_compass_mode_style(effective_map_style())
+			map_view.set_map_style(effective_map_style())
 			_repeat_on_map()
 		"eagleEye":
+			_play_se("scan.wav")
 			log_message("system", "EagleEye %dx%d" % [int(event.get("width", 0)), int(event.get("height", 0))])
+			eagle_eye_received.emit(event, _assets, _mapset, float(map_view.zoom), _defines.duplicate())
 		"list":
 			_show_list(event)
 		"userList":
@@ -1014,13 +1632,26 @@ func _on_event(event: Dictionary) -> void:
 				_users.append({"key": str(user.get("key", "")), "name": str(user.get("name", ""))})
 			users_changed.emit()
 		"edit":
-			log_message("system", "編集モード: %s" % str(event.get("mode", "")))
-		"worldTransfer":
-			log_message("system", "世界移動の要求がありました(試作では未対応): %s" % str(event.get("server", "")))
+			var edit_mode := str(event.get("mode", ""))
+			if edit_mode == "multi":
+				# 看板の複数行編集。専用窓は Main が開く。
+				log_message("system", "看板を書いています。")
+				edit_requested.emit("multi")
+			elif edit_mode == "single":
+				# 1行の答え (Philly 自身は空実装、Python 版の振る舞い)。
+				log_message("system", "1行の答えを打ってください。")
+				input_box.grab_focus()
+			else:
+				edit_requested.emit("end")
 		"connection":
+			# サーバが #close を送ってきた時点で接続は終わって
+			# いる。ソケットの死活検出を待たず、切断として
+			# 確定させる (取り違え防止のため次のフレームで)。
 			log_message("system", "サーバから切断されました")
+			_teardown_from_server_close.call_deferred()
 		"mode":
-			pass
+			if status_panel != null:
+				status_panel.set_mode(bool(event.get("attack", false)), bool(event.get("magic", false)))
 
 
 func _collect_image_refs(raw: String) -> void:
@@ -1037,36 +1668,426 @@ func log_message(channel: String, text: String, raw: String = "") -> void:
 	if raw.is_empty():
 		raw = text
 	var prefix := ""
-	var color: Variant = null
 	match channel:
 		"talk":
 			prefix = "[発言] "
 		"priv":
 			prefix = "[priv] "
-		"system":
+		"system", "error":
 			prefix = "[お知らせ] "
-			color = _system_color
-		"error":
-			prefix = "[お知らせ] "
-			color = _error_color
 	var plain_lines := text.split("\n")
 	var raw_lines := raw.split("\n")
 	var use_filter := _config.log_delete_filter and _log_filter != null and channel in ["log", "talk", "priv"]
-	if color != null:
-		log_view.push_color(color)
 	for i in range(plain_lines.size()):
 		var plain_line: String = plain_lines[i]
 		var raw_line := raw_lines[mini(i, raw_lines.size() - 1)]
 		if use_filter and _log_filter.matches(plain_line):
 			continue
 		var display := prefix + plain_line
-		log_view.append_text(bbcode_line(display) + "\n")
-		_log_lines.append({"display": display, "raw": raw_line, "prefix": prefix})
+		var entry := {"display": display, "raw": raw_line, "prefix": prefix, "channel": channel, "time": "", "imgs": []}
+		if _config.log_disp_time:
+			# 行頭に [HH:MM] (Philly LogDispTime、Python 版と同じ)。
+			# 記録 (コピー・保存用) の display には入れない。出した
+			# 時刻を entry に残し、描き直しでも同じ時刻で出す。
+			entry["time"] = Time.get_time_string_from_system(false).substr(0, 5)
+		var spans := PhiImages.tag_spans(raw_line)
+		if not spans.is_empty():
+			var urls: Array = []
+			for span in spans:
+				urls.append(str(span["url"]))
+			entry["imgs"] = urls
+			if _config.log_image_disp:
+				for url in urls:
+					_ensure_image_fetch(str(url))
+		_append_log_entry(entry)
+		_log_lines.append(entry)
 		_save_log_line(prefix, plain_line, raw_line)
 	while _log_lines.size() > MAX_LOG_LINES:
 		_log_lines.remove_at(0)
+
+
+func _entry_bbcode(color: Variant, segments: Array) -> String:
+	## 1行ぶんの bbcode 文字列 (色指定と改行を含む)。
+	var bb := ""
+	if color != null:
+		bb += "[color=#%s]" % (color as Color).to_html(false)
+	for segment in segments:
+		bb += str(segment["bb"])
+	bb += "\n"
+	if color != null:
+		bb += "[/color]"
+	return bb
+
+
+func _entry_color(channel: String) -> Variant:
+	## チャンネルに対応するログ色 (無ければ null = 既定色)。
+	if channel == "system":
+		return _system_color
+	if channel == "error":
+		return _error_color
+	return null
+
+
+func _append_log_entry(entry: Dictionary) -> void:
+	## 記録した1行をログ欄へ出す。画像が届いた後の描き直しでも
+	## 同じ結果になるよう、entry の情報だけで描く。
+	var channel := str(entry.get("channel", "log"))
+	var color: Variant = _entry_color(channel)
+	# 画像タグを含む行は従来どおり即時に出す。それ以外の行は、
+	# 受信処理の間は下準備 (タグ解析・bbcode 化) をせず entry
+	# のまま溜め、表示の時に下準備する (第65段: 大量行の受信を
+	# 表示コストで詰まらせない)。表示待ちが残っている時も、
+	# 順番が入れ替わらないよう即時に出さず後ろに並べる。
+	var may_img := false
+	if _config != null and _config.log_image_disp:
+		var raw_probe := str(entry.get("raw", ""))
+		var disp_probe := str(entry.get("display", ""))
+		may_img = raw_probe.contains("/*img=") or raw_probe.contains("/*image=") \
+			or disp_probe.contains("/*img=") or disp_probe.contains("/*image=")
+	if not may_img and (_log_batching or (not _log_rebuilding and not _log_batch.is_empty())):
+		_log_batch.append(entry)
+		return
+	var segments := _log_line_segments(entry)
+	var follow := _log_at_bottom()
+	if color != null:
+		log_view.push_color(color)
+	for segment in segments:
+		if segment.has("img"):
+			_append_log_image(str(segment["img"]))
+		else:
+			log_view.append_text(str(segment["bb"]))
+	log_view.append_text("\n")
 	if color != null:
 		log_view.pop()
+	_log_view_lines += 1
+	if follow and (_config == null or not _config.scroll_stop):
+		_pin_bottom_pending = true
+
+
+func _log_line_segments(entry: Dictionary) -> Array:
+	## 1行を [ {bb: ...} / {img: url} ] の並びにする。画像表示が
+	## on で、タグの画像が取得済みの時だけ画像の断片になる。
+	## それ以外は従来どおり1つの文字列 (タグがあれば効かせ、
+	## 画像タグは [画像: URL] の文字で出す)。
+	var prefix := str(entry.get("prefix", ""))
+	var raw_line := str(entry.get("raw", ""))
+	var display := str(entry.get("display", ""))
+	var stamp := str(entry.get("time", ""))
+	var head := ""
+	if not stamp.is_empty():
+		head = time_prefix_bbcode(stamp)
+	var spans: Array = []
+	if _config.log_image_disp:
+		for span in PhiImages.tag_spans(raw_line):
+			if _img_textures.has(str(span["url"])):
+				spans.append(span)
+	if spans.is_empty():
+		var shown_bb := ""
+		if raw_line != display.substr(prefix.length()):
+			# サーバ由来の行にタグが含まれていたら、タグを効かせて
+			# 出す (看板や掲示板の読み返しが、エディタのプレビューと
+			# 同じ見た目になる)。記録用の display は従来どおり
+			# タグ無しの素の文字のまま。
+			shown_bb = bbcode_line(prefix) + tagged_bbcode_line(raw_line, log_view.get_theme_font_size("normal_font_size"))
+		else:
+			shown_bb = bbcode_line(display)
+		return [{"bb": head + shown_bb}]
+	# 画像を挟んで前後に分ける。前置き (時刻と接頭辞) は最初の
+	# 文字の断片に付け、文字が無ければ単独の断片にする。
+	var segments: Array = []
+	var pos := 0
+	var first := true
+	var font_size := log_view.get_theme_font_size("normal_font_size")
+	for span in spans:
+		var start := int(span["start"])
+		if start > pos:
+			var raw_seg := raw_line.substr(pos, start - pos)
+			segments.append({"bb": _segment_bbcode(raw_seg, font_size)})
+		elif first:
+			segments.append({"bb": ""})
+		segments.append({"img": str(span["url"])})
+		pos = int(span["end"])
+		first = false
+	if pos < raw_line.length():
+		segments.append({"bb": _segment_bbcode(raw_line.substr(pos), font_size)})
+	# 先頭の断片へ前置きを付ける。
+	var first_bb := head + bbcode_line(prefix)
+	if not segments.is_empty() and segments[0].has("bb"):
+		segments[0] = {"bb": first_bb + str(segments[0]["bb"])}
+	else:
+		segments.insert(0, {"bb": first_bb})
+	return segments
+
+
+func _segment_bbcode(raw_seg: String, font_size: int) -> String:
+	## 画像で区切られた文字の断片を BBCode にする (行全体の時と
+	## 同じ規則: タグがあれば効かせ、URL はリンクにする)。
+	var plain_seg := PhiTags.plain_text(raw_seg)
+	if raw_seg != plain_seg:
+		return tagged_bbcode_line(raw_seg, font_size)
+	return bbcode_line(plain_seg)
+
+
+func _append_log_image(url: String) -> void:
+	## 取得済みの画像を行内へ出す。ログ欄の幅いっぱいに合わせる
+	## (小さい画像は拡大する。他クライアントのバナー表示と同じ)。
+	## 極端に背の高い画像は高さでも制限する。タグに width/height
+	## の指定は今は使わない (Philly と同じく欄幅に合わせる)。
+	var tex: Texture2D = _img_textures.get(url, null)
+	if tex == null:
+		log_view.append_text(bbcode_line("[画像: " + url + "]"))
+		return
+	var natural := Vector2(tex.get_width(), tex.get_height())
+	var avail := maxf(40.0, log_view.size.x - 20.0)
+	var scale := avail / maxf(1.0, natural.x)
+	if natural.y * scale > 320.0:
+		scale = 320.0 / maxf(1.0, natural.y)
+	log_view.add_image(tex, int(natural.x * scale), int(natural.y * scale))
+
+
+static func store_image_texture(url: String, tex: Texture2D) -> void:
+	## 取得した画像を共有キャッシュへ入れる (取得経路とテスト用)。
+	_img_textures[url] = tex
+
+
+static func image_texture(url: String) -> Variant:
+	return _img_textures.get(url, null)
+
+
+func image_state(url: String) -> String:
+	## 画像の状態 (テスト・確認用): cached/failed/loading/queued/""。
+	if _img_textures.has(url):
+		return "cached"
+	if _img_failed.has(url):
+		return "failed"
+	if _img_requests.has(url):
+		return "loading"
+	if _img_queue.has(url):
+		return "queued"
+	return ""
+
+
+func _ensure_image_fetch(url: String) -> void:
+	## 画像タグの URL を取りに行く。同時4件まで、残りは待ち行列。
+	if not _config.log_image_disp:
+		return
+	if _img_textures.has(url) or _img_failed.has(url) or _img_requests.has(url) or _img_queue.has(url):
+		return
+	var parsed := PhiImages.parse_url(url)
+	if parsed.is_empty():
+		return
+	var scheme := str(parsed["scheme"])
+	if scheme != "http" and scheme != "https":
+		return
+	if _img_requests.size() >= 4:
+		_img_queue.append(url)
+		return
+	var req := HTTPRequest.new()
+	req.body_size_limit = PhiImages.MAX_IMAGE_BYTES
+	req.max_redirects = 5
+	req.timeout = 15.0
+	req.request_completed.connect(_on_image_fetched.bind(url))
+	add_child(req)
+	_img_requests[url] = req
+	var err := req.request(url, ["User-Agent: NeoPHI"])
+	if err != OK:
+		_img_requests.erase(url)
+		req.queue_free()
+		_img_failed[url] = true
+
+
+func _on_image_fetched(result: int, response_code: int, _headers: PackedStringArray, body: PackedByteArray, url: String) -> void:
+	var req: Variant = _img_requests.get(url, null)
+	_img_requests.erase(url)
+	if req != null and is_instance_valid(req):
+		req.queue_free()
+	var tex: Texture2D = null
+	if result == HTTPRequest.RESULT_SUCCESS and response_code == 200:
+		var img := PhiImages.decode_image(body)
+		if img != null:
+			tex = ImageTexture.create_from_image(img)
+	if tex != null:
+		_img_textures[url] = tex
+		_queue_log_rebuild()
+	else:
+		_img_failed[url] = true
+	while not _img_queue.is_empty() and _img_requests.size() < 4:
+		var next_url: String = _img_queue.pop_front()
+		_ensure_image_fetch(next_url)
+
+
+func _on_log_view_resized() -> void:
+	## ログ欄の幅が変わったら、埋め込み画像を幅に合わせ直す
+	## (描き直しは既存の仕組みに寄せ、幅が少し動いただけでは
+	## 揺らさない)。
+	if _log_lines.is_empty() or log_view == null:
+		return
+	if absf(log_view.size.x - _img_fit_width) < 8.0:
+		return
+	for entry in _log_lines:
+		if not (entry.get("imgs", []) as Array).is_empty():
+			_queue_log_rebuild()
+			return
+
+
+func _queue_log_rebuild() -> void:
+	## 画像が届いたので、ログ欄を記録から描き直す (まとめて1回)。
+	if _img_rebuild_queued:
+		return
+	_img_rebuild_queued = true
+	call_deferred("_rebuild_log_view")
+
+
+## 1回の表示で出す最大行数と時間 (ミリ秒)。残りは次の
+## フレームで出す。表示処理でフレームを止めないため。
+const LOG_FLUSH_MAX_LINES := 40
+const LOG_FLUSH_BUDGET_MSEC := 6
+## 表示待ちがこの行数を超えたら、追いつくために1回ぶんを
+## 増やす (第65段)。
+const LOG_FLUSH_CATCHUP_LINES := 500
+const LOG_FLUSH_CATCHUP_MAX := 200
+const LOG_FLUSH_CATCHUP_BUDGET_MSEC := 12
+## 未処理の受信行がこれを超えたら大量行の最中とみなし、
+## 表示を止めて受信に専念する (第65段)。サーバ側は、こちらの
+## 受信が滞ると送信バッファ溢れや無進捗タイムアウトで切断
+## するため、表示の凍結より接続の維持を優先する。
+const FLOOD_PENDING_LINES := 300
+## ログ欄の行数がこれを超えたら、記録 (上限2000行) から
+## 描き直して切り詰める。
+const LOG_VIEW_TRIM_LINES := 3200
+
+
+func _flooding() -> bool:
+	## 大量行の受信中か (表示系が手を引く判断に使う)。
+	return session != null and session.pending_line_count() > FLOOD_PENDING_LINES
+
+
+func _flush_log_batch() -> void:
+	## 溜めたログ行をログ欄へ出す。1回に出す量は行数と時間で
+	## 区切る (第62段)。大量行の表示が終わるまで数フレーム
+	## かかるが、その間も受信は止まらない。溜めた entry の
+	## 下準備 (タグ解析・bbcode 化) はここでまとめて行う
+	## (第65段)。大量行の受信中は表示自体を止める。
+	if _log_batch.is_empty():
+		return
+	if log_view == null or not is_instance_valid(log_view):
+		_log_batch.clear()
+		return
+	if _flooding():
+		return
+	var start := Time.get_ticks_msec()
+	var follow := _log_at_bottom()
+	var max_lines := LOG_FLUSH_MAX_LINES
+	var budget := LOG_FLUSH_BUDGET_MSEC
+	if _log_batch.size() > LOG_FLUSH_CATCHUP_LINES:
+		max_lines = LOG_FLUSH_CATCHUP_MAX
+		budget = LOG_FLUSH_CATCHUP_BUDGET_MSEC
+	var out := ""
+	var n := 0
+	while not _log_batch.is_empty() and n < max_lines:
+		var item: Variant = _log_batch.pop_front()
+		if item is Dictionary:
+			out += _entry_bbcode(_entry_color(str(item.get("channel", "log"))), _log_line_segments(item))
+		else:
+			out += str(item)
+		n += 1
+		if n % 8 == 0 and Time.get_ticks_msec() - start >= budget:
+			break
+	if not out.is_empty():
+		log_view.append_text(out)
+		_log_view_lines += n
+		if follow and (_config == null or not _config.scroll_stop):
+			_pin_bottom_pending = true
+
+
+func log_display_backlog() -> int:
+	## 表示待ちの行数 (テストや描き直しの後回し判定に使う)。
+	return _log_batch.size()
+
+
+func _rebuild_log_view() -> void:
+	_img_rebuild_queued = false
+	if log_view == null or not is_instance_valid(log_view):
+		return
+	# 大量行の受信が残っている間は、全体の描き直し (一番重い
+	# 処理) を後回しにする。受信が捌けてから改めて描き直す。
+	# (call_deferred の連鎖ではなくタイマーで再確認する。)
+	if (session != null and session.pending_line_count() > 200) or _log_batch.size() > 200:
+		_img_rebuild_queued = true
+		get_tree().create_timer(0.3).timeout.connect(_rebuild_log_view)
+		return
+	# 表示待ちの行は記録 (_log_lines) にも入っているので、
+	# ここで捨てて描き直しに含める (二重に出さない)。
+	_log_batch.clear()
+	var bar := log_view.get_v_scroll_bar()
+	var ratio := 0.0
+	var was_bottom := true
+	if bar != null and bar.max_value > 0.0:
+		ratio = bar.value / bar.max_value
+		was_bottom = ratio > 0.98
+	log_view.clear()
+	_log_view_lines = 0
+	_log_rebuilding = true
+	for entry in _log_lines:
+		_append_log_entry(entry)
+	_log_rebuilding = false
+	_img_fit_width = log_view.size.x
+	if bar != null:
+		var saved_ratio := ratio
+		var saved_bottom := was_bottom
+		call_deferred("_restore_log_scroll", saved_ratio, saved_bottom)
+
+
+func _pin_log_bottom() -> void:
+	## ログのスクロールを最下部に合わせる。
+	if log_view == null or not is_instance_valid(log_view):
+		return
+	var bar := log_view.get_v_scroll_bar()
+	if bar != null:
+		bar.value = bar.max_value
+
+
+func _log_at_bottom() -> bool:
+	## スクロールがほぼ最下部にあるか (行追加の前の状態で見る)。
+	## レイアウトの遅れで最大値が少し先に育つ分を見込んで、
+	## 1行半ほど手前でも「最下部にいる」とみなす。
+	if log_view == null or not is_instance_valid(log_view):
+		return false
+	var bar := log_view.get_v_scroll_bar()
+	if bar == null or bar.max_value <= 0.0:
+		return true
+	var bottom := bar.max_value - bar.page
+	if bottom <= 0.0:
+		return true
+	var slack := 24.0
+	if _log_render_size > 0:
+		slack = float(_log_render_size) * 1.5
+	return bar.value >= bottom - slack
+
+
+func _restore_log_scroll(ratio: float, was_bottom: bool) -> void:
+	if log_view == null or not is_instance_valid(log_view):
+		return
+	var bar := log_view.get_v_scroll_bar()
+	if bar == null:
+		return
+	if was_bottom:
+		bar.value = bar.max_value
+		# 描き直しの直後はレイアウトがまだ落ち着かず、最大値が
+		# ずれ続けることがある。少しの間、最下部に留め続ける。
+		_stick_log_bottom_until = maxf(_stick_log_bottom_until, Time.get_ticks_msec() / 1000.0 + 1.5)
+	else:
+		bar.value = ratio * bar.max_value
+
+
+func refresh_log_images() -> void:
+	## 設定で画像表示を on にした時など、記録にある画像タグを
+	## 取り直して描き直す。
+	if _config.log_image_disp:
+		for entry in _log_lines:
+			for url in entry.get("imgs", []):
+				_ensure_image_fetch(str(url))
+	_queue_log_rebuild()
 
 
 func _save_log_line(prefix: String, plain_line: String, raw_line: String) -> void:
@@ -1079,10 +2100,29 @@ func _save_log_line(prefix: String, plain_line: String, raw_line: String) -> voi
 	var char_name := _player_name
 	if char_name.is_empty():
 		char_name = "%s_%d" % [host, port] if not host.is_empty() else "character"
-	var ok := PhiLogFile.append_line(_config.log_save_dir, char_name, _config.log_save_html, line)
+	# 保存先が変わったら、先に溜まっている分を書き出す。
+	var key: Array = [_config.log_save_dir, char_name, _config.log_save_html]
+	if key != _save_key:
+		_flush_log_save()
+		_save_key = key
+	_save_pending.append(line)
+	if _save_pending.size() >= 100:
+		_flush_log_save()
+
+
+func _flush_log_save() -> void:
+	## 溜めた自動保存の行をまとめて書き出す。書く先は _save_key。
+	## 失敗の通知は従来どおり 1 回だけ、ログへ直接出す。
+	if _save_pending.is_empty() or _save_key.size() < 3:
+		_save_pending.clear()
+		return
+	var lines := _save_pending.duplicate()
+	_save_pending.clear()
+	var ok := PhiLogFile.append_lines(str(_save_key[0]), str(_save_key[1]), bool(_save_key[2]), lines)
 	if not ok and not _save_failed:
 		_save_failed = true
-		log_view.append_text(bbcode_line("[お知らせ] ログの自動保存に失敗しました: " + _config.log_save_dir) + "\n")
+		if log_view != null and is_instance_valid(log_view):
+			log_view.append_text(bbcode_line("[お知らせ] ログの自動保存に失敗しました: " + str(_save_key[0])) + "\n")
 
 
 ## 今のログ記録をその場でファイルに書き出す(手動保存、残り項目)。
@@ -1146,6 +2186,23 @@ static func url_spans(text: String) -> Array:
 	return spans
 
 
+func time_prefix_bbcode(stamp: String) -> String:
+	## 行頭の [HH:MM] を Philly 風に色付きで出す BBCode。
+	## 色はスキンの Log.css の .class_time (Philly の既定スキンは teal、
+	## 読めなければ #008080)、大きさは本文の 90% (Philly の指定どおり)。
+	var col := "008080"
+	if _time_color != null:
+		var c: Color = _time_color
+		col = c.to_html(false)
+	var seg := "[color=#" + col + "][lb]" + stamp + "[rb] [/color]"
+	var fs := log_view.get_theme_font_size("font_size")
+	if fs <= 0:
+		fs = log_view.get_theme_font_size("normal_font_size")
+	if fs >= 8:
+		seg = "[font_size=%d]" % maxi(1, int(round(fs * 0.9))) + seg + "[/font_size]"
+	return seg
+
+
 static func bbcode_line(text: String) -> String:
 	## ログ表示用に、テキストをエスケープし、URL をクリック
 	## 可能なリンクにする。URL が無ければエスケープだけ。
@@ -1164,6 +2221,26 @@ static func bbcode_line(text: String) -> String:
 	return out
 
 
+static func tagged_bbcode_line(raw: String, base_size: int) -> String:
+	## タグ入りの行の表示用 BBCode。タグは PhiTags で BBCode に
+	## 変え (看板エディタのプレビューと同じ変換)、URL は
+	## bbcode_line と同じ形のリンクにする。
+	var text := PhiTags.tagged_text(raw)
+	var spans := url_spans(text)
+	if spans.is_empty():
+		return PhiTags.to_bbcode(text, base_size)
+	var out := ""
+	var pos := 0
+	for span in spans:
+		var start: int = span[0]
+		var url: String = span[1]
+		out += PhiTags.to_bbcode(text.substr(pos, start - pos), base_size)
+		out += "[url=" + url + "][color=#" + LOG_LINK_COLOR + "][u]" + escape_bbcode(url) + "[/u][/color][/url]"
+		pos = start + url.length()
+	out += PhiTags.to_bbcode(text.substr(pos), base_size)
+	return out
+
+
 func _on_log_meta_clicked(meta: Variant) -> void:
 	## リンクのクリックでブラウザを開く。開くのは http/https
 	## だけ(リンクは自前で作るので、それ以外は来ない想定)。
@@ -1177,9 +2254,34 @@ func _update_status(event: Dictionary) -> void:
 		_player_name = str(event["name"])
 		map_view.player_name = _player_name
 		title_changed.emit(tab_title())
+	if event.has("exp"):
+		_exp = int(event["exp"])
 	if status_panel != null:
 		status_panel.set_status(event)
 	_update_side_info()
+	status_changed.emit()
+
+
+## 現在の EXP。まだ #status が来ていなければ 0。
+func current_exp() -> int:
+	return _exp
+
+
+func _update_world_header_plate() -> void:
+	## 世界名ヘッダーの地を、大きさに合わせた金属プレートに
+	## 差し替える(ユーザーの要望)。作れなければ単色のまま。
+	if world_header == null:
+		return
+	var tex := UiStyle.plate_texture(Vector2i(world_header.size))
+	if tex == null:
+		return
+	var box := StyleBoxTexture.new()
+	box.texture = tex
+	box.content_margin_left = 6
+	box.content_margin_right = 6
+	box.content_margin_top = 0
+	box.content_margin_bottom = 0
+	world_header.add_theme_stylebox_override("normal", box)
 
 
 func _update_side_info() -> void:
@@ -1438,6 +2540,7 @@ func _send_list_row(index: int) -> void:
 
 
 func _send_list_answer(answer: String) -> void:
+	_play_se("decide.wav")
 	session.send_line(answer)
 	_hide_list_overlay()
 
@@ -1526,13 +2629,77 @@ func _list_move_selection(delta: int) -> void:
 
 # -- 移動の繰り返しと北固定 --------------------------------------------------
 
+func refresh_compass_mode() -> void:
+	## メニューで地図モードを切り替えた直後に、コンパスの様式表示を
+	## 先に合わせる(次の地図イベントを待たない)。
+	if map_view != null:
+		map_view.set_compass_mode_style(effective_map_style())
+		map_view.set_map_style(effective_map_style())
+
+
+func effective_map_style() -> String:
+	## 実際に効いている様式。5x5(クラシック地図)はサーバ側で常に
+	## 自分の向きに回るので、指定が北固定でも「回転」として扱う
+	## (Philly も !ExMapSize57 の時は回転マップ扱い)。
+	var dim := _map_dim_now if _map_dim_now > 0 else MapView.grid_dim(session.map_size)
+	if dim == 5:
+		return "turn"
+	return _map_style_now if not _map_style_now.is_empty() else session.map_style
+
+
+var _self_gra := ""
+
+
+func _learn_self_gra(event: Dictionary) -> void:
+	## 自分のグラ名を地図イベントから覚える(5x5 で自分を合成する時
+	## に使う)。#m57 では自分も O 行で来る。
+	if _player_name.is_empty():
+		return
+	for ch_var in event.get("chars", []):
+		var ch: Dictionary = ch_var
+		if str(ch.get("name", "")) == _player_name and not str(ch.get("gra", "")).is_empty():
+			_self_gra = str(ch["gra"])
+
+
+func _fixup_classic_self(event: Dictionary) -> void:
+	## 5x5 ではサーバは自分を送らない(キャラグラ変更済みの旧
+	## クライアント向けに、名前欄が空の自分行が (2, 3) に来る事は
+	## ある)。自分のマス (2, 3) は視界の中心で、向きは常に B。
+	## 名前なしの行があれば自分の名前にし、無ければ合成して足す。
+	var chars: Array = event.get("chars", [])
+	var has_self := false
+	for ch_var in chars:
+		var ch: Dictionary = ch_var
+		if int(ch.get("x", -1)) == 2 and int(ch.get("y", -1)) == 3 and str(ch.get("name", "")).is_empty():
+			ch["name"] = _player_name
+			if not str(ch.get("gra", "")).is_empty():
+				_self_gra = str(ch["gra"])
+			has_self = true
+	if not has_self:
+		chars.append({
+			"id": -1, "x": 2, "y": 3, "dir": "B",
+			"name": _player_name, "gra": _self_gra,
+			"status": 0x40, "gigant": "#", "layer": 12, "default": 0x40,
+		})
+		event["chars"] = chars
+
+
 func north_fix_now() -> bool:
 	## 移動キー表を北固定にするか。Philly は「地図の大きさが 57 で
-	## 様式が回転でない時」に北固定表を使う。地図イベントの size は
-	## マスの数(7 が 57、5 が 40)なので、7 と比べる。
-	var dim := _map_dim_now if _map_dim_now > 0 else MapView.grid_dim(session.map_size)
+	## 様式が回転でない時」に北固定表を使う。9x9 (81) も北固定では
+	## 同じ扱いにする。地図イベントの size はマスの数 (7 が 57、
+	## 5 が 40、9 が 81) なので、セッションのプロトコル値から戻す。
+	var dim := _map_dim_now
+	if dim <= 0:
+		match session.map_size:
+			40:
+				dim = 5
+			81:
+				dim = 9
+			_:
+				dim = 7
 	var style := _map_style_now if not _map_style_now.is_empty() else session.map_style
-	return dim == 7 and style != "turn"
+	return (dim == 7 or dim == 9) and style != "turn"
 
 
 func press_held_move(key_event: InputEventKey, key: String, mods: String) -> void:
@@ -1579,6 +2746,19 @@ func _repeat_fallback_tick() -> void:
 	_repeat_send_if_ready()
 
 
+func _send_held_step() -> void:
+	## 押し続けているキーから合成した一歩を送る
+	## (同時押しは斜めの2行になる)。
+	var steps := PhiKeys.compose_held(_held_moves)
+	if steps.is_empty():
+		return
+	var commands: Array[String] = []
+	for step in steps:
+		commands.append(PhiKeys.move_command(str(step[0]), str(step[1]), north_fix_now()))
+	session.send_text("\n".join(commands))
+	_arm_bump_watch()
+
+
 func _repeat_send_if_ready() -> void:
 	if _held_moves.is_empty():
 		return
@@ -1589,8 +2769,7 @@ func _repeat_send_if_ready() -> void:
 		return
 	if _last_repeat_send > 0 and now - _last_repeat_send < REPEAT_MIN_INTERVAL_MS:
 		return
-	var held: Dictionary = _held_moves[_held_moves.size() - 1]
-	session.send_line(PhiKeys.move_command(str(held["key"]), str(held["mods"]), north_fix_now()))
+	_send_held_step()
 	_last_repeat_send = now
 
 
@@ -1687,13 +2866,27 @@ func confirm_loud_all() -> void:
 # -- 入力欄の送信と履歴 ------------------------------------------------------
 
 func _on_input_text_changed() -> void:
-	## 編集で文が短くなったら、履歴の境界を文の長さに寄せる。
-	_history_boundary = PhiInputHistory.clamp_boundary(input_box.text, _history_boundary)
+	## 履歴部分が書き換えられたら、その行が下書きに戻るよう
+	## 境界を戻す。編集位置は前回の文との最初の相違で知る。
+	## 下書きだけの編集なら境界は長さへのクランプのみ。
+	## (text_changed は API 経由の編集では来ないことがあるため、
+	## 送信時にも同じ照合を行う)
+	_history_boundary = PhiInputHistory.retreat_boundary(_input_snapshot, input_box.text, _history_boundary)
+	_input_snapshot = input_box.text
+
+
+func _sync_input_snapshot() -> void:
+	## プログラム側で入力欄の文を変えたあと、照合の基準を合わせる。
+	_input_snapshot = input_box.text
 
 
 func submit_input(party: bool = false) -> void:
 	## 下書き部分だけを送り、送った文は履歴として残す。
 	## 大声の確認が必要なら、送らずにダイアログを頼む。
+	## 送信の前に、履歴部分の書き換えを境界へ反映する
+	## (text_changed が来ない編集経路でも効くように)。
+	_history_boundary = PhiInputHistory.retreat_boundary(_input_snapshot, input_box.text, _history_boundary)
+	_sync_input_snapshot()
 	_history_boundary = PhiInputHistory.clamp_boundary(input_box.text, _history_boundary)
 	var draft := PhiInputHistory.draft_of(input_box.text, _history_boundary)
 	if draft.is_empty():
@@ -1742,6 +2935,7 @@ func _advance_history() -> void:
 	var result := PhiInputHistory.advance(input_box.text, _history_boundary)
 	input_box.text = str(result["text"])
 	_history_boundary = int(result["boundary"])
+	_sync_input_snapshot()
 	var last := maxi(input_box.get_line_count() - 1, 0)
 	input_box.set_caret_line(last, true, true, 0, false)
 	input_box.set_caret_column(input_box.get_line(last).length())
@@ -1753,6 +2947,7 @@ func clear_input_history() -> void:
 	var result := PhiInputHistory.clear_history(input_box.text, _history_boundary)
 	input_box.text = str(result["text"])
 	_history_boundary = int(result["boundary"])
+	_sync_input_snapshot()
 	var last := maxi(input_box.get_line_count() - 1, 0)
 	input_box.set_caret_line(last, true, true, 0, false)
 	input_box.set_caret_column(input_box.get_line(last).length())
@@ -1767,9 +2962,22 @@ func do_send_action(action_name: String) -> void:
 	## 次のリストを抑える。Philly NextListCancel)。
 	if action_name.length() == 5 and action_name.begins_with("Cast"):
 		_suppress_lists = 1
+	var was_list := _list_active
 	mark_list_answered()
 	var action_text := PhiActions.send_text_for(action_name)
+	# 固定魔法 (cast + 詠唱) では、サーバが出す魔法選択リストは
+	# 詠唱で答え済みなので表示を抑える (Cast1〜7 と同じ)。
+	if PhiActions.is_fixed_spell_text(action_text):
+		_suppress_lists = 1
 	_note_sent(action_text)
+	if PhiActions.is_system_magic(action_name):
+		# 系統魔法は、開いているリストを閉じてからセッションへ渡し、
+		# unequip を先に送らせる (Python 版 GUI と同じ)。
+		if was_list:
+			session.close_list()
+		session.send_system_magic(
+			action_text, PhiActions.system_magic_reequip(action_name))
+		return
 	session.send_text(action_text)
 
 
@@ -1891,6 +3099,9 @@ func _show_copy_popup() -> void:
 		_copy_popup.add_item("時刻を削除してコピー", 2)
 		_copy_popup.add_item("名前を削除してコピー", 3)
 		_copy_popup.add_item("タグを無効化してコピー", 4)
+		_copy_popup.add_separator()
+		_copy_popup.add_item("発言欄にコピー", 5)
+		_copy_popup.add_item("発言する", 6)
 		_copy_popup.id_pressed.connect(_on_copy_popup_pressed)
 		add_child(_copy_popup)
 		var chrome_size := PhiFont.chrome_size_for_zoom(map_view.zoom)
@@ -1903,6 +3114,17 @@ func _show_copy_popup() -> void:
 func _on_copy_popup_pressed(id: int) -> void:
 	var selected := log_view.get_selected_text()
 	var text := selected if not selected.is_empty() else log_view.get_parsed_text()
+	if id == 5:
+		# 発言欄にコピー (Philly LogToInput)。
+		set_input_draft(text)
+		return
+	if id == 6:
+		# 選択部分を発言として送る (Philly LogSendLn)。
+		if is_session_open():
+			for line in text.split("\n"):
+				if not line.strip_edges().is_empty():
+					session.send_line(line)
+		return
 	var result := ""
 	match id:
 		0:
@@ -1916,6 +3138,18 @@ func _on_copy_popup_pressed(id: int) -> void:
 		4:
 			result = PhiLogCopy.disable_tags(text)
 	DisplayServer.clipboard_set(result)
+
+
+func set_input_draft(text: String) -> void:
+	## 入力欄の内容を丸ごと下書きとして入れ替える
+	## (ログ編集の「発言欄にコピー」用)。
+	input_box.text = text
+	_history_boundary = PhiInputHistory.clamp_boundary(input_box.text, 0)
+	_sync_input_snapshot()
+	var last := maxi(input_box.get_line_count() - 1, 0)
+	input_box.set_caret_line(last, true, true, 0, false)
+	input_box.set_caret_column(input_box.get_line(last).length())
+	input_box.grab_focus()
 
 
 # -- マウス操作(第3段) ---------------------------------------------------------
@@ -1977,6 +3211,7 @@ func handle_mouse_button(ev: InputEventMouseButton) -> void:
 			_mouse_held = false
 			_list_dragging = false
 			_end_toolbar_drag()
+			_finish_talk_press()
 	elif ev.button_index == MOUSE_BUTTON_RIGHT and ev.pressed:
 		# 右クリックは攻撃(Philly の MapForm)。ツールバーの上は除く。
 		if _over_map(ev.position) and not _over_toolbar_panel(ev.position):
@@ -2019,6 +3254,7 @@ func _mouse_send_step() -> void:
 	if commands.is_empty():
 		return
 	session.send_text("\n".join(commands))
+	_arm_bump_watch()
 
 
 func _mouse_repeat_send_if_ready() -> void:
@@ -2054,6 +3290,11 @@ func _mouse_repeat_fallback_tick() -> void:
 
 func handle_mouse_motion(ev: InputEventMouseMotion) -> void:
 	_mouse_last_pos = ev.position
+	if _talk_dragging and _talk_button != null:
+		if ev.position.distance_to(_talk_press_global) > 6.0:
+			_talk_drag_moved = true
+		_move_talk_button(ev.position - _talk_drag_offset)
+		return
 	if _toolbar_dragging and _toolbar_panel != null:
 		_move_toolbar_panel(ev.position - _toolbar_drag_offset)
 		return
@@ -2076,6 +3317,23 @@ func handle_mouse_motion(ev: InputEventMouseMotion) -> void:
 	elif turn_cmd != _mouse_turn_dir:
 		_mouse_turn_dir = turn_cmd
 		session.send_line(turn_cmd)
+	_update_map_hover()
+
+
+func _update_map_hover() -> void:
+	## 名前ヒントと移動ガイド線 (Philly SearchHintName /
+	## MouseMoveLine)。マウスの下のセルで更新する。
+	if map_view == null:
+		return
+	var local := map_view.get_local_mouse_position()
+	if _config.mouse_move_line:
+		map_view.set_guide_cell(map_view.cell_at_local(local))
+	else:
+		map_view.set_guide_cell(Vector2i(-1, -1))
+	if _config.search_hint_name:
+		map_view.show_hover_hint(map_view.chara_name_at(local), local, PhiFont.chrome_size_for_zoom(map_view.zoom))
+	else:
+		map_view.show_hover_hint("", local, 0)
 
 
 # -- キー処理 ------------------------------------------------------------------
@@ -2154,11 +3412,22 @@ func handle_key(key_event: InputEventKey) -> bool:
 	var moved: Variant = PhiKeys.move_input(code, shift, ctrl, alt, meta, true)
 	if moved != null:
 		press_held_move(key_event, str(moved[0]), str(moved[1]))
-		session.send_line(PhiKeys.move_command(str(moved[0]), str(moved[1]), north_fix_now()))
+		_send_held_step()
+		return true
+	# P は支払い (金額を聞いてから送る ask アクション。Philly の
+	# 修飾なしキー表にあるが、送るだけのキー表では表せないので
+	# ここで受ける)。
+	if code == "KeyP" and not shift and not ctrl and not alt and not meta:
+		action_requested.emit("Pay")
 		return true
 	# (11)その他の送信キー(攻撃・看板など)。繰り返しはしない。
 	var send := PhiKeys.key_send(code, shift, ctrl, alt, meta, true)
 	if not send.is_empty():
+		if code == "End" and not shift and not ctrl and not alt and not meta:
+			# End (unequip して先頭を外す) は、Python 版の
+			# cancel_list=1 と同じく、unequip が出す装備リストを
+			# 表示しない (答えの "1" は送信済み)。
+			_suppress_lists = 1
 		session.send_text(send)
 		return true
 	return false

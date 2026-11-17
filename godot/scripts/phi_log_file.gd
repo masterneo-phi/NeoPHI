@@ -56,6 +56,35 @@ static func format_html_line(line: String) -> String:
 	return escape_html(line) + "<br>\n"
 
 
+static func append_lines(dir: String, char_name: String, html: bool, lines: Array) -> bool:
+	## 複数行をまとめて追記する (ファイルは 1 回だけ開く)。
+	## append_line を行ごとに呼ぶより遥かに速いので、自動保存は
+	## こちらを使う。意味は append_line の繰り返しと同じ。
+	if lines.is_empty():
+		return true
+	var err := DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(dir))
+	if err != OK:
+		return false
+	var path := log_path(dir, char_name, html)
+	var is_new := not FileAccess.file_exists(path)
+	var file: FileAccess = null
+	if is_new:
+		file = FileAccess.open(path, FileAccess.WRITE)
+	else:
+		file = FileAccess.open(path, FileAccess.READ_WRITE)
+	if file == null:
+		return false
+	if not is_new:
+		file.seek_end()
+	if html and is_new:
+		file.store_string(html_header(char_name + " - NeoPHI log"))
+	for line in lines:
+		var text := str(line)
+		file.store_string(text + "\n" if not html else format_html_line(text))
+	file.close()
+	return true
+
+
 ## 1行を追記する。HTML でファイルが無ければヘッダも書く。
 ## 失敗したら false を返す(呼び出し側はログに出すだけにする)。
 ## 新しいファイルは WRITE で作る。READ_WRITE は既存のファイル

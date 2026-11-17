@@ -2,10 +2,13 @@ class_name PhiImages
 extends RefCounted
 ## 画像参照の抜き出しと、取得してよいかの判定。画像表示窓の土台。
 ##
-## セキュリティ: 外部ホストへの画像取得はしない。接続中のゲーム
+## 画像表示窓: 外部ホストへの画像取得はしない。接続中のゲーム
 ## サーバと同じホストの URL だけ、ユーザーが明示的にクリックした
-## 時に限り、サイズ上限つきで取得する。自動取得はしない。
-## ここでは判定だけを行い、取得そのものは窓側で行う。
+## 時に限り、サイズ上限つきで取得する。
+## ログへの埋め込み表示 (第48段、Philly LogImageDisp): /*img=*/
+## タグの画像は Philly と同じく自動で取得して行内に表示する。
+## 設定で off にでき、その場合は [画像: URL] の文字で出す。
+## 取得そのものは PhiCharacter 側で行う。
 
 ## 取得する画像の大きさの上限(バイト)。
 const MAX_IMAGE_BYTES := 2 * 1024 * 1024
@@ -53,6 +56,59 @@ static func extract_refs(raw_text: String) -> Array[String]:
 	for pair in found:
 		_add_ref(out, seen, str(pair[1]))
 	return out
+
+
+static func tag_spans(raw_text: String) -> Array:
+	## `/*img=...*/`・`/*image=...*/` タグの位置と中身を返す。
+	## [{start, end, url, width, height}] (end はタグの直後、
+	## width/height は属性が無ければ 0)。ログへの画像埋め込み用。
+	var out: Array = []
+	var lower := raw_text.to_lower()
+	for prefix in ["/*img=", "/*image="]:
+		var pos := 0
+		while true:
+			var start := lower.find(prefix, pos)
+			if start < 0:
+				break
+			var close := raw_text.find("*/", start + prefix.length())
+			if close < 0:
+				break
+			var body := raw_text.substr(start + prefix.length(), close - (start + prefix.length())).strip_edges()
+			var tokens := body.split(" ", false)
+			if not tokens.is_empty():
+				var span := {"start": start, "end": close + 2, "url": tokens[0], "width": 0, "height": 0}
+				for token in tokens:
+					var kv := token.split("=", false, 1)
+					if kv.size() == 2 and kv[1].is_valid_int():
+						if kv[0].to_lower() == "width":
+							span["width"] = int(kv[1])
+						elif kv[0].to_lower() == "height":
+							span["height"] = int(kv[1])
+				out.append(span)
+			pos = close + 2
+	out.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return int(a["start"]) < int(b["start"]))
+	return out
+
+
+static func decode_image(data: PackedByteArray) -> Image:
+	## 取得したバイト列を画像として読む。読めなければ null。
+	var img := Image.new()
+	if img.load_png_from_buffer(data) == OK:
+		return img
+	img = Image.new()
+	if img.load_jpg_from_buffer(data) == OK:
+		return img
+	img = Image.new()
+	if img.load_webp_from_buffer(data) == OK:
+		return img
+	img = Image.new()
+	if img.load_bmp_from_buffer(data) == OK:
+		return img
+	if img.has_method("load_gif_from_buffer"):
+		img = Image.new()
+		if int(img.call("load_gif_from_buffer", data)) == OK:
+			return img
+	return null
 
 
 static func _add_ref(out: Array[String], seen: Dictionary, url: String) -> void:

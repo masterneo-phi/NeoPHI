@@ -2,7 +2,7 @@ class_name StatusPanel
 extends Control
 ## HP/MP バー＋クラスレベル・Gold。Philly の classStatus の描画。
 ## 地図の列の下に置く。上に HP/MP のバーを2本、その下に
-## F/W/M/C/GP を横に並べた行を出す。
+## F/W/M/C/EXP/GP を横に並べた行を出す。
 ##
 ## スキンの絵はバーの HpMpBar.bmp(100x15 のセルが 2行4列)だけ。
 ## 絵が無ければグラデーションのバーを描く。
@@ -11,7 +11,7 @@ extends Control
 ##
 ## バーの左の札と、ステータス行の見出しは、図形で描くアイコンに
 ## 文字ラベルを添えた形にした。HP＝赤いハート、MP＝青い雫、
-## F＝剣、W＝杖、M＝天秤、C＝ハンマー、GP＝金貨。
+## F＝剣、W＝杖、M＝天秤、C＝ハンマー、EXP＝星、GP＝金貨。
 ## ステータス行は項目ごとに枠を付け、行全体を中央寄せにする。
 ## 数字は4桁表示(満たない値は0埋め、9999超はそのまま)。
 ## Philly の Status.bmp は縦2列の枠なので使わない。
@@ -38,31 +38,33 @@ const BOX_BG := Color(0.23, 0.23, 0.23)
 const BOX_BORDER := Color(1, 1, 1, 0.35)
 
 ## ステータス行の項目: [文字ラベル, 値のキー]。
-## 並び順は F/W/M/C/GP。アイコンは f=剣、w=杖、m=天秤、c=ハンマー、
-## gp=金貨を図形で描き、文字ラベルも添える。
+## 並び順は F/W/M/C/EXP/GP。アイコンは f=剣、w=杖、m=天秤、c=ハンマー、
+## exp=星、gp=金貨を図形で描き、文字ラベルも添える。
 const STATUS_ITEMS := [
 	["F", "f"],
 	["W", "w"],
 	["M", "m"],
 	["C", "c"],
+	["EXP", "exp"],
 	["GP", "gp"],
 ]
 
 ## ステータス行の文字ラベルの色(項目ごと)。金属地の上で
 ## 読みやすい明るさにしてある。F=赤、W=紫、M=黄緑、C=黄色、
-## GP=金色。アイコンと数字(白)は従来どおり。
+## EXP=水色、GP=金色。アイコンと数字(白)は従来どおり。
 const STATUS_LABEL_COLORS := {
 	"f": Color(1.0, 0.38, 0.32),
 	"w": Color(0.80, 0.50, 1.0),
 	"m": Color(0.62, 0.95, 0.35),
 	"c": Color(1.0, 0.88, 0.30),
+	"exp": Color(0.45, 0.85, 1.0),
 	"gp": Color(1.0, 0.76, 0.28),
 }
 const STATUS_LABEL_DEFAULT := Color(0.65, 0.65, 0.65)
 
 
 static func status_label_color(key: String) -> Color:
-	## ステータス行の文字ラベルの色。キーは f/w/m/c/gp。
+	## ステータス行の文字ラベルの色。キーは f/w/m/c/exp/gp。
 	return STATUS_LABEL_COLORS.get(key, STATUS_LABEL_DEFAULT)
 
 var label_font: Font = null
@@ -82,9 +84,16 @@ var _f := 0
 var _w := 0
 var _m := 0
 var _c := 0
+var _exp := 0
 var _gp := 0
 var _poison := false
 var _panic := false
+## 状態異常7種 (#cond)。バーの色に使う毒・恐慌以外も名前で出す。
+var _cond := {"poison": false, "palsy": false, "panic": false,
+	"confuse": false, "berserk": false, "silence": false, "blind": false}
+## モード (#attack / #magic)。状態行の右端に「戦闘」「魔法」と出す。
+var _mode_attack := false
+var _mode_magic := false
 var _prev_hp := -1
 var _prev_mp := -1
 
@@ -134,6 +143,8 @@ func set_status(event: Dictionary) -> void:
 		_m = int(event["m"])
 	if event.has("c"):
 		_c = int(event["c"])
+	if event.has("exp"):
+		_exp = int(event["exp"])
 	if event.has("gp"):
 		_gp = int(event["gp"])
 	queue_redraw()
@@ -144,11 +155,66 @@ func set_conditions(poison: bool, panic: bool) -> void:
 		return
 	_poison = poison
 	_panic = panic
+	_cond["poison"] = poison
+	_cond["panic"] = panic
+	queue_redraw()
+
+
+## 状態異常の名前 (Python 版 gui.py と同じ並び・名前)。
+const CONDITION_NAMES := [["poison", "毒"], ["palsy", "麻痺"], ["panic", "恐慌"],
+	["confuse", "混乱"], ["berserk", "狂戦士"], ["silence", "沈黙"], ["blind", "盲目"]]
+
+
+static func condition_names(cond: Dictionary) -> Array:
+	var out: Array = []
+	for pair in CONDITION_NAMES:
+		if bool(cond.get(pair[0], false)):
+			out.append(pair[1])
+	return out
+
+
+static func mode_tags(attack: bool, magic: bool) -> Array:
+	var out: Array = []
+	if attack:
+		out.append("戦闘")
+	if magic:
+		out.append("魔法")
+	return out
+
+
+func condition_text() -> String:
+	return " ".join(condition_names(_cond))
+
+
+func mode_text() -> String:
+	return " ".join(mode_tags(_mode_attack, _mode_magic))
+
+
+## #cond イベントを丸ごと反映する (7種すべて)。
+func set_conditions_all(event: Dictionary) -> void:
+	var changed := false
+	for pair in CONDITION_NAMES:
+		var v := bool(event.get(pair[0], false))
+		if bool(_cond[pair[0]]) != v:
+			_cond[pair[0]] = v
+			changed = true
+	_poison = bool(_cond["poison"])
+	_panic = bool(_cond["panic"])
+	if changed:
+		queue_redraw()
+
+
+## #attack / #magic のモードを反映する。
+func set_mode(attack: bool, magic: bool) -> void:
+	if attack == _mode_attack and magic == _mode_magic:
+		return
+	_mode_attack = attack
+	_mode_magic = magic
 	queue_redraw()
 
 
 func debug_values() -> Dictionary:
-	return {"hp": _hp, "maxHp": _max_hp, "mp": _mp, "maxMp": _max_mp, "f": _f, "w": _w, "m": _m, "c": _c, "gp": _gp, "prevHp": _prev_hp, "prevMp": _prev_mp}
+	return {"hp": _hp, "maxHp": _max_hp, "mp": _mp, "maxMp": _max_mp, "f": _f, "w": _w, "m": _m, "c": _c, "exp": _exp, "gp": _gp, "prevHp": _prev_hp, "prevMp": _prev_mp}
 
 
 static func bar_segments(value: int, max_value: int, prev_value: int, width_px: float, fill_cell: int, trail_cell: int, empty_cell: int) -> Array:
@@ -185,6 +251,14 @@ static func format_status_value(value: int) -> String:
 	return "%04d" % value
 
 
+static func format_value_for(key: String, value: int) -> String:
+	## 項目ごとの桁数。EXP は大きくなるので8桁表示にする
+	## (ユーザーの指定)。それ以外は4桁。
+	if key == "exp":
+		return "%08d" % value
+	return format_status_value(value)
+
+
 static func format_bar_text(value: int, max_value: int) -> String:
 	## バーの数字は「現在値/最大値」で、両方とも4桁表示にする。
 	## HP 行と MP 行で幅がそろい、数字が縦に整列して見える。
@@ -202,6 +276,8 @@ func _status_value(key: String) -> int:
 			return _m
 		"c":
 			return _c
+		"exp":
+			return _exp
 		"gp":
 			return _gp
 	return 0
@@ -221,7 +297,7 @@ func status_box_rects(row_y: float, row_h: float) -> Array:
 			label_w = label_font.get_string_size(str(item[0]), HORIZONTAL_ALIGNMENT_LEFT, -1, status_font_size).x
 		var num_w := 0.0
 		if value_font != null:
-			var text := format_status_value(_status_value(str(item[1])))
+			var text := format_value_for(str(item[1]), _status_value(str(item[1])))
 			num_w = value_font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, status_font_size).x
 		var bw := BOX_PAD_X * 2.0 + icon_w + BOX_ICON_GAP + label_w + BOX_LABEL_GAP + num_w
 		widths.append(bw)
@@ -350,19 +426,44 @@ func _draw_bar_segment_gradient(cell: int, x: float, y: float, w: float, scale: 
 	draw_rect(Rect2(x, y, w, h), Color(0, 0, 0, 0.6), false, 1.0)
 
 
+static func bar_number_layout(cur_w: float, slash_w: float, rect: Rect2) -> Array:
+	## バーの数字の描画位置 [現在値の左端, スラッシュの左端,
+	## 最大値の左端]。スラッシュをバーの中央に固定し、現在値は
+	## その左へ右寄せ、最大値は右へ左寄せで置く。フォントの
+	## 数字幅が等幅でなくても、HP 行と MP 行でスラッシュと
+	## 値の端が縦にそろう (従来は文字列全体を中央寄せしていた
+	## ため、数字の形で幅が変わり行ごとにずれていた)。
+	var cx := rect.position.x + rect.size.x * 0.5
+	var gap := slash_w * 0.35
+	return [cx - slash_w * 0.5 - gap - cur_w, cx - slash_w * 0.5, cx + slash_w * 0.5 + gap]
+
+
 func _draw_bar_number(text: String, rect: Rect2) -> void:
 	if bold_font == null or rect.size.x <= 0.0:
 		return
 	var font_size := gauge_font_size
-	var w := bold_font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x
 	var h := bold_font.get_height(font_size)
-	var at := Vector2(rect.position.x + (rect.size.x - w) * 0.5, rect.position.y + (rect.size.y + h * 0.7) * 0.5)
+	var baseline := rect.position.y + (rect.size.y + h * 0.7) * 0.5
+	var parts := text.split("/")
+	if parts.size() != 2:
+		var w := bold_font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x
+		_draw_number_part(text, Vector2(rect.position.x + (rect.size.x - w) * 0.5, baseline), font_size)
+		return
+	var slash_w := bold_font.get_string_size("/", HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x
+	var cur_w := bold_font.get_string_size(parts[0], HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x
+	var xs := bar_number_layout(cur_w, slash_w, rect)
+	_draw_number_part(parts[0], Vector2(xs[0], baseline), font_size)
+	_draw_number_part("/", Vector2(xs[1], baseline), font_size)
+	_draw_number_part(parts[1], Vector2(xs[2], baseline), font_size)
+
+
+func _draw_number_part(text: String, at: Vector2, font_size: int) -> void:
 	draw_string_outline(bold_font, at, text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, 3, Color(0, 0, 0))
 	draw_string(bold_font, at, text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, Color.WHITE)
 
 
 func _draw_status_row(row_y: float, row_h: float) -> void:
-	## F/W/M/C/GP を、項目ごとの枠で横に並べ、行全体を中央寄せ。
+	## F/W/M/C/EXP/GP を、項目ごとの枠で横に並べ、行全体を中央寄せ。
 	## 枠の中は、左から図形のアイコン・文字ラベル(灰色)・
 	## 4桁表示の数字(白太字)。
 	if label_font == null:
@@ -381,8 +482,23 @@ func _draw_status_row(row_y: float, row_h: float) -> void:
 		var lx := icon_rect.end.x + BOX_ICON_GAP
 		draw_string(label_font, Vector2(lx, baseline), label_text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, status_label_color(str(STATUS_ITEMS[i][1])))
 		var label_w := label_font.get_string_size(label_text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x
-		var text := format_status_value(_status_value(str(STATUS_ITEMS[i][1])))
+		var text := format_value_for(str(STATUS_ITEMS[i][1]), _status_value(str(STATUS_ITEMS[i][1])))
 		draw_string(value_font, Vector2(lx + label_w + BOX_LABEL_GAP, baseline), text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, Color.WHITE)
+	# 状態異常は行の左端、モード (戦闘/魔法) は右端に出す。
+	# 中央の枠と重なる時は出さない。
+	if not rects.is_empty():
+		var boxes_left := (rects[0] as Rect2).position.x
+		var boxes_right := (rects[rects.size() - 1] as Rect2).end.x
+		var cond_text := condition_text()
+		if not cond_text.is_empty():
+			var w := label_font.get_string_size(cond_text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x
+			if 4.0 + w < boxes_left - 6.0:
+				draw_string(label_font, Vector2(4, baseline), cond_text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, Color(1.0, 0.78, 0.35))
+		var mtext := mode_text()
+		if not mtext.is_empty():
+			var w := label_font.get_string_size(mtext, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x
+			if size.x - 4.0 - w > boxes_right + 6.0:
+				draw_string(label_font, Vector2(size.x - 4.0 - w, baseline), mtext, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, Color(1.0, 0.62, 0.62) if _mode_attack else Color(0.65, 0.85, 1.0))
 
 
 # -- アイコン(図形で描く) -----------------------------------------------------
@@ -440,25 +556,25 @@ func _draw_heart(r: Rect2) -> void:
 
 
 func _draw_droplet(r: Rect2) -> void:
-	## 青い雫。丸と上向きの三角で作る。
-	## 輪郭の左端がハートと揃うよう、中心を少し左に寄せる
-	## (雫はハートより細い形なので、そのままだと右に寄って見える)。
+	## 青い雫。丸と上向きの三角で作る。ハートと同じ枠いっぱいに
+	## 対称に描く (以前は中心を左へ寄せていたため、ハートより
+	## 小さく・左寄りに見えて札の並びがずれて見えた)。
 	var s := r.size.x
-	var cx := r.position.x + s * 0.395
+	var cx := r.position.x + s * 0.5
 	var blue := Color(0.30, 0.65, 1.0)
 	var tri := PackedVector2Array([
-		Vector2(cx - s * 0.21, r.position.y + s * 0.55),
-		Vector2(cx + s * 0.21, r.position.y + s * 0.55),
-		Vector2(cx, r.position.y + s * 0.08)])
+		Vector2(cx - s * 0.26, r.position.y + s * 0.58),
+		Vector2(cx + s * 0.26, r.position.y + s * 0.58),
+		Vector2(cx, r.position.y + s * 0.06)])
 	draw_colored_polygon(tri, blue)
-	draw_circle(Vector2(cx, r.position.y + s * 0.63), s * 0.235, blue)
+	draw_circle(Vector2(cx, r.position.y + s * 0.62), s * 0.30, blue)
 	# 左の光。
-	draw_circle(Vector2(cx - s * 0.09, r.position.y + s * 0.68), s * 0.06, Color(1, 1, 1, 0.6))
+	draw_circle(Vector2(cx - s * 0.11, r.position.y + s * 0.68), s * 0.06, Color(1, 1, 1, 0.6))
 
 
 func _draw_status_icon(kind: String, r: Rect2) -> void:
 	## ステータス行の見出しの代わりの小さい絵。外部素材は使わず
-	## 図形で描く。f=剣、w=杖、m=天秤、c=ハンマー、gp=金貨。
+	## 図形で描く。f=剣、w=杖、m=天秤、c=ハンマー、exp=星、gp=金貨。
 	var w := maxf(2.0, r.size.x * 0.10)
 	match kind:
 		"f":
@@ -469,6 +585,8 @@ func _draw_status_icon(kind: String, r: Rect2) -> void:
 			_draw_icon_scales(r, w)
 		"c":
 			_draw_icon_hammer(r, w)
+		"exp":
+			_draw_icon_star(r)
 		"gp":
 			_draw_icon_coin(r)
 
@@ -545,6 +663,19 @@ func _draw_icon_hammer(r: Rect2, w: float) -> void:
 		head_c + axis * hl + perp * hw,
 		head_c - axis * hl + perp * hw])
 	draw_colored_polygon(pts, Color(0.75, 0.78, 0.82))
+
+
+func _draw_icon_star(r: Rect2) -> void:
+	## 経験値の星。水色の5角星と、白い芯。
+	var c := r.get_center()
+	var rr := r.size.x * 0.40
+	var pts := PackedVector2Array()
+	for i in range(10):
+		var ang := -PI * 0.5 + float(i) * PI / 5.0
+		var rad := rr if i % 2 == 0 else rr * 0.45
+		pts.append(c + Vector2(cos(ang), sin(ang)) * rad)
+	draw_colored_polygon(pts, Color(0.55, 0.85, 1.0))
+	draw_circle(c, rr * 0.20, Color(0.95, 0.99, 1.0))
 
 
 func _draw_icon_coin(r: Rect2) -> void:

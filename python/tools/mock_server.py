@@ -2,8 +2,9 @@
 
 cp932・改行区切りの行プロトコルで、ログイン・移動・リスト・看板・EagleEye
 の返事をする。``hit`` には実サーバと同じ形のダメージ付き戦闘ログを返す
-(練習相手のモック猫が正面にいる。3回に1回は反撃し、3回目の反撃は
-MP ダメージ。10回に1回は猫が倒れ、次の hit か移動で生き返る)。``cast`` の一覧には harm
+(練習相手のモック猫が正面にいる。3回に1回は反撃する (HP ダメージ
+のみ)。10回に1回は猫が倒れ、次の hit か移動で生き返る。プレイヤーの
+HP が 0 になると倒れ、その場で生き返って HP/MP が戻る)。``cast`` の一覧には harm
 (詠唱＋魔法の攻撃行)・cure（回復）・mana（MP回復）を追加。発言は
 ``/**/モック太郎 > 本文`` の形で送り返し、3回に1回は案内人が返事をする。
 ``priv`` と入れると案内人から priv が来る。受けた行を ``received`` に
@@ -98,6 +99,45 @@ def build_m57_w(first: bytes, second: bytes) -> bytes:
     return b"#m57 W " + first[7:74] + b" " + second[7:74]
 
 
+def build_map_c(
+    *,
+    index: int,
+    x: int,
+    y: int,
+    dir_char: str,
+    name: str,
+    status: int,
+    gra: str,
+    gigant: str,
+    default: int,
+) -> bytes:
+    """``#map C`` の1行(71バイト)。実サーバの書式
+    ``#map C%02i:%01i %01i %c %-31s %02x %-15s %c %02x `` に合わせる。"""
+    line = (
+        b"#map C"
+        + f"{index:02d}".encode("ascii")
+        + b":"
+        + str(x).encode("ascii")
+        + b" "
+        + str(y).encode("ascii")
+        + b" "
+        + dir_char.encode("ascii")
+        + b" "
+        + _pad_cp932(name, 31)
+        + b" "
+        + f"{status:02X}".encode("ascii")
+        + b" "
+        + _pad_cp932(gra, 15)
+        + b" "
+        + gigant.encode("ascii")
+        + b" "
+        + f"{default:02X}".encode("ascii")
+        + b" "
+    )
+    assert len(line) == 71, len(line)
+    return line
+
+
 def build_map_m_5x5(
     dir_char: str, chips: list[int], items: set[int], boards: set[int]
 ) -> bytes:
@@ -173,6 +213,7 @@ class MockServer:
         self._dir = 0  # 0=N 1=E 2=S 3=W
         self._map_size = 7
         self._map_style = "solid"
+        self._eagle_text = False
         self._pending_list: str | None = None
         self._board_mode = False
         self._board_lines: list[str] = []
@@ -180,6 +221,10 @@ class MockServer:
         self._speech_count = 0
         self._spell_count = 0
         self._cat_dead = False
+        # プレイヤーの HP/MP。実サーバと同じく、変わるたびに
+        # #status を送り直す (ゲージ確認用)。
+        self._player_hp = 100
+        self._player_mp = 50
 
     async def start(self) -> None:
         self._server = await asyncio.start_server(
@@ -222,13 +267,19 @@ class MockServer:
                 self._cat_dead = False
             await send_text(f"#ex-pos {self._abs_x} {self._abs_y}")
             if self._map_size == 5:
+                # クラシック地図は実サーバの set_view と同じく常に
+                # 自分の向き基準(前3・後1)。北固定にはならない。
+                cam = self._dir
                 chips: list[int] = []
                 items: set[int] = set()
                 boards: set[int] = set()
                 for yy in range(5):
                     for xx in range(5):
+                        vx, vy = xx - 2, 3 - yy
+                        dx = _PX[cam] * vy - _PY[cam] * vx
+                        dy = _PY[cam] * vy + _PX[cam] * vx
                         chip, attr = _terrain(
-                            self._abs_x + xx - 2, self._abs_y + yy - 2
+                            self._abs_x + dx, self._abs_y + dy
                         )
                         chips.append(chip)
                         if attr & 0x08:
@@ -238,6 +289,26 @@ class MockServer:
                 await send_raw(
                     build_map_m_5x5(_DIR_CHARS[self._dir], chips, items, boards)
                 )
+                # キャラは実サーバと同じく #map C 行で送る。
+                # 自分は送らない(クライアントが (2, 3) に合成する)。
+                k = 0
+                npc5 = self._chara_wire5(1, 0, "L")
+                if npc5 is not None:
+                    await send_raw(build_map_c(
+                        index=k, x=npc5[0], y=npc5[1], dir_char=npc5[2],
+                        name="案内人", status=0, gra="t_Residents",
+                        gigant="#", default=0x05,
+                    ))
+                    k += 1
+                if include_cat:
+                    cat5 = self._chara_wire5(0, -1, "F")
+                    if cat5 is not None:
+                        await send_raw(build_map_c(
+                            index=k, x=cat5[0], y=cat5[1], dir_char=cat5[2],
+                            name="モック猫", status=0, gra="t_catW",
+                            gigant="#", default=0x05,
+                        ))
+                        k += 1
                 await send_text("#map .")
                 return
             turn = self._map_style == "turn"
@@ -263,11 +334,13 @@ class MockServer:
                         )
             await send_raw(build_m57_m(_DIR_CHARS[self._dir], cells))
             # 自キャラは solid で (3, 3)、turn で (3, 4)。向きコードは
-            # 両 style とも "B"(turn では自分がカメラなので、実サーバ
-            # でも (自分の向き - カメラ) = 0 で B になる)。
+            # 実サーバと同じく (自分の向き - カメラ): turn ではカメラ
+            # = 自分なので "B"、solid ではカメラ = 北なので自分の
+            # 絶対方向そのもの (北=B 東=R 南=F 西=L)。
             me_x, me_y = (3, 4) if turn else (3, 3)
             me = build_m57_o(
-                layer=0, char_id=1, x=me_x, y=me_y, dir_char="B",
+                layer=0, char_id=1, x=me_x, y=me_y,
+                dir_char="B" if turn else _RDC[self._dir],
                 name="モック太郎", gra="t_Lord", status=0x40,
                 gigant="#", default=0x40,
             )
@@ -291,7 +364,8 @@ class MockServer:
 
         async def send_status() -> None:
             await send_text(
-                "#status モック太郎 : 100 : 100 : 50 : 50 : 1234 : 567 : 10 : 11 : 12 : 13"
+                f"#status モック太郎 : {self._player_hp} : 100"
+                f" : {self._player_mp} : 50 : 1234 : 567 : 10 : 11 : 12 : 13"
             )
             await send_text("#cond -------")
 
@@ -320,6 +394,8 @@ class MockServer:
             writer.close()
             return
 
+        self._player_hp = 100
+        self._player_mp = 50
         await send_text("#name モック太郎")
         await send_status()
         await send_text("#ex-notice land=モックの世界")
@@ -330,6 +406,10 @@ class MockServer:
         await send_text("DM > モックサーバへようこそ。")
         await send_map()
         await send_text("#lag")
+        # 実サーバはエリアに入ると #bgm で曲を指定してくる。モックでも
+        # ログイン時に1曲指定し、BGM 再生の確認ができるようにする
+        # (曲は配布 zip の sound/bgm にある tofup の NEO_field_booge)。
+        await send_text("#bgm NEO_field_booge")
 
         while True:
             raw = await reader.readline()
@@ -385,6 +465,12 @@ class MockServer:
                 await send_map()
                 continue
             if line.startswith("#ex-switch"):
+                # eagleeye=text の間は、イーグルアイを実サーバと同じく
+                # ログへのテキスト行で返す。
+                if line.startswith("#ex-switch eagleeye=text"):
+                    self._eagle_text = True
+                elif line.startswith("#ex-switch eagleeye=form"):
+                    self._eagle_text = False
                 continue
             if line == "MOCK_CH_SRV":
                 await send_text("#ch-srv 127.0.0.1 29999")
@@ -417,42 +503,66 @@ class MockServer:
                     "4": "cure", "5": "mana",
                 }.get(line, line)
                 if name == "eagle eye":
+                    self._player_mp = max(0, self._player_mp - 3)
+                    await send_status()
+                    if self._eagle_text:
+                        # テキスト版: 実サーバと同じく 11x11 を
+                        # " [ .. ] " の行でログに流す(地形は2文字組)。
+                        for row in range(-5, 6):
+                            pairs = ""
+                            for col in range(-5, 6):
+                                chip, _attr = _terrain(
+                                    self._abs_x + col, self._abs_y + row
+                                )
+                                c = chr(chip)
+                                pairs += "  " if c == " " else c + c
+                            await send_text(f" [ {pairs} ] ")
+                        continue
                     await send_text("#ex-eagleeye start")
-                    await send_raw(
-                        build_eagleeye_row(4, 0, [(ord(" "), 0)] * 5)
-                    )
-                    await send_raw(
-                        build_eagleeye_row(
-                            4, 1, [(ord(" "), 0), (ord("#"), 0), (ord(" "), 0x58),
-                                   (ord(" "), 0), (ord("T"), 0)]
-                        )
-                    )
-                    await send_raw(
-                        build_eagleeye_row(4, 2, [(ord("_"), 0)] * 5)
-                    )
-                    await send_text("#ex-eagleeye pos 2 1")
+                    # 実サーバと同じく、自分の周りの正方形の盤面を
+                    # 送る (9x9、地形は _terrain で生成、中心が自分)。
+                    half = 4
+                    for row in range(2 * half + 1):
+                        cells = []
+                        for col in range(2 * half + 1):
+                            chip, attr = _terrain(
+                                self._abs_x + col - half,
+                                self._abs_y + row - half,
+                            )
+                            if col == half and row == half:
+                                attr = 0x58
+                            cells.append((chip, attr))
+                        await send_raw(build_eagleeye_row(2 * half, row, cells))
+                    await send_text(f"#ex-eagleeye pos {half} {half}")
                     await send_text("#ex-eagleeye end")
                 elif name == "harm":
                     # 詠唱の行の直後に魔法の攻撃行。クライアントは
                     # 詠唱を覚えていて、魔法弾と着弾の演出を出す。
                     self._spell_count += 1
+                    self._player_mp = max(0, self._player_mp - 5)
                     damage = (12, 15, 11, 14, 13)[(self._spell_count - 1) % 5]
                     await send_text("DM > モック太郎 は魔法を唱えている...")
                     await send_text(
                         "DM > モック太郎 は モック猫 を Harm で攻撃した."
                         f" [{damage} hp]"
                     )
+                    await send_status()
                 elif name == "cure":
                     self._spell_count += 1
                     amount = (40, 35, 45)[(self._spell_count - 1) % 3]
+                    self._player_mp = max(0, self._player_mp - 8)
+                    self._player_hp = min(100, self._player_hp + amount)
                     await send_text(
                         "DM > モック太郎 が Cure によって回復した."
                         f" [{amount} hp]"
                     )
+                    await send_status()
                 elif name == "mana":
                     self._spell_count += 1
                     amount = (20, 25, 18)[(self._spell_count - 1) % 3]
+                    self._player_mp = min(50, self._player_mp + amount)
                     await send_text(f"DM > モック太郎 は {amount} mp 回復した.")
+                    await send_status()
                 else:
                     await send_text(f"DM > {name} を唱えた。")
                 continue
@@ -489,11 +599,19 @@ class MockServer:
                 await send_text("DM > 魔法を選んで下さい.")
                 continue
             if line == "hit":
+                # 実サーバと同じく、攻撃は向いているマスの相手に
+                # だけ当たる。モック猫は北のマスにいるので、北を
+                # 向いている時だけ当たる。誰もいない方向では実
+                # サーバと同じく何も起きない (空振りは無言)。
+                if (_PX[self._dir], _PY[self._dir]) != (0, -1):
+                    continue
                 # 実サーバと同じ形の戦闘ログを返す。ダメージの数字は
                 # 決まった順で回し、3回に1回はモック猫が反撃する
-                # （3回目の反撃は MP ダメージ）。10回に1回は猫が
-                # 倒れ、次の hit で生き返る（猫がいないと数字も
-                # 斬撃も出る場所が無くなるため）。
+                # (反撃は HP ダメージのみ。物理攻撃で MP は減らない)。
+                # 10回に1回は猫が倒れ、次の hit で生き返る (猫が
+                # いないと数字も斬撃も出る場所が無くなるため)。
+                # プレイヤーの HP が 0 になったら倒れ、その場で
+                # 生き返って HP/MP が戻る。
                 # クライアントはこの行から浮き数字と斬撃を出す。
                 if self._cat_dead:
                     self._cat_dead = False
@@ -507,13 +625,24 @@ class MockServer:
                     f" [{damage} hp]"
                 )
                 if self._hit_count % 3 == 0:
-                    counter, unit = ((3, "hp"), (5, "hp"), (4, "mp"))[
-                        (self._hit_count // 3 - 1) % 3
-                    ]
+                    counter = (3, 5, 4)[(self._hit_count // 3 - 1) % 3]
                     await send_text(
                         "DM > モック猫 は モック太郎 を Fang で攻撃した."
-                        f" [{counter} {unit}]"
+                        f" [{counter} hp]"
                     )
+                    # 実サーバは HP/MP が変わると #status を送る。
+                    # モックも状態に反映して送り直す。
+                    self._player_hp = max(0, self._player_hp - counter)
+                    await send_status()
+                    if self._player_hp == 0:
+                        await send_text(
+                            "DM > モック太郎 は モック猫 に殺された."
+                        )
+                        self._player_hp = 100
+                        self._player_mp = 50
+                        await send_text("DM > モック太郎 は生き返った。")
+                        await send_status()
+                        await send_map()
                 killed = self._hit_count % 10 == 0
                 if killed:
                     self._cat_dead = True
@@ -543,6 +672,12 @@ class MockServer:
             if line.startswith("go ") or line == "go" or line.startswith("turn "):
                 self._apply_move(line)
                 await send_map()
+                continue
+            if line == "bgm" or line.startswith("bgm "):
+                # BGM の切り替えテスト用。bgm だけならログイン時と同じ曲、
+                # bgm <曲名> で sound/bgm の別の曲を指定する。
+                name = line[3:].strip() or "NEO_field_booge"
+                await send_text(f"#bgm {name}")
                 continue
             if line == "priv" or line.startswith("priv "):
                 # 案内人からの priv。クライアントは [priv] として出し、
@@ -583,7 +718,8 @@ class MockServer:
         (3, 4) になる位置に置き、向きコードは絶対方向
         (solid はカメラが北なので ``_RDC`` の位置がそのまま絶対方向)
         からカメラ方向を引いて回す。自キャラ自身には使わない
-        (自キャラの向きコードは両 style とも "B" で固定)。
+        (自キャラの向きコードは turn では "B"、solid では自分の
+        絶対方向で、send_map 側で付けている)。
         """
         if self._map_style != "turn":
             return dx + 3, dy + 3, solid_code
@@ -592,6 +728,24 @@ class MockServer:
         vy = _PX[cam] * dx + _PY[cam] * dy
         abs_dir = _RDC.index(solid_code)
         return vx + 3, 4 - vy, _RDC[(abs_dir - cam) % 4]
+
+    def _chara_wire5(
+        self, dx: int, dy: int, solid_code: str
+    ) -> tuple[int, int, str] | None:
+        """5x5(クラシック地図)での NPC の画面座標と向きコード。
+
+        視界は常に自分の向き基準で自キャラは (2, 3)。回し方は
+        ``_chara_wire`` の turn と同じで、中心が (2, 3) になるだけ。
+        視界の外なら None。
+        """
+        cam = self._dir
+        vx = -_PY[cam] * dx + _PX[cam] * dy
+        vy = _PX[cam] * dx + _PY[cam] * dy
+        x, y = vx + 2, 3 - vy
+        if not (0 <= x < 5 and 0 <= y < 5):
+            return None
+        abs_dir = _RDC.index(solid_code)
+        return x, y, _RDC[(abs_dir - cam) % 4]
 
     def _apply_move(self, line: str) -> None:
         if line == "go":

@@ -3,8 +3,8 @@ extends RefCounted
 ## 入力欄の履歴境界。入力欄は「送信済みの履歴部分＋編集中の
 ## 下書き部分」の2領域を持ち、境界を文字オフセットで持つ。
 ## 送信は下書き部分だけを送り、送った文は入力欄に残して
-## 境界を末尾まで進める。履歴部分の編集は許し、境界は
-## 文字数に収まるようクランプする。
+## 境界を末尾まで進める。履歴部分を書き換えると、その行が
+## 下書きに戻る(境界がその行の先頭まで戻る)。
 
 ## 履歴を残す行数の上限。超えたら古い行から切り捨てる。
 const MAX_LINES := 200
@@ -12,6 +12,23 @@ const MAX_LINES := 200
 
 static func clamp_boundary(text: String, boundary: int) -> int:
 	return clampi(boundary, 0, text.length())
+
+
+static func retreat_boundary(old_text: String, new_text: String, boundary: int) -> int:
+	## 編集で履歴部分(境界より前)が書き換えられたら、書き換わった
+	## 行の先頭まで境界を戻し、その行を下書きに含める。送信済みの
+	## 行を書き換えて Enter を押せば、書き換えた文が送られる。
+	## 下書き部分だけの編集では境界は動かない(クランプのみ)。
+	var b := clamp_boundary(new_text, boundary)
+	if old_text == new_text:
+		return b
+	var limit := mini(old_text.length(), new_text.length())
+	var diff := 0
+	while diff < limit and old_text[diff] == new_text[diff]:
+		diff += 1
+	if diff >= b:
+		return b
+	return new_text.left(diff).rfind("\n") + 1
 
 
 static func draft_of(text: String, boundary: int) -> String:

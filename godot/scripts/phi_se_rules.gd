@@ -12,10 +12,12 @@ extends RefCounted
 ## Godot の RegEx(PCRE2)で照合する。コンパイルできない行は
 ## 無視し、`bad_count` に数える。
 
-## 組み込みの既定(Philly の Config.cpp の ClearStrList と同じで、
-## 説明文だけ＝鳴らす行は無い)。
-const DEFAULT_REGEXP_TEXT := "サウンドの正規表現文字列（ perl5 にほぼ準拠）"
-const DEFAULT_FILE_TEXT := "サウンドファイル名（.wav）空文字列でタスクバーフラッシュ"
+## 組み込みの既定 (NeoPHI の既定の効果音)。Philly の工場出荷は
+## 説明文だけ＝無音だったが、NeoPHI では同梱の sound/se/*.wav を
+## 使う既定ルールを持つ (ユーザーの指定)。自分の Philly フォルダに
+## SoundRegexp.ini / SoundFile.ini があればそちらが優先される。
+const DEFAULT_REGEXP_TEXT := "サウンドの正規表現文字列（ perl5 にほぼ準拠）\n/唱えている|を唱えています|を唱えた/\n/鍵を掛けました/\n/鍵を外しました/\n/鍵を掛けられています/\n/レベル.+になった/\n/殺された|倒れた|死んだ/\n/回復した/\n/攻撃を受け止めた|攻撃を吸収した/\n/ダメージを受けた/\n/を装備した|を外しました/\n/拾いました|拾った/\n/へ移動中|移動しました/\n/失敗しました/\n/できません|出来ません/\n/攻撃した/"
+const DEFAULT_FILE_TEXT := "サウンドファイル名（.wav）空文字列でタスクバーフラッシュ\nsound\\se\\cast.wav\nsound\\se\\lock.wav\nsound\\se\\unlock.wav\nsound\\se\\bump.wav\nsound\\se\\levelup.wav\nsound\\se\\death.wav\nsound\\se\\cure.wav\nsound\\se\\guard.wav\nsound\\se\\hurt.wav\nsound\\se\\equip.wav\nsound\\se\\get.wav\nsound\\se\\warp.wav\nsound\\se\\fail.wav\nsound\\se\\ng.wav\nsound\\se\\attack.wav"
 
 var _res: Array = [] # index はファイルの行番号と対応(0 は説明文で null)
 var _files: Array[String] = []

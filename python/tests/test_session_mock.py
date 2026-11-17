@@ -446,7 +446,7 @@ class TestSessionMock(unittest.IsolatedAsyncioTestCase):
             await session.disconnect(graceful=True)
             await asyncio.wait_for(task, timeout=5.0)
 
-    async def test_repeated_hits_kill_cat_and_deal_mp_damage(self):
+    async def test_repeated_hits_kill_cat_and_counter_is_hp_only(self):
         session = PhiSession(self.host, self.port, "TESTID")
         task = asyncio.create_task(session.run())
         try:
@@ -477,7 +477,9 @@ class TestSessionMock(unittest.IsolatedAsyncioTestCase):
                 if isinstance(ev, MessageEvent)
             )
             self.assertTrue(any(parse_kill(t) == "モック猫" for t in texts))
-            self.assertTrue(any("[4 mp]" in t for t in texts))
+            # 反撃は HP ダメージのみで、MP は減らない
+            self.assertTrue(any("Fang" in t and "[4 hp]" in t for t in texts))
+            self.assertFalse(any("Fang" in t and " mp]" in t for t in texts))
         finally:
             await session.disconnect(graceful=True)
             await asyncio.wait_for(task, timeout=5.0)
@@ -624,6 +626,54 @@ class TestSessionMock(unittest.IsolatedAsyncioTestCase):
             await session.send("a\rb")
 
 
+class TestMockBgm(unittest.IsolatedAsyncioTestCase):
+    """モックの #bgm 送信(ログイン時+bgm コマンド)。#bgm はパーサの
+    イベントにならないので raw でつないで確かめる。"""
+
+    async def asyncSetUp(self):
+        self.server = mock_server.MockServer("127.0.0.1", 0)
+        await self.server.start()
+        self.host, self.port = self.server.address
+
+    async def asyncTearDown(self):
+        await self.server.stop()
+
+    async def _read_until(self, reader, target, timeout=5.0):
+        lines = []
+        deadline = asyncio.get_running_loop().time() + timeout
+        while asyncio.get_running_loop().time() < deadline:
+            raw = await asyncio.wait_for(reader.readline(), timeout=timeout)
+            if not raw:
+                break
+            line = raw.rstrip(b"\r\n").decode("cp932", errors="replace")
+            lines.append(line)
+            if line == target:
+                break
+        return lines
+
+    async def test_login_sends_bgm_and_bgm_command_switches(self):
+        reader, writer = await asyncio.open_connection(self.host, self.port)
+        try:
+            for line in login_lines("TESTID"):
+                writer.write(line.encode("cp932") + b"\n")
+            await writer.drain()
+            lines = await self._read_until(reader, "#bgm NEO_field_booge")
+            self.assertIn("#bgm NEO_field_booge", lines)
+
+            writer.write("bgm NEO_town".encode("cp932") + b"\n")
+            await writer.drain()
+            lines = await self._read_until(reader, "#bgm NEO_town")
+            self.assertEqual(lines[-1], "#bgm NEO_town")
+
+            writer.write("bgm".encode("cp932") + b"\n")
+            await writer.drain()
+            lines = await self._read_until(reader, "#bgm NEO_field_booge")
+            self.assertEqual(lines[-1], "#bgm NEO_field_booge")
+        finally:
+            writer.close()
+            await writer.wait_closed()
+
+
 # 回転マップの規則は実サーバ(127.0.0.1:20017、guest)で実測して確認した:
 # 地形は3方向(N/E/S)とも式どおり(不一致0)、自キャラは turn で (3,4)・
 # 向きコードは常時 B、他キャラの向きコードも BRFL の回転どおりだった。
@@ -725,11 +775,13 @@ class TestMockTurnMap(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(_char_tuple(event, "案内人"), guide)
                 self.assertEqual(_char_tuple(event, "モック猫"), cat)
 
-            # solid に戻すと最初の地図と一致する
+            # solid に戻すと最初の地図と一致する。ただし右を3回
+            # 向いたので自分は西向きで、北固定では実サーバと同じく
+            # 自分の絶対方向 (L) が来る (昔のモックは常に B だった)。
             await session.send("#ex-map style=solid")
             event = await self._next_map(session)
             self.assertEqual(event.style, "solid")
-            self.assertEqual(_char_tuple(event, "モック太郎"), (3, 3, "B"))
+            self.assertEqual(_char_tuple(event, "モック太郎"), (3, 3, "L"))
             self.assertEqual(
                 [(c.chip, c.attr) for c in event.cells],
                 [(c.chip, c.attr) for c in base.cells],

@@ -32,16 +32,14 @@ func _initialize() -> void:
 
 
 func _test_stack_order() -> void:
-	# OS 既定のフォントが最優先。Mac は SF Pro Text＋ヒラギノ、
-	# Windows は Segoe UI、Linux は Noto Sans JP。
-	_check_eq(PhiFont.MAC_FONT_NAMES[0], "SF Pro Text", "mac first is SF Pro Text")
-	_check(PhiFont.MAC_FONT_NAMES.find("SF Pro Text") < PhiFont.MAC_FONT_NAMES.find("Hiragino Sans"), "SF before Hiragino")
-	_check_eq(PhiFont.WINDOWS_FONT_NAMES[0], "Segoe UI Variable Text", "win first is Segoe UI Variable Text")
-	_check(PhiFont.WINDOWS_FONT_NAMES.find("Segoe UI") < PhiFont.WINDOWS_FONT_NAMES.find("BIZ UDPGothic"), "Segoe before BIZ")
-	_check_eq(PhiFont.LINUX_FONT_NAMES[0], "Noto Sans JP", "linux first is Noto Sans JP")
-	# この環境は Linux なので、主フォントは Linux の並びになる。
-	_check_eq(PhiFont.primary_font_names()[0], "Noto Sans JP", "primary names on linux")
-	# フォールバックには日本語フォントが入っている。
+	# WPHI の CSS(--ui-font)とまったく同じ並び。OS では分けない。
+	_check_eq(PhiFont.WPHI_FONT_NAMES[0], "Noto Sans JP", "wphi first is Noto Sans JP")
+	_check_eq(PhiFont.WPHI_FONT_NAMES[1], "Noto Sans CJK JP", "wphi second is Noto Sans CJK JP")
+	_check(PhiFont.WPHI_FONT_NAMES.find("Segoe UI") < PhiFont.WPHI_FONT_NAMES.find("BIZ UDPGothic"), "Segoe before BIZ")
+	_check(PhiFont.WPHI_FONT_NAMES.find("BIZ UDPGothic") < PhiFont.WPHI_FONT_NAMES.find("SF Pro Text"), "BIZ before SF")
+	_check(PhiFont.WPHI_FONT_NAMES.find("SF Pro Text") < PhiFont.WPHI_FONT_NAMES.find("Hiragino Sans"), "SF before Hiragino")
+	_check_eq(PhiFont.primary_font_names(), PhiFont.WPHI_FONT_NAMES, "primary is wphi stack")
+	# フォールバックも同じ並びで、日本語フォントが入っている。
 	_check(PhiFont.CJK_FALLBACK_NAMES.has("Hiragino Sans"), "fallback has Hiragino")
 	_check(PhiFont.CJK_FALLBACK_NAMES.has("Noto Sans CJK JP"), "fallback has Noto CJK")
 

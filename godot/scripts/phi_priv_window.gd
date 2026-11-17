@@ -21,6 +21,12 @@ var _box_holder: VBoxContainer = null
 var _boxes: Array[CheckBox] = []
 var _log: RichTextLabel = null
 var _edit: LineEdit = null
+var _log_popup: PopupMenu = null
+var _title_label: Label = null
+## 題名用の太字フォント(main が渡す。無ければ通常フォントで出す)。
+var title_font: Font = null
+## 題名の文字サイズ(main が渡す。本文より一回り大きい値)。
+var title_size := 20
 var _opened_once := false
 ## タグ挿入メニュー(本体の入力欄と同じ TagMenu.xml の木)。
 var _tag_tree := {}
@@ -33,9 +39,10 @@ func _init() -> void:
 	# Window は既定で表示されるので、作った直後は隠しておく。
 	# そうしないと、初回の popup_centered を経ずに (0,0) に出てしまう。
 	visible = false
-	title = "宛先がありません"
+	# 題名は中身の先頭行に出す(タイトル帯は地が描かれない環境がある)。
+	title = ""
 	transient = true
-	min_size = Vector2i(360, 300)
+	min_size = Vector2i(440, 360)
 	close_requested.connect(_on_close_requested)
 	_build()
 
@@ -53,18 +60,51 @@ func toggle() -> void:
 
 
 func show_window() -> void:
+	# 題名の太字と大きさは、生成後に main から渡されるので表示時に付ける。
+	if _title_label != null:
+		if title_font != null:
+			_title_label.add_theme_font_override("font", title_font)
+		_title_label.add_theme_font_size_override("font_size", title_size)
 	if not _opened_once:
 		_opened_once = true
-		popup_centered(Vector2i(420, 380))
+		# 初回は大きめに出す(420x380 では小さく感じるとの指摘)。
+		# メインウィンドウより大きくはならないよう収める。
+		# ※ Window の get_window() は自分自身を返すので、
+		# 親ウィンドウの大きさは get_tree().root から取る。
+		var win := get_tree().root.size
+		var want := Vector2i(mini(600, maxi(win.x - 24, 440)), mini(500, maxi(win.y - 24, 360)))
+		popup_centered(want)
 	else:
 		show()
 
 
 func _build() -> void:
+	# 中身は枠プレートで包む(題名や×が枠の中に収まるように)。
+	var frame := UiStyle.window_frame()
+	frame.set_anchors_preset(Control.PRESET_FULL_RECT)
+	add_child(frame)
 	var box := VBoxContainer.new()
-	box.set_anchors_preset(Control.PRESET_FULL_RECT)
 	box.add_theme_constant_override("separation", 6)
-	add_child(box)
+	frame.add_child(box)
+	var head := HBoxContainer.new()
+	head.add_theme_constant_override("separation", 6)
+	box.add_child(UiStyle.title_band(head))
+	_title_label = Label.new()
+	_title_label.text = "宛先がありません"
+	if title_font != null:
+		_title_label.add_theme_font_override("font", title_font)
+	_title_label.add_theme_font_size_override("font_size", title_size)
+	head.add_child(_title_label)
+	var head_spacer := Control.new()
+	head_spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	head.add_child(head_spacer)
+	var close_button := Button.new()
+	close_button.text = "×"
+	close_button.focus_mode = Control.FOCUS_NONE
+	close_button.pressed.connect(_on_close_requested)
+	head.add_child(close_button)
+	# 題名行を掴んで動かせるようにする。
+	PhiWindowDrag.attach(head, self)
 	var scroll := ScrollContainer.new()
 	scroll.custom_minimum_size = Vector2(0, 110)
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -72,17 +112,25 @@ func _build() -> void:
 	_box_holder = VBoxContainer.new()
 	_box_holder.add_theme_constant_override("separation", 2)
 	scroll.add_child(_box_holder)
+	# リスト更新ボタンは横いっぱいに広げず、右寄せの自然な幅にする。
+	var refresh_row := HBoxContainer.new()
+	refresh_row.add_theme_constant_override("separation", 6)
+	box.add_child(refresh_row)
+	var refresh_spacer := Control.new()
+	refresh_spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	refresh_row.add_child(refresh_spacer)
 	var refresh := Button.new()
 	refresh.text = "リスト更新"
 	refresh.focus_mode = Control.FOCUS_NONE
 	refresh.pressed.connect(func() -> void: refresh_requested.emit())
-	box.add_child(refresh)
+	refresh_row.add_child(refresh)
 	_log = RichTextLabel.new()
 	_log.bbcode_enabled = false
 	_log.scroll_following = true
 	_log.selection_enabled = true
 	_log.custom_minimum_size = Vector2(0, 120)
 	_log.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_log.gui_input.connect(_on_log_gui_input)
 	box.add_child(_log)
 	var send_row := HBoxContainer.new()
 	send_row.add_theme_constant_override("separation", 6)
@@ -146,7 +194,9 @@ func update_title() -> void:
 	for box in _boxes:
 		if box.button_pressed:
 			names.append(box.text)
-	title = ", ".join(names) if not names.is_empty() else "宛先がありません"
+	var text := ", ".join(names) if not names.is_empty() else "宛先がありません"
+	if _title_label != null:
+		_title_label.text = text
 
 
 ## 今ある宛先チェックボックスの名前の一覧(テスト用)。
@@ -206,6 +256,34 @@ func log_line(text: String, is_error: bool) -> void:
 	_log.add_text(text + "\n")
 	if is_error:
 		_log.pop()
+
+
+# -- 履歴の右クリック (ログ編集) ----------------------------------------------
+
+func _on_log_gui_input(event: InputEvent) -> void:
+	var mb := event as InputEventMouseButton
+	if mb == null or not mb.pressed or mb.button_index != MOUSE_BUTTON_RIGHT:
+		return
+	if _log_popup == null:
+		_log_popup = PopupMenu.new()
+		_log_popup.add_item("コピー", 0)
+		_log_popup.add_item("発言欄にコピー", 1)
+		_log_popup.id_pressed.connect(_on_log_popup_pressed)
+		add_child(_log_popup)
+	_log_popup.popup(Rect2i(Vector2i(get_mouse_position()), Vector2i(1, 1)))
+
+
+func _on_log_popup_pressed(id: int) -> void:
+	var selected := _log.get_selected_text()
+	var text := selected if not selected.is_empty() else _log.get_parsed_text()
+	if id == 0:
+		DisplayServer.clipboard_set(text)
+	elif id == 1:
+		# 発言欄 (priv の入力欄) にコピー (Philly PrivForm の
+		# ログ編集メニュー相当)。
+		_edit.text = text
+		_edit.caret_column = _edit.text.length()
+		_edit.grab_focus()
 
 
 # -- タグ挿入メニュー(残り項目) ----------------------------------------------

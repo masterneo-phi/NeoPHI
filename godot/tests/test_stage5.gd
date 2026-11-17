@@ -202,11 +202,14 @@ func _test_se_rules() -> void:
 	entry = rules.match_entry("攻撃してダメージ")
 	_check_eq(entry.get("index", 0), 1, "se first match wins")
 	_check(rules.match_entry("関係ない行").is_empty(), "se no match")
-	# 既定(説明文だけ)では何も合わない。
-	var empty_rules := PhiSeRules.new()
-	empty_rules.load_texts(PhiSeRules.DEFAULT_REGEXP_TEXT, PhiSeRules.DEFAULT_FILE_TEXT)
-	_check_eq(empty_rules.rule_count(), 0, "se default no rules")
-	_check(empty_rules.match_entry("攻撃").is_empty(), "se default no match")
+	# 既定ルール (NeoPHI 同梱の効果音) が代表的な行に合う。
+	# (Philly の工場出荷は無音だったが、NeoPHI は既定の音を持つ。
+	# 詳しくは test_stage16。)
+	var default_rules := PhiSeRules.new()
+	default_rules.load_texts(PhiSeRules.DEFAULT_REGEXP_TEXT, PhiSeRules.DEFAULT_FILE_TEXT)
+	_check_eq(default_rules.rule_count(), 15, "se default rules")
+	_check_eq(str(default_rules.match_entry("DM > A は B を 拳 で攻撃した. [6 hp]").get("file", "")), "sound\\se\\attack.wav", "se default attack")
+	_check(default_rules.match_entry("関係ない行").is_empty(), "se default no match")
 
 
 # -- 場所探し ----------------------------------------------------------------------
@@ -225,7 +228,7 @@ func _test_sound_paths() -> void:
 	_check_eq(PhiSoundPaths.resolve_bgm("song.mid", [ROOT1]), ROOT1 + "/sound/bgm/song.mid", "paths bgm found")
 	_check_eq(PhiSoundPaths.resolve_bgm("none.mid", [ROOT1]), "", "paths bgm missing")
 	_check_eq(PhiSoundPaths.resolve_bgm("stage5_song.mid", []), "user://sound/bgm/stage5_song.mid", "paths bgm user dir")
-	_check_eq(PhiSoundPaths.resolve_soundfont([]), "res://assets/GeneralUser-GS.sf2", "paths soundfont bundled")
+	_check_eq(PhiSoundPaths.resolve_soundfont([]), "res://assets/FluidR3_GM.sf2", "paths soundfont bundled")
 
 
 # -- WAV 読み込み -------------------------------------------------------------------
@@ -290,7 +293,7 @@ func _run_tree_tests() -> void:
 func _test_bgm_player() -> void:
 	var bgm := PhiBgmPlayer.new()
 	root.add_child(bgm)
-	bgm.soundfont_path = "res://assets/GeneralUser-GS.sf2"
+	bgm.soundfont_path = "res://assets/FluidR3_GM.sf2"
 	_check(bgm.midi_available(), "bgm midi available")
 	_check_eq(bgm.state(), "stop", "bgm initial stop")
 	# MIDI 再生(サウンドフォントの読み込みで数秒かかる)。
@@ -344,7 +347,7 @@ func _test_engine() -> void:
 	var engine := PhiSoundEngine.new()
 	root.add_child(engine)
 	engine.setup(config, [ROOT1])
-	_check_eq(engine.soundfont_path(), "res://assets/GeneralUser-GS.sf2", "engine soundfont")
+	_check_eq(engine.soundfont_path(), "res://assets/FluidR3_GM.sf2", "engine soundfont")
 	engine.set_se_texts(REGEXP_TEXT, FILE_TEXT)
 	_check_eq(engine.se_rule_count(), 3, "engine se rules")
 	var se_got: Array[String] = []

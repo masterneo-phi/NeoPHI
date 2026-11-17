@@ -13,7 +13,7 @@ const _MAP_CELLS := 49
 const _M57_DIRECTION_OFFSET := 7
 const _M57_CHIP_OFFSET := 18
 const _MAP_CHIP_BYTES := _MAP_CELLS * 2
-const _MAX_EAGLE_EYE := 15
+const _MAX_EAGLE_EYE := 20
 const _MAX_LIST_LINES := 1000
 const _MAX_MAP_CHARS := 1000
 const _I64_MIN := -9223372036854775808
@@ -290,8 +290,14 @@ func feed(raw: PackedByteArray) -> Array[Dictionary]:
 		if _starts_with_bytes(raw, "#m57 M"):
 			_parse_m57_m(raw)
 			return []
+		if _starts_with_bytes(raw, "#m81 M"):
+			_parse_m81_m(raw)
+			return []
 		if _starts_with_bytes(raw, "#map M"):
 			_parse_map_m(raw)
+			return []
+		if _starts_with_bytes(raw, "#map C"):
+			_parse_map_c(raw)
 			return []
 		return _dispatch_command(Cp932.decode(raw), raw)
 
@@ -389,6 +395,9 @@ func _dispatch_command(text: String, raw: PackedByteArray) -> Array[Dictionary]:
 	if text == "#m57 .":
 		_map_size = 7
 		return _finish_map()
+	if text == "#m81 .":
+		_map_size = 9
+		return _finish_map()
 	if text == "#map .":
 		_map_size = 5
 		return _finish_map()
@@ -411,11 +420,23 @@ func _dispatch_command(text: String, raw: PackedByteArray) -> Array[Dictionary]:
 	if _starts_with_bytes(raw, "#m57 O "):
 		_parse_m57_o(raw)
 		return []
+	if _starts_with_bytes(raw, "#m81 O "):
+		# O 行の欄の並びは #m57 と同じ (接頭辞だけが違う)。
+		_parse_m57_o(raw)
+		return []
 	if _starts_with_bytes(raw, "#m57 W "):
 		for span in [[7, 74], [75, 142]]:
 			if raw.size() >= span[1]:
 				var rebuilt := PackedByteArray()
 				rebuilt.append_array("#m57 O ".to_ascii_buffer())
+				rebuilt.append_array(raw.slice(span[0], span[1]))
+				_parse_m57_o(rebuilt)
+		return []
+	if _starts_with_bytes(raw, "#m81 W "):
+		for span in [[7, 74], [75, 142]]:
+			if raw.size() >= span[1]:
+				var rebuilt := PackedByteArray()
+				rebuilt.append_array("#m81 O ".to_ascii_buffer())
 				rebuilt.append_array(raw.slice(span[0], span[1]))
 				_parse_m57_o(rebuilt)
 		return []
@@ -553,15 +574,24 @@ func _parse_ex_obj(text: String) -> void:
 
 func _parse_m57_m(raw: PackedByteArray) -> void:
 	## `#m57 M`。raw[18..116] に (chip, attr) が49組並ぶ。
-	_map_size = 7
+	_parse_mx_m(raw, 7, _MAP_CHIP_BYTES)
+
+
+func _parse_m81_m(raw: PackedByteArray) -> void:
+	## `#m81 M`。書式は #m57 M と同じで、(chip, attr) が81組並ぶ。
+	_parse_mx_m(raw, 9, 162)
+
+
+func _parse_mx_m(raw: PackedByteArray, size: int, chip_bytes: int) -> void:
+	_map_size = size
 	if raw.size() > _M57_DIRECTION_OFFSET:
 		_map_dir = _dir_to_num(raw[_M57_DIRECTION_OFFSET])
-	var end := _M57_CHIP_OFFSET + _MAP_CHIP_BYTES
+	var end := _M57_CHIP_OFFSET + chip_bytes
 	if raw.size() < end:
 		_map_cells = null
 		return
 	var cells: Array[Dictionary] = []
-	for i in range(0, _MAP_CHIP_BYTES, 2):
+	for i in range(0, chip_bytes, 2):
 		cells.append({"chip": raw[_M57_CHIP_OFFSET + i], "attr": raw[_M57_CHIP_OFFSET + i + 1]})
 	_map_cells = cells
 
@@ -589,6 +619,55 @@ func _parse_map_m(raw: PackedByteArray) -> void:
 			attr |= 0x08
 		cells.append({"chip": chip, "attr": attr})
 	_map_cells = cells
+
+
+func _parse_map_c(raw: PackedByteArray) -> void:
+	## `#map C`(5x5 のキャラ・オブジェ行)。書式はサーバの
+	## "#map C%02i:%01i %01i %c %-31s %02x %-15s %c %02x " で、
+	## #m57 O と同じ欄が 4 バイト前にずれて並ぶ(Philly は "O C0" を
+	## 挿入して同じ読み取りに流す)。
+	## [6..7]番号(10進) [9]X [11]Y [13]向き [15..45]名前
+	## [47..48]状態(16進) [50..64]グラ名 [66]Gigant [68..69]種別(16進)
+	if raw.size() < 70:
+		return
+	var x_ch := raw[9]
+	var y_ch := raw[11]
+	if not (0x30 <= x_ch and x_ch <= 0x39 and 0x30 <= y_ch and y_ch <= 0x39):
+		return
+	var index := 0
+	if 0x30 <= raw[6] and raw[6] <= 0x39 and 0x30 <= raw[7] and raw[7] <= 0x39:
+		index = (raw[6] - 0x30) * 10 + (raw[7] - 0x30)
+	var status: Variant = _hex_u32(raw.slice(47, 49))
+	var default: Variant = _hex_u32(raw.slice(68, 70))
+	if status == null or default == null:
+		return
+	var chara_name := Cp932.decode(raw.slice(15, 46)).strip_edges(false, true)
+	var gra := Cp932.decode(raw.slice(50, 65)).strip_edges(false, true)
+	if _chara_clear_pending:
+		_map_chars = []
+		_chara_clear_pending = false
+	var magnify: Variant = null
+	for pair in _name_magnify:
+		if pair[0] == chara_name:
+			magnify = pair[1]
+			break
+	if _map_chars.size() >= _MAX_MAP_CHARS:
+		return
+	var chara := {
+		"id": index,
+		"x": x_ch - 0x30,
+		"y": y_ch - 0x30,
+		"dir": PackedByteArray([raw[13]]).get_string_from_ascii(),
+		"name": chara_name,
+		"gra": gra,
+		"status": status,
+		"gigant": PackedByteArray([raw[66]]).get_string_from_ascii(),
+		"layer": index,
+		"default": default,
+	}
+	if magnify != null:
+		chara["magnify"] = magnify
+	_map_chars.append(chara)
 
 
 func _parse_m57_o(raw: PackedByteArray) -> void:

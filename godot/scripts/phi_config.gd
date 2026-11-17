@@ -10,13 +10,16 @@ extends RefCounted
 ## [Connection] Host, Port … Philly の .phirc 相当。ID は保存しない
 ##   (ID は起動引数か既定の guest を使う)。
 ## [Skin] SkinName … Philly.ini 互換(起動時のみ有効なのと同じ扱い)。
-## [Map] MapSize (40=5x5, 57=7x7), MapStyle (solid/turn)。
+## [Map] MapSize (40=5x5, 57=7x7, 81=9x9), MapStyle (solid/turn)。
 ## [Disp] WindowWidth, WindowHeight … 起動時の窓の大きさ。
 ## [Disp] SplitOffset … 地図とログの分割位置(地図側の幅ピクセル)。
 ##   0 以下なら未設定で、初回は地図 55%・ログ 45% にする。
 ## [Disp] ToolbarX, ToolbarY … ツールバーのフロート位置
 ##   (地図の中の座標)。どちらか欠けるか負なら未設定で、
 ##   既定の左上 (8, 8) に置く。
+## [Disp] TalkButtonX, TalkButtonY … Talk ボタンの位置
+##   (地図の中の座標)。どちらか欠けるか負なら未設定で、
+##   既定の左下に置く。ドラッグで動かせる。
 ## [Disp] InputHeight … 入力欄の高さ(ピクセル)。負なら未設定で、
 ##   既定の3行ぶんにする。ログとの境目のドラッグで変わる。
 ## [Log] ScrollStop … ログの自動スクロールを止めるか。
@@ -41,7 +44,7 @@ const DEFAULT_PATH := "user://NeoPHI.ini"
 const DEFAULT_HOST := "127.0.0.1"
 const DEFAULT_PORT := 20017
 const DEFAULT_SKIN := "Mine"
-const DEFAULT_MAP_SIZE := 57
+const DEFAULT_MAP_SIZE := 81
 const DEFAULT_MAP_STYLE := "solid"
 const DEFAULT_WINDOW_WIDTH := 1280
 const DEFAULT_WINDOW_HEIGHT := 1024
@@ -71,6 +74,16 @@ var map_size := DEFAULT_MAP_SIZE
 var map_style := DEFAULT_MAP_STYLE
 ## サーバーからの魔法表示を受け取るか(Philly DispMagicClientSide)。
 var disp_magic := true
+## 移動時に地図をドット単位で滑らかにスクロールするか
+## (表示メニュー「スムーズマップスクロール」。既定 on。
+## 北固定の時だけ効き、回転の時は従来どおり切り替わる)。
+var smooth_scroll := true
+## キャラにマウスを止めると名前をヒント表示するか
+## (Philly [Map] SearchHintName。既定 on)。
+var search_hint_name := true
+## マウス移動時に目安ラインを描くか (Philly [Map]
+## MouseMoveLine。既定 off)。
+var mouse_move_line := false
 var window_width := DEFAULT_WINDOW_WIDTH
 var window_height := DEFAULT_WINDOW_HEIGHT
 var split_ratio := DEFAULT_SPLIT_RATIO
@@ -78,6 +91,7 @@ var split_ratio := DEFAULT_SPLIT_RATIO
 ## その場合は地図の左上 (8, 8) に置く。ドラッグで動かすと更新され、
 ## 分割比率と同じく、保存はメイン画面のタイミング(終了時など)。
 var toolbar_pos := Vector2(-1, -1)
+var talk_button_pos := Vector2(-1, -1)
 ## 入力欄の高さ(ピクセル)。-1 は未設定で、その場合は既定の
 ## 3行ぶんにする。境目のドラッグで更新され、保存はメイン画面の
 ## タイミング(終了時など)。
@@ -85,6 +99,12 @@ var input_height := -1
 var scroll_stop := false
 ## ログをファイルに自動保存するか(Philly LogAutoSave。既定 off)。
 var log_auto_save := false
+## ログ表示に行頭の時刻 [HH:MM] を付けるか(Philly LogDispTime。
+## 既定 on)。
+var log_disp_time := true
+## ログ中の /*img=URL*/ を画像そのもので表示するか (Philly
+## LogImageDisp。既定 on)。off の間は [画像: URL] の文字で出す。
+var log_image_disp := true
 ## 自動保存の保存先フォルダ(Philly の Logs/ 相当)。
 var log_save_dir := PhiLogFile.DEFAULT_DIR
 ## HTML で保存するか(Philly LogSaveHtml。off ならテキスト)。
@@ -116,12 +136,19 @@ var alt_g_word := DEFAULT_ALT_G_WORD
 var loudly_by_asterisk := 0
 ## Ctrl+Enter でパーティー発言にするか(Philly PartyTalkByCtrl)。
 var party_talk_by_ctrl := true
+## Call / Return の前に確認ダイアログを出すか
+## (Philly [Input] DialogForCall / DialogForReturn。既定 on)。
+var dialog_for_call := true
+var dialog_for_return := true
 ## priv を受けたら priv ウィンドウを出すか(Philly PopupPrivForm)。
 var popup_priv_form := true
 ## ログ行に正規表現が合ったら効果音を鳴らすか(Philly SoundPlay)。
 var sound_play := true
 ## BGM を鳴らすか(Philly PlayBgm)。
 var play_bgm := true
+## 超魔法メニューを、マスター (EXP 99999999) でなくても出すか
+## (WPHI の masterMagicMenu 設定。既定 off)。
+var master_magic_always := false
 ## アプリがアクティブでない時も BGM を鳴らすか
 ## (Philly PlayBgmDeactivate。off なら非アクティブで一時停止)。
 var play_bgm_deactivate := false
@@ -142,13 +169,19 @@ func reset() -> void:
 	map_size = DEFAULT_MAP_SIZE
 	map_style = DEFAULT_MAP_STYLE
 	disp_magic = true
+	smooth_scroll = true
+	search_hint_name = true
+	mouse_move_line = false
 	window_width = DEFAULT_WINDOW_WIDTH
 	window_height = DEFAULT_WINDOW_HEIGHT
 	split_ratio = DEFAULT_SPLIT_RATIO
 	toolbar_pos = Vector2(-1, -1)
+	talk_button_pos = Vector2(-1, -1)
 	input_height = -1
 	scroll_stop = false
 	log_auto_save = false
+	log_disp_time = true
+	log_image_disp = true
 	log_save_dir = PhiLogFile.DEFAULT_DIR
 	log_save_html = true
 	log_save_delete_tag = false
@@ -164,10 +197,13 @@ func reset() -> void:
 	alt_g_word = DEFAULT_ALT_G_WORD
 	loudly_by_asterisk = 0
 	party_talk_by_ctrl = true
+	dialog_for_call = true
+	dialog_for_return = true
 	popup_priv_form = true
 	sound_play = true
 	play_bgm = true
 	play_bgm_deactivate = false
+	master_magic_always = false
 
 
 func load_file(path: String = DEFAULT_PATH) -> bool:
@@ -184,10 +220,12 @@ func load_file(path: String = DEFAULT_PATH) -> bool:
 	var s := str(cfg.get_value("Skin", "SkinName", DEFAULT_SKIN)).strip_edges()
 	skin = s if not s.is_empty() else DEFAULT_SKIN
 	var ms := int(cfg.get_value("Map", "MapSize", DEFAULT_MAP_SIZE))
-	map_size = ms if ms == 40 or ms == 57 else DEFAULT_MAP_SIZE
+	map_size = ms if ms == 40 or ms == 57 or ms == 81 else DEFAULT_MAP_SIZE
 	var mst := str(cfg.get_value("Map", "MapStyle", DEFAULT_MAP_STYLE)).strip_edges().to_lower()
 	map_style = mst if mst == "solid" or mst == "turn" else DEFAULT_MAP_STYLE
 	disp_magic = bool(cfg.get_value("Map", "DispMagicClientSide", true))
+	search_hint_name = bool(cfg.get_value("Map", "SearchHintName", true))
+	mouse_move_line = bool(cfg.get_value("Map", "MouseMoveLine", false))
 	var ww := int(cfg.get_value("Disp", "WindowWidth", DEFAULT_WINDOW_WIDTH))
 	window_width = ww if ww >= 320 else DEFAULT_WINDOW_WIDTH
 	var wh := int(cfg.get_value("Disp", "WindowHeight", DEFAULT_WINDOW_HEIGHT))
@@ -213,10 +251,19 @@ func load_file(path: String = DEFAULT_PATH) -> bool:
 		var ty := float(cfg.get_value("Disp", "ToolbarY", -1))
 		if tx >= 0.0 and ty >= 0.0:
 			toolbar_pos = Vector2(tx, ty)
+	# Talk ボタンの位置。両方そろって 0 以上なら採用する。
+	if cfg.has_section_key("Disp", "TalkButtonX") and cfg.has_section_key("Disp", "TalkButtonY"):
+		var bx := float(cfg.get_value("Disp", "TalkButtonX", -1))
+		var by := float(cfg.get_value("Disp", "TalkButtonY", -1))
+		if bx >= 0.0 and by >= 0.0:
+			talk_button_pos = Vector2(bx, by)
 	var ih := int(cfg.get_value("Disp", "InputHeight", -1))
 	input_height = ih if ih >= 0 else -1
+	smooth_scroll = bool(cfg.get_value("Disp", "SmoothMapScroll", true))
 	scroll_stop = bool(cfg.get_value("Log", "ScrollStop", false))
 	log_auto_save = bool(cfg.get_value("Log", "LogAutoSave", false))
+	log_disp_time = bool(cfg.get_value("Log", "LogDispTime", true))
+	log_image_disp = bool(cfg.get_value("Log", "LogImageDisp", true))
 	var lsd := str(cfg.get_value("Log", "LogSaveDir", PhiLogFile.DEFAULT_DIR)).strip_edges()
 	log_save_dir = lsd if not lsd.is_empty() else PhiLogFile.DEFAULT_DIR
 	log_save_html = bool(cfg.get_value("Log", "LogSaveHtml", true))
@@ -237,9 +284,12 @@ func load_file(path: String = DEFAULT_PATH) -> bool:
 	var loud := int(cfg.get_value("Edit", "LoudlyByAsterisk", 0))
 	loudly_by_asterisk = clampi(loud, 0, 2)
 	party_talk_by_ctrl = bool(cfg.get_value("Edit", "PartyTalkByCtrl", true))
+	dialog_for_call = bool(cfg.get_value("Input", "DialogForCall", true))
+	dialog_for_return = bool(cfg.get_value("Input", "DialogForReturn", true))
 	popup_priv_form = bool(cfg.get_value("Priv", "PopupPrivForm", true))
 	sound_play = bool(cfg.get_value("Sound", "SoundPlay", true))
 	play_bgm = bool(cfg.get_value("Sound", "PlayBgm", true))
+	master_magic_always = bool(cfg.get_value("MasterMagic", "MasterMagicMenu", false))
 	play_bgm_deactivate = bool(cfg.get_value("Sound", "PlayBgmDeactivate", false))
 	return true
 
@@ -252,14 +302,21 @@ func save_file(path: String = DEFAULT_PATH) -> bool:
 	cfg.set_value("Map", "MapSize", map_size)
 	cfg.set_value("Map", "MapStyle", map_style)
 	cfg.set_value("Map", "DispMagicClientSide", disp_magic)
+	cfg.set_value("Map", "SearchHintName", search_hint_name)
+	cfg.set_value("Map", "MouseMoveLine", mouse_move_line)
 	cfg.set_value("Disp", "WindowWidth", window_width)
 	cfg.set_value("Disp", "WindowHeight", window_height)
 	cfg.set_value("Disp", "SplitRatio", split_ratio)
 	cfg.set_value("Disp", "ToolbarX", toolbar_pos.x)
 	cfg.set_value("Disp", "ToolbarY", toolbar_pos.y)
+	cfg.set_value("Disp", "SmoothMapScroll", smooth_scroll)
+	cfg.set_value("Disp", "TalkButtonX", talk_button_pos.x)
+	cfg.set_value("Disp", "TalkButtonY", talk_button_pos.y)
 	cfg.set_value("Disp", "InputHeight", input_height)
 	cfg.set_value("Log", "ScrollStop", scroll_stop)
 	cfg.set_value("Log", "LogAutoSave", log_auto_save)
+	cfg.set_value("Log", "LogDispTime", log_disp_time)
+	cfg.set_value("Log", "LogImageDisp", log_image_disp)
 	cfg.set_value("Log", "LogSaveDir", log_save_dir)
 	cfg.set_value("Log", "LogSaveHtml", log_save_html)
 	cfg.set_value("Log", "LogSaveDeleteTag", log_save_delete_tag)
@@ -277,8 +334,11 @@ func save_file(path: String = DEFAULT_PATH) -> bool:
 	cfg.set_value("Shortcut", "AltGWord", alt_g_word)
 	cfg.set_value("Edit", "LoudlyByAsterisk", loudly_by_asterisk)
 	cfg.set_value("Edit", "PartyTalkByCtrl", party_talk_by_ctrl)
+	cfg.set_value("Input", "DialogForCall", dialog_for_call)
+	cfg.set_value("Input", "DialogForReturn", dialog_for_return)
 	cfg.set_value("Priv", "PopupPrivForm", popup_priv_form)
 	cfg.set_value("Sound", "SoundPlay", sound_play)
 	cfg.set_value("Sound", "PlayBgm", play_bgm)
 	cfg.set_value("Sound", "PlayBgmDeactivate", play_bgm_deactivate)
+	cfg.set_value("MasterMagic", "MasterMagicMenu", master_magic_always)
 	return cfg.save(path) == OK

@@ -494,12 +494,13 @@ Ctrl+Enter のパーティー発言（`[Edit]`）、priv ウィンドウの自�
   MIDI の再生は GDScript 製の **Godot MIDI Player G4**
   （arlez80 / Yui Kinomoto、MIT ライセンス、
   `addons/midi/` に同梱。エディタ用プラグイン部分は除く）と、
-  サウンドフォント **GeneralUser GS v2.0.3**
-  （S. Christian Collins、`assets/GeneralUser-GS.sf2`、
-  ライセンスは `assets/GeneralUser-GS-LICENSE.txt`、
-  ソフトウェアへの利用が許諾されています）で行います
+  サウンドフォント **FluidR3 GM**
+  （Frank Wen、MIT ライセンス、`assets/FluidR3_GM.sf2`、
+  ライセンスは `assets/FluidR3-GM-LICENSE.txt`）で行います。
+  以前使っていた GeneralUser GS が Philly ルートの `sound/`
+  にあれば、そちらにフォールバックします
   （`scripts/phi_bgm_player.gd`）。サウンドフォントの
-  読み込み（約3秒）は最初の MIDI 再生時にだけ行い、
+  読み込み（数秒）は最初の MIDI 再生時にだけ行い、
   無ければ MIDI は無音で、WAV/OGG/MP3 の BGM は
   サウンドフォント無しでも鳴ります。ループ再生します。
   一時停止は位置を覚えて止め、再開は同じ位置からです。
@@ -524,6 +525,45 @@ Ctrl+Enter のパーティー発言（`[Edit]`）、priv ウィンドウの自�
   （`0100/0100` の形、ステータス行と同じ流儀）に
   そろえました。ログ列の上の帯には「Log Window」の
   文字を中央に表示します（帯の高さは不変）。
+
+- 第7段: 新規キャラクター作成とキャラクター管理
+  （Philly 式。WPHI の `#ex-register` 方式ではありません）。
+  メニューバーの「キャラクター」（ファイルの次。スキンの
+  `Style/Menu.txt` の on/off を尊重）から「新規キャラクター
+  作成...」を開くと、PhillyNewCharacter を移植した
+  ダイアログが出ます。世界は Philly ルートの `resist.ini`
+  （無ければ `Config/resist.ini`）の一覧から選び
+  （末尾に「指定したアドレスの世界に登録」が付きます）、
+  名前とメールを入れて「作成」を押すと、専用のタブが
+  作成セッションを始めます。名前の検証（2〜31文字・
+  半角のみ・先頭/末尾スペース不可・先頭 `#` 不可・
+  `/*` と `*/` 不可）とメールの扱い（半角のみ、`@` が
+  無ければ末尾に補う）は Philly の警告文言ごと移植し、
+  パスワードは Philly と同じ6文字 `[0-9A-Za-z]` を
+  自動生成します（入力欄はありません）。作成セッションは
+  `#open newuser` で接続し、サーバの英語プロンプト
+  （名前・パスワード・メール・確認、サーバに初期グラが
+  設定されていればグラ選択も）に自動で応答します
+  （種別ごとに3回まで）。`#set-user-id` で ID が発行
+  されると、Philly 互換の `<表示名>.chara/.phirc`
+  （cp932、1行目=ID、2行目=`IP:ポート`）を Philly
+  ルート（見つからなければ `user://`）に保存し、発行 ID を
+  ログに明示して、そのまま通常セッションに移行します。
+  表示名は `NN_<名前>`（NN は 01〜99 の空き番号）で、
+  管理上限は Philly と同じ32件です。発行 ID は
+  `.phirc` にだけ書き、`NeoPHI.ini` と `TabSession.ini`
+  には従来どおり書きません。生成パスワード単体も
+  保存しません（発行 ID に含まれます）。
+  「キャラクター」メニューには登録済みキャラクターの
+  一覧も並び、選ぶと新しいタブでその ID で接続します。
+  接続ダイアログ（タブの `+`）にも「登録済み」の選択が
+  あり、選ぶと接続先と ID が入力欄に入ります。
+  テストは `tests/test_stage7.gd`（98件）。実サーバの
+  写し（ポート20021）で実際に1キャラクター作成し、
+  発行 ID・`.phirc` の内容・発行 ID での再ログインを
+  確認済みです。サーバに初期グラが設定されている場合の
+  グラ選択プロンプトは、単体テストでのみ確認しています
+  （手元のサーバには初期グラの設定が無いため）。
 
 ## 未実装（試作の範囲外）
 
@@ -665,6 +705,9 @@ scripts/
   phi_bgm_player.gd    BGM プレイヤー（MIDI と音声ファイル、ループ・速度・一時停止）
   phi_sound_engine.gd  効果音の再生と BGM の橋渡し
   phi_mouse.gd         マウスの方向・移動変換・向き変更（純粋ロジック）
+  phi_characters.gd    キャラクターの保存（.phirc）・表示名生成・名前検証・パスワード生成
+  phi_resist.gd        resist.ini（登録世界の一覧）の読解と探索
+  phi_register.gd      新規キャラクター作成の会話（プロンプト応答の状態機械）
   compass_view.gd      コンパスの描画（スキン絵か代替描画）
   status_panel.gd      HP/MPバーと、その下のステータス行の描画
   ui_style.gd          角丸の半径・金属テクスチャの読み込み・金属の溝の描画
@@ -682,13 +725,15 @@ tests/
   test_stage3.gd       第3段（魔法表示・状態アイコン・マウス・右列・バー）のテスト
   test_stage4.gd       第4段（タブ・ログ記録・コピー・超魔法・画像）のテスト
   test_stage5.gd       第5段（効果音の照合・場所探し・WAV・BGM プレイヤー・配線）のテスト
+  test_stage6.gd       後回し項目（priv のタグ挿入・ログ保存・URL リンク・追加発言・リストの複数チェック）のテスト
+  test_stage7.gd       第7段（resist 読解・名前検証・表示名・.phirc・作成の状態機械）のテスト
   test_layout.gd       レイアウト変更（2列化・フォント・世界名ヘッダー・コンパスのフロート化・ステータス行・ツールバーのフロート化・入力欄の高さ・金属スリット・角丸）のテスト
   test_logo.gd         タイトルロゴとアイコンのテスト
 addons/
   midi/                Godot MIDI Player G4（MIT、MIDI 再生用。プラグイン部分は除く）
 assets/
-  GeneralUser-GS.sf2   BGM 用サウンドフォント（GeneralUser GS v2.0.3、約32MB）
-  GeneralUser-GS-LICENSE.txt  サウンドフォントのライセンス
+  FluidR3_GM.sf2       BGM 用サウンドフォント（FluidR3 GM、約141MB、MIT）
+  FluidR3-GM-LICENSE.txt  サウンドフォントのライセンス
 tools/
   gen_cp932_table.py   cp932_table.json の生成（Python のコーデックから）
   make_metal_texture.py assets/metal.png（金属テクスチャ）の生成（PIL）

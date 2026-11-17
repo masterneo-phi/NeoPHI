@@ -65,13 +65,16 @@ static func resolve_bgm(file_name: String, roots: Array) -> String:
 
 
 static func soundfont_candidates(roots: Array) -> Array[String]:
-	## サウンドフォント(GeneralUser GS)の候補パスの並び。
-	## 同梱の `res://assets/` を先に、Philly ルートの `sound/` を後に。
-	var out: Array[String] = ["res://assets/GeneralUser-GS.sf2"]
+	## サウンドフォントの候補パスの並び。FluidR3 GM を優先し、
+	## 無ければ GeneralUser GS に落とす。同梱の `res://assets/` を
+	## 先に、Philly ルートの `sound/` を後に。
+	var out: Array[String] = ["res://assets/FluidR3_GM.sf2"]
 	for root in roots:
 		var base := str(root).replace("\\", "/").trim_suffix("/")
 		if base.is_empty():
 			continue
+		out.append(base + "/sound/FluidR3_GM.sf2")
+		out.append(base + "/FluidR3_GM.sf2")
 		out.append(base + "/sound/GeneralUser-GS.sf2")
 		out.append(base + "/GeneralUser-GS.sf2")
 	return out

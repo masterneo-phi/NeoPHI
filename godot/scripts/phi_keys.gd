@@ -87,6 +87,7 @@ const _NONE_SEND := {
 	"KeyN": "n",
 	"KeyQ": "equip",
 	"KeyR": "spells",
+	"KeyS": "write",
 	"KeyV": "sort",
 	"KeyW": "unequip",
 	"KeyX": "put",
@@ -132,6 +133,8 @@ const _SHIFT_SEND := {
 	"Numpad5": "#ex-map size=40",
 	"Digit7": "#ex-map size=57",
 	"Numpad7": "#ex-map size=57",
+	"Digit9": "#ex-map size=81",
+	"Numpad9": "#ex-map size=81",
 }
 
 const _CTRL_SEND := {
@@ -271,6 +274,57 @@ static func move_input(code: String, shift: bool = false, ctrl: bool = false, al
 static func move_command(key: String, mods: String, north_fix: bool) -> String:
 	var table: Dictionary = _NORTH_FIX if north_fix else _TURN
 	return (table[mods] as Dictionary)[key]
+
+
+static func _direction_of(key: String) -> String:
+	## 方向キーの方位 (N/S/W/E)。回転系などは ""。
+	match key:
+		"8", "up":
+			return "N"
+		"2", "down":
+			return "S"
+		"4", "left":
+			return "W"
+		"6", "right":
+			return "E"
+	return ""
+
+
+static func compose_held(held: Array) -> Array:
+	## 押し続けている移動キー (押した順の [{key, mods}]) から、
+	## 送る移動キーの並び [[key, mods], ...] を決める
+	## (Philly classMoveCommand の同時押し合成)。
+	## - 回転系 (7/9/5) があれば、最後に押された回転系だけ
+	##   (回転系は優先処理される)。
+	## - 方向系は最後の2つを見る: 直交なら斜め (縦→横の順で
+	##   両方、マウスと同じ)、相反・同一方向なら新しい方だけ。
+	## - 方向系が1つならそれだけ。
+	if held.is_empty():
+		return []
+	for i in range(held.size() - 1, -1, -1):
+		if str(held[i]["key"]) in ["7", "9", "5"]:
+			return [[str(held[i]["key"]), str(held[i]["mods"])]]
+	var dirs: Array = []
+	for entry in held:
+		if not _direction_of(str(entry["key"])).is_empty():
+			dirs.append(entry)
+	if dirs.is_empty():
+		return []
+	var last: Dictionary = dirs[dirs.size() - 1]
+	if dirs.size() == 1:
+		return [[str(last["key"]), str(last["mods"])]]
+	var prev: Dictionary = dirs[dirs.size() - 2]
+	var d_last := _direction_of(str(last["key"]))
+	var d_prev := _direction_of(str(prev["key"]))
+	var last_vertical := d_last == "N" or d_last == "S"
+	var prev_vertical := d_prev == "N" or d_prev == "S"
+	if last_vertical != prev_vertical:
+		# 直交 → 斜め。縦→横の順。
+		if prev_vertical:
+			return [[str(prev["key"]), str(prev["mods"])], [str(last["key"]), str(last["mods"])]]
+		return [[str(last["key"]), str(last["mods"])], [str(prev["key"]), str(prev["mods"])]]
+	# 同じ軸 (相反・同一方向) は新しい方だけ。
+	return [[str(last["key"]), str(last["mods"])]]
 
 
 ## 移動以外の操作で送る行。操作でなければ ""。Tab は入力欄へ行く合図で別扱い。

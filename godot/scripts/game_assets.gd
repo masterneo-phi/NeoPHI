@@ -88,7 +88,9 @@ func clear_cache() -> void:
 
 
 static func is_lanu(file_name: String) -> bool:
-	## LANU 系のグラフィックスか。どこにあっても読まない。
+	## LANU 系のグラフィックスか (4bpp)。キャラグラとしては
+	## 通常どおり読む (Philly の既定グラも LANU 系)。ボタンと
+	## 一覧の候補からは外すために使う。
 	return file_name.get_file().to_lower().begins_with("lanu_")
 
 
@@ -275,7 +277,7 @@ func _chara_path(chara_name: String, gra: String, code: int) -> Variant:
 		if candidate == null or str(candidate).is_empty():
 			continue
 		var file_name := str(candidate) + ".bmp"
-		if not safe_name(file_name) or is_lanu(file_name):
+		if not safe_name(file_name):
 			continue
 		# フラット式のフォルダ
 		for dir in chara_dirs:
@@ -313,13 +315,13 @@ func _default_chara_path(code: int) -> Variant:
 		if file == null or file.is_empty():
 			continue
 		for rel in ["Skins/%s/Chara/%s" % [skin, file], "chara/" + file]:
-			if not safe_rel(rel) or is_lanu(rel):
+			if not safe_rel(rel):
 				continue
 			var found: Variant = _find_in(root, rel)
 			if found != null:
 				return found
 	# フラット式の既定ファイル
-	if not default_chara_file.is_empty() and safe_name(default_chara_file) and not is_lanu(default_chara_file):
+	if not default_chara_file.is_empty() and safe_name(default_chara_file):
 		for dir in chara_dirs:
 			var listing := _list_dir(dir)
 			var found: Variant = listing.get(default_chara_file.to_lower())
@@ -481,6 +483,28 @@ func button_icon(action_name: String) -> Variant:
 	if tex == null:
 		return null
 	return _remember(key, tex)
+
+
+func button_icon_sized(action_name: String, px: int) -> Variant:
+	## button_icon を px の大きさに拡大した絵。プルダウンメニューの
+	## アイコンを少し大きくするために使う(ユーザーの要望)。
+	## ドット絵なので拡大は NEAREST。大きさ別にキャッシュする。
+	var base: Variant = button_icon(action_name)
+	if base == null:
+		return null
+	var tex := base as Texture2D
+	if tex == null or tex.get_width() == px:
+		return base
+	var key := "button?%s@%d" % [action_name, px]
+	var cached: Variant = _cache.get(key)
+	if cached != null:
+		return cached
+	var img := tex.get_image()
+	if img == null:
+		return base
+	img = img.duplicate()
+	img.resize(px, px, Image.INTERPOLATE_NEAREST)
+	return _remember(key, ImageTexture.create_from_image(img))
 
 
 func skin_image(image_name: String) -> Variant:

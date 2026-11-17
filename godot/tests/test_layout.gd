@@ -38,6 +38,8 @@ func _check_eq(a: Variant, b: Variant, label: String) -> void:
 
 func _initialize() -> void:
 	_test_font_rules()
+	_test_check_texture()
+	_test_viewport_region()
 	_test_place_text()
 	_test_status_panel_sizes()
 	_test_status_format_and_centering()
@@ -82,23 +84,46 @@ func _on_frame() -> void:
 func _test_font_rules() -> void:
 	# 第4段からさらにもうひと回り小さい。
 	_check_eq(PhiFont.ui_size_for_zoom(1), 6, "layout ui zoom1")
-	_check_eq(PhiFont.ui_size_for_zoom(2), 12, "layout ui zoom2")
-	_check_eq(PhiFont.ui_size_for_zoom(3), 18, "layout ui zoom3")
-	_check_eq(PhiFont.ui_size_for_zoom(4), 24, "layout ui zoom4")
-	_check_eq(PhiFont.chrome_size_for_zoom(1), 16, "layout chrome zoom1 floor")
-	_check_eq(PhiFont.chrome_size_for_zoom(2), 16, "layout chrome zoom2 floor")
-	_check_eq(PhiFont.chrome_size_for_zoom(3), 21, "layout chrome zoom3")
-	_check_eq(PhiFont.chrome_size_for_zoom(4), 28, "layout chrome zoom4")
-	# ゲージの数字は UI 文字より大きく、旧来の 13*scale より
-	# 小さくならない(大きくする方向の回帰防止)。
+	_check_eq(PhiFont.ui_size_for_zoom(2), 10, "layout ui zoom2")
+	_check_eq(PhiFont.ui_size_for_zoom(3), 16, "layout ui zoom3")
+	_check_eq(PhiFont.ui_size_for_zoom(4), 22, "layout ui zoom4")
+	# メニュー等は全部ログと同じ大きさに統一(ユーザーの要望)。
 	for zoom in [1, 2, 3, 4]:
-		_check(PhiFont.gauge_size_for_zoom(zoom) > PhiFont.ui_size_for_zoom(zoom), "layout gauge bigger than ui zoom" + str(zoom))
-		_check(PhiFont.gauge_size_for_zoom(zoom) >= 14, "layout gauge floor zoom" + str(zoom))
-	_check_eq(PhiFont.gauge_size_for_zoom(3), 24, "layout gauge zoom3")
-	# ステータス行も旧来(11*scale 程度)より大きい。
-	for zoom in [1, 2, 3, 4]:
-		_check(PhiFont.status_size_for_zoom(zoom) >= 14, "layout status floor zoom" + str(zoom))
-	_check_eq(PhiFont.status_size_for_zoom(3), 21, "layout status zoom3")
+		_check_eq(PhiFont.chrome_size_for_zoom(zoom), PhiFont.ui_size_for_zoom(zoom), "layout chrome unified zoom" + str(zoom))
+		_check_eq(PhiFont.gauge_size_for_zoom(zoom), PhiFont.ui_size_for_zoom(zoom), "layout gauge unified zoom" + str(zoom))
+		_check_eq(PhiFont.status_size_for_zoom(zoom), PhiFont.ui_size_for_zoom(zoom), "layout status unified zoom" + str(zoom))
+
+
+func _test_check_texture() -> void:
+	# メニューのチェック印は文字の大きさで描かれ、中身が
+	# 描かれている(テーマ標準の小さい印の差し替え)。
+	var tex := UiStyle.check_texture(28)
+	_check(tex != null, "check texture exists")
+	_check_eq(tex.get_width(), 28, "check texture size")
+	var img := tex.get_image()
+	var painted := 0
+	for y in img.get_height():
+		for x in img.get_width():
+			if img.get_pixel(x, y).a > 0.5:
+				painted += 1
+	_check(painted > 40, "check texture painted")
+	_check(UiStyle.check_texture(28) == tex, "check texture cached")
+	_check(UiStyle.check_texture(0) == null, "check texture zero")
+
+
+func _test_viewport_region() -> void:
+	# マップ画像の保存の切り取り範囲。等倍ではそのまま、
+	# Retina(2倍)では座標も2倍になる。
+	_check_eq(
+		UiStyle.viewport_region(Vector2i(1280, 1024), Vector2(1280, 1024), Rect2(10, 20, 300, 200)),
+		Rect2i(10, 20, 300, 200), "region 1x")
+	_check_eq(
+		UiStyle.viewport_region(Vector2i(2560, 2048), Vector2(1280, 1024), Rect2(10, 20, 300, 200)),
+		Rect2i(20, 40, 600, 400), "region 2x")
+	# 画像の外にはみ出す分は切り取られる。
+	_check_eq(
+		UiStyle.viewport_region(Vector2i(1280, 1024), Vector2(1280, 1024), Rect2(1200, 20, 300, 200)),
+		Rect2i(1200, 20, 80, 200), "region clipped")
 
 
 func _test_place_text() -> void:
@@ -128,6 +153,11 @@ func _test_status_format_and_centering() -> void:
 	_check_eq(StatusPanel.format_status_value(0), "0000", "status fmt 0")
 	_check_eq(StatusPanel.format_status_value(42), "0042", "status fmt 42")
 	_check_eq(StatusPanel.format_status_value(9999), "9999", "status fmt 9999")
+	# EXP だけ8桁表示(ユーザーの指定)。他の項目は4桁のまま。
+	_check_eq(StatusPanel.format_value_for("exp", 3), "00000003", "status fmt exp 8 digits")
+	_check_eq(StatusPanel.format_value_for("exp", 123456789), "123456789", "status fmt exp over 8 digits")
+	_check_eq(StatusPanel.format_value_for("gp", 3), "0003", "status fmt gp stays 4 digits")
+	_check_eq(StatusPanel.format_value_for("f", 42), "0042", "status fmt f stays 4 digits")
 	# バーの数字も4桁表示(現在値/最大値)。HP 行と MP 行で幅がそろい、
 	# 数字が縦に整列する。9999超はそのまま出す。
 	_check_eq(StatusPanel.format_bar_text(100, 100), "0100/0100", "bar fmt 100/100")
@@ -159,18 +189,18 @@ func _test_status_format_and_centering() -> void:
 	var panel := StatusPanel.new()
 	panel.label_font = PhiFont.make_ui_font()
 	panel.bold_font = PhiFont.make_bold_font()
-	panel.set_ui_sizes(24, 21)
+	panel.set_ui_sizes(18, 16)
 	panel.size = Vector2(717, 99)
 	panel.set_status({"f": 10, "w": 11, "m": 12, "c": 13, "gp": 567})
 	var rects := panel.status_box_rects(68.0, 30.0)
-	_check_eq(rects.size(), 5, "status boxes count")
-	if rects.size() == 5:
+	_check_eq(rects.size(), 6, "status boxes count")
+	if rects.size() == 6:
 		var first: Rect2 = rects[0]
-		var last: Rect2 = rects[4]
+		var last: Rect2 = rects[5]
 		_check(absf(first.position.x - (panel.size.x - last.end.x)) < 1.5, "status row centered")
 		_check(first.position.x > 0.0, "status row has left margin")
 		var ordered := true
-		for i in range(4):
+		for i in range(5):
 			var a: Rect2 = rects[i]
 			var b: Rect2 = rects[i + 1]
 			if not (a.end.x < b.position.x and a.size.x > 0.0):
@@ -313,17 +343,21 @@ func _test_toolbar_structure() -> void:
 	_check_eq(panel.position, Vector2(8, 8), "layout toolbar default position")
 	# パネルの地は角丸。
 	var panel_box := panel.get_theme_stylebox("panel") as StyleBoxFlat
-	_check(panel_box != null and panel_box.corner_radius_top_left == UiStyle.CORNER_RADIUS, "layout toolbar panel rounded")
+	_check(panel_box != null and panel_box.corner_radius_top_left == UiStyle.FLOAT_RADIUS, "layout toolbar panel rounded")
 	var buttons := _tab.get("_toolbar_buttons") as Array
-	_check_eq(buttons.size(), 21, "layout toolbar button count")
+	_check_eq(buttons.size(), 22, "layout toolbar button count")
 	var rows := panel.get_child(0) as VBoxContainer
 	_check(rows != null, "layout toolbar rows box")
 	if rows == null:
 		return
-	_check_eq(rows.get_child_count(), 5, "layout toolbar row count")
-	var want := [2, 8, 5, 5, 1]
-	for i in rows.get_child_count():
-		_check_eq(rows.get_child(i).get_child_count(), want[i], "layout toolbar row " + str(i) + " size")
+	# 一番上は題名「Command Pallet」、その下にボタンの段が5つ。
+	_check_eq(rows.get_child_count(), 6, "layout toolbar row count with title")
+	var title := rows.get_child(0) as Label
+	_check(title != null and title.text == "Command Pallet", "layout toolbar title text")
+	_check(title != null and title.get_theme_font_size("font_size") == PhiFont.ui_size_for_zoom(_tab.map_view.zoom), "layout toolbar title font size")
+	var want := [2, 8, 5, 6, 1]
+	for i in 5:
+		_check_eq(rows.get_child(i + 1).get_child_count(), want[i], "layout toolbar row " + str(i) + " size")
 	# 大声ボタンはトグル。ボタンは UI 文字サイズに追従する。
 	var size := PhiFont.ui_size_for_zoom(_tab.map_view.zoom)
 	for b in buttons:
