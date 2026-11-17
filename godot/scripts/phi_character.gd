@@ -245,6 +245,11 @@ var _toolbar_title: Label = null
 var _toolbar_buttons: Array[Button] = []
 var _toolbar_dragging := false
 var _toolbar_drag_offset := Vector2.ZERO
+## 保持した位置が無く、自動配置 (右上) の間は true。
+## 地図やパネル自体の大きさが変わるたびに置き直す (起動直後は
+## レイアウト前で大きさが定まらず、左上に残る不具合があった)。
+## ユーザーがドラッグしたら自動配置は終わる。
+var _toolbar_auto_home := false
 var _last_command := ""
 var _history_boundary := 0
 var _input_snapshot := ""
@@ -364,9 +369,7 @@ func set_active(active: bool) -> void:
 			# 残るので、次フレームにもう一度要求する。
 			map_view.request_zoom_growth.call_deferred()
 		# ツールバーの位置は全タブ共通(設定の保持値)にそろえる。
-		if _toolbar_panel != null:
-			_toolbar_panel.position = _toolbar_home_position()
-			_clamp_toolbar_panel()
+		_apply_toolbar_home()
 		_on_split_resized()
 
 
@@ -804,6 +807,8 @@ func _build_talk_button() -> void:
 	map_view.add_child(_talk_button)
 	if not map_view.resized.is_connected(_place_talk_button):
 		map_view.resized.connect(_place_talk_button)
+	if not map_view.resized.is_connected(_rehome_toolbar_auto):
+		map_view.resized.connect(_rehome_toolbar_auto)
 	_style_talk_button(PhiFont.ui_size_for_zoom(map_view.zoom))
 
 
@@ -996,8 +1001,8 @@ func _build_toolbar_overlay() -> void:
 		row.add_child(button)
 		_toolbar_buttons.append(button)
 	_toolbar_panel.gui_input.connect(_on_toolbar_panel_gui_input)
-	_toolbar_panel.position = _toolbar_home_position()
-	_fit_toolbar_panel()
+	_toolbar_panel.resized.connect(_rehome_toolbar_auto)
+	_apply_toolbar_home()
 	refresh_toolbar_states()
 
 
@@ -1027,6 +1032,25 @@ func refresh_toolbar_states() -> void:
 		button.disabled = not PhiActions.enabled_when(action_name, connected)
 		if action_name == "Loud":
 			button.set_pressed_no_signal(is_loud())
+
+
+func _apply_toolbar_home() -> void:
+	## パレットを置き場所 (保持値があればそこ、無ければ右上) へ
+	## 置く。保持値が無い間は自動配置になり、大きさの変化で
+	## 何度でも置き直される。
+	if _toolbar_panel == null:
+		return
+	_toolbar_auto_home = _config == null or _config.toolbar_pos.x < 0.0 \
+		or _config.toolbar_pos.y < 0.0
+	_toolbar_panel.position = _toolbar_home_position()
+	_fit_toolbar_panel()
+
+
+func _rehome_toolbar_auto() -> void:
+	## 自動配置の間は、地図やパネル自体の大きさの変化に合わせて
+	## 置き直す。
+	if _toolbar_auto_home:
+		_apply_toolbar_home()
 
 
 func _toolbar_home_position() -> Vector2:
@@ -1088,6 +1112,7 @@ func _on_toolbar_panel_gui_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 		if event.pressed:
 			_toolbar_dragging = true
+			_toolbar_auto_home = false
 			_toolbar_drag_offset = event.global_position - _toolbar_panel.global_position
 			var vp := get_viewport()
 			if vp != null:

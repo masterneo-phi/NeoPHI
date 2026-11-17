@@ -382,6 +382,9 @@ func _test_toolbar_drag() -> void:
 		button.text = ""
 		button.custom_minimum_size = Vector2(34, 34)
 	_tab._fit_toolbar_panel()
+	# 小さくなったパネルは自動配置で右上へ寄っている (第76段)。
+	# ドラッグはそこから始まる。
+	var drag_from := panel.position
 	var press := InputEventMouseButton.new()
 	press.button_index = MOUSE_BUTTON_LEFT
 	press.pressed = true
@@ -393,7 +396,11 @@ func _test_toolbar_drag() -> void:
 	motion.position = press.position + Vector2(120, 80)
 	motion.global_position = motion.position
 	_tab.handle_mouse_motion(motion)
-	_check_eq(panel.position, Vector2(128, 88), "layout toolbar drag moves")
+	var max_pos := Vector2(maxf(0.0, _tab.map_view.size.x - panel.size.x),
+		maxf(0.0, _tab.map_view.size.y - panel.size.y))
+	var want := Vector2(clampf(drag_from.x + 120.0, 0.0, max_pos.x),
+		clampf(drag_from.y + 80.0, 0.0, max_pos.y))
+	_check_eq(panel.position, want, "layout toolbar drag moves")
 	var release := InputEventMouseButton.new()
 	release.button_index = MOUSE_BUTTON_LEFT
 	release.pressed = false
@@ -401,14 +408,14 @@ func _test_toolbar_drag() -> void:
 	release.global_position = motion.position
 	_tab.handle_mouse_button(release)
 	_check(not bool(_tab.get("_toolbar_dragging")), "layout toolbar drag stops")
-	_check_eq(_config.toolbar_pos, Vector2(128, 88), "layout toolbar position kept")
+	_check_eq(_config.toolbar_pos, want, "layout toolbar position kept")
 	# 別のタブを作ると、保持した位置から始まる。
 	var tab2 := PhiCharacter.new()
 	tab2.setup(GameAssets.new(), _config, PhiFont.make_ui_font(), PhiFont.make_bold_font(), PhiLogFilter.new(), {})
 	var panel2 := tab2.get("_toolbar_panel") as PanelContainer
 	_check(panel2 != null, "layout toolbar second panel exists")
 	if panel2 != null:
-		_check_eq(panel2.position, Vector2(128, 88), "layout toolbar position restored")
+		_check_eq(panel2.position, want, "layout toolbar position restored")
 	tab2.free()
 	# ボタンを押すと、アクションのシグナルが届く。
 	var got: Array = []
