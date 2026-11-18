@@ -1602,6 +1602,12 @@ func _on_float_band_gui_input(event: InputEvent, panel: PanelContainer) -> void:
 			_mouse_held = false
 			_float_drag_panel = panel
 			_float_drag_offset = event.global_position - panel.global_position
+			# チャット系の窓の帯をクリックしたら、入力欄にも
+			# フォーカスを移す (第109段)。帯は中身ではないので、
+			# ここをクリックして打ち始めるとフォーカスが無いまま
+			# ショートカットが誤爆していた。
+			if panel == _input_float or panel == _log_float:
+				input_box.grab_focus()
 			var vp := get_viewport()
 			if vp != null:
 				vp.set_input_as_handled()
@@ -1627,6 +1633,10 @@ func _on_float_gui_input(event: InputEvent, panel: PanelContainer) -> void:
 				var vp := get_viewport()
 				if vp != null:
 					vp.set_input_as_handled()
+			elif panel == _input_float:
+				# 入力窓の枠 (中身以外) のクリックでも入力欄へ
+				# フォーカスを移す (第109段)。
+				input_box.grab_focus()
 		else:
 			_end_float_drag()
 
@@ -4533,6 +4543,27 @@ func ime_composing() -> bool:
 	return not DisplayServer.ime_get_text().is_empty()
 
 
+func _is_chat_text_key(key_event: InputEventKey, code: String, shift: bool, ctrl: bool, alt: bool, meta: bool) -> bool:
+	## 文字入力として届いたキーか (第109段)。確定文字
+	## (unicode) を持つものと、IME の都合で unicode が付かない
+	## まま届く英字キー (送信キー表に載るもの) を対象にする。
+	## Ctrl/Alt/Meta の組み合わせは文字入力ではない。
+	if ctrl or alt or meta:
+		return false
+	if key_event.unicode >= 0x20 and key_event.unicode != 0x7F:
+		return true
+	if key_event.unicode == 0:
+		return not PhiKeys.key_send(code, shift, false, false, false, true).is_empty()
+	return false
+
+
+func _mouse_over_input_float() -> bool:
+	## 新スタイルで、マウスが入力フロート窓の上にあるか。
+	if not _float_mode or _input_float == null or not _input_float.visible:
+		return false
+	return _input_float.get_global_rect().has_point(get_global_mouse_position())
+
+
 func handle_key(key_event: InputEventKey) -> bool:
 	## キー処理。扱ったら true。Ctrl+Tab・Shift+F6・Alt+G は
 	## 全体にかかるのでメイン画面が先に取り、ここには来ない。
@@ -4600,6 +4631,20 @@ func handle_key(key_event: InputEventKey) -> bool:
 		if _try_talk_add_recall(code, shift, ctrl, alt, meta):
 			return true
 		return false
+	# (7.5)入力の続きなのにフォーカスが外れている場合の救済
+	# (第109段、ユーザー報告)。新スタイルでは全域が地図になり、
+	# フロート窓の帯をクリックしたりタブを切り替えたりすると
+	# 入力欄のフォーカスが外れたまま打ち始めることがあり、
+	# T (回転マップ) などの送信キーが誤爆していた。入力欄に
+	# 下書きが残っているか、入力フロート窓の上で文字キーが
+	# 届いたら、入力中とみなしてフォーカスを戻し、
+	# ショートカットにはしない。
+	if not _list_active and _is_chat_text_key(key_event, code, shift, ctrl, alt, meta):
+		var has_draft := not input_box.text.is_empty()
+		var typing_over_float := key_event.unicode >= 0x20 and _mouse_over_input_float()
+		if has_draft or typing_over_float:
+			input_box.grab_focus()
+			return false
 	# (8)F1〜F7 は呪文、F8〜F12 は自由ショートカット。修飾キー無しの時だけ。
 	if not shift and not ctrl and not alt and not meta:
 		if code.begins_with("F") and code.length() <= 3 and code.substr(1).is_valid_int():
