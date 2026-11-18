@@ -130,7 +130,11 @@ func _test_text_keys() -> void:
 	_check(tab.handle_key(_key(KEY_T, 0, false, true)), "s110 Alt+T handled 2")
 	_check_eq(captured, ["MSolid"], "s110 Alt+T toggles to solid")
 	tab.session.map_style = "solid"
-	# (13) Alt+5 (Option+5): 5x5 マップへ。
-	_check(tab.handle_key(_key(KEY_5, 0, false, true)), "s110 Alt+5 handled")
-	_check_eq(queue, ["#ex-map size=40"], "s110 Alt+5 sends size=40")
+	# (13) Shift+Alt+5 (Option+Shift+5): 5x5 マップへ。
+	# Alt+5 単独は Philly 本来の詠唱 (Main が処理) なので
+	# handle_key では何も送らない。
+	_check(not tab.handle_key(_key(KEY_5, 0, false, true)), "s110 Alt+5 is cast (Main), not size")
+	_check_eq(queue, [], "s110 nothing sent for Alt+5")
+	_check(tab.handle_key(_key(KEY_5, 0, true, true)), "s110 Shift+Alt+5 handled")
+	_check_eq(queue, ["#ex-map size=40"], "s110 Shift+Alt+5 sends size=40")
 	queue.clear()

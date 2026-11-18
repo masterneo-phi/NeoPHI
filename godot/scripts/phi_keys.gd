@@ -146,12 +146,17 @@ const _CTRL_SEND := {
 }
 
 ## Alt+キー (送信系の追加分。魔法系は PhiActions の Alt 表が
-## 担う)。ユーザーの指定: 話しかけるは Option+H、マップ
-## サイズは Option+5/7/9 (Shift+数字の従来分も残してある)。
-## 回転/北固定の切替 (Alt+T) は表ではなく handle_key の
-## トグル処理が担う。
+## 担う)。ユーザーの指定: 話しかけるは Option+H。Alt+数字は
+## Philly 本来の詠唱 (Main が処理) に空けるため、マップ
+## サイズは Option+Shift+数字へ移した。回転/北固定の切替
+## (Alt+T) は表ではなく handle_key のトグル処理が担う。
 const _ALT_SEND := {
 	"KeyH": "hi",
+}
+
+## Shift+Alt+キー。マップサイズ (ユーザーの指定:
+## Option+Shift+5/7/9)。
+const _SHIFT_ALT_SEND := {
 	"Digit5": "#ex-map size=40",
 	"Numpad5": "#ex-map size=40",
 	"Digit7": "#ex-map size=57",
@@ -391,4 +396,6 @@ static func key_send(code: String, shift: bool = false, ctrl: bool = false, alt:
 		return _CTRL_SEND.get(norm_code, "")
 	if mods == "alt":
 		return _ALT_SEND.get(norm_code, "")
+	if mods == "shiftAlt":
+		return _SHIFT_ALT_SEND.get(norm_code, "")
 	return ""

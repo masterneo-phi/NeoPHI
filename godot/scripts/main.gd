@@ -3705,10 +3705,16 @@ func _input(event: InputEvent) -> void:
 		get_viewport().set_input_as_handled()
 		return
 	# Alt / Shift+Alt の魔法キー(Philly KeyBindAlt / KeyBindShiftAlt)。
-	# Alt+G と同じくフォーカスに関わらず効く。Alt+数字は第111段で
-	# マップサイズ (Option+5/7/9、ユーザーの指定) に譲ったため、
-	# 数字での詠唱はしない (詠唱は F1〜F7)。
+	# Alt+G と同じくフォーカスに関わらず効く。Alt+数字は Philly
+	# 本来の所持魔法 1〜7 の詠唱 (マップサイズは Option+Shift+
+	# 数字へ移したため、数字が空いた)。
 	if alt and not ctrl and not meta:
+		if not shift and code.begins_with("Digit"):
+			var digit_no := int(code.trim_prefix("Digit"))
+			if digit_no >= 1 and digit_no <= 7:
+				tab.on_magic_key(digit_no)
+				get_viewport().set_input_as_handled()
+				return
 		var alt_action := PhiActions.alt_action_for(code, shift)
 		if not alt_action.is_empty():
 			_dispatch_alt_action(tab, alt_action)

@@ -117,19 +117,22 @@ func _static_checks() -> void:
 	var ctrl_expect := {"Numpad1": "hit", "Numpad3": "cast", "Space": "hit"}
 	for code in ctrl_expect:
 		check(PhiKeys.key_send(code, false, true) == str(ctrl_expect[code]), "key_send ctrl: " + code)
-	# Alt 系の追加分: 話しかける (Option+H) とマップサイズ
-	# (Option+5/7/9)。Alt+T は送信表ではなくトグル処理
-	# (handle_key) が担うので空。
-	var alt_expect := {
-		"KeyH": "hi",
-		"Digit5": "#ex-map size=40", "Numpad5": "#ex-map size=40",
-		"Digit7": "#ex-map size=57",
-		"Numpad7": "#ex-map size=57", "Digit9": "#ex-map size=81",
-		"Numpad9": "#ex-map size=81",
-	}
+	# Alt 系の追加分: 話しかける (Option+H)。Alt+数字は
+	# Philly 本来の詠唱 (Main が処理) なので送信表には無い。
+	# Alt+T は送信表ではなくトグル処理 (handle_key) が担う。
+	var alt_expect := {"KeyH": "hi"}
 	for code in alt_expect:
 		check(PhiKeys.key_send(code, false, false, true) == str(alt_expect[code]), "key_send alt: " + code)
 	check(PhiKeys.key_send("KeyT", false, false, true) == "", "key_send alt KeyT is toggle, not send")
+	check(PhiKeys.key_send("Digit5", false, false, true) == "", "key_send alt Digit5 is cast, not send")
+	# マップサイズは Option+Shift+数字 (Shift+Alt)。
+	var shift_alt_expect := {
+		"Digit5": "#ex-map size=40", "Numpad5": "#ex-map size=40",
+		"Digit7": "#ex-map size=57", "Numpad7": "#ex-map size=57",
+		"Digit9": "#ex-map size=81", "Numpad9": "#ex-map size=81",
+	}
+	for code in shift_alt_expect:
+		check(PhiKeys.key_send(code, true, false, true) == str(shift_alt_expect[code]), "key_send shiftAlt: " + code)
 	# 超魔法データ: 全項目に処理できる step がある。
 	var mm := PhiMasterMagic.parse(PhiMasterMagic.DEFAULT_XML)
 	var menus: Array = mm.get("menus", [])
