@@ -58,14 +58,18 @@ func _run() -> void:
 	main.call("_activate_tab", tab)
 	root.gui_release_focus()
 
-	# (2) P キーで Pay の ask が飛ぶ
+	# (2) P キーで Pay の ask が飛び、S キーで write が
+	# 送られる (当初の割り当て)。
 	var captured: Array = []
 	tab.action_requested.connect(func(name: String) -> void: captured.append(name))
-	check(tab.handle_key(_key(KEY_P)), "handle_key consumes P")
-	check(captured == ["Pay"], "P emits Pay action (got %s)" % [captured])
+	check(tab.handle_key(_key(KEY_P)), "handle_key handles P")
+	check(captured == ["Pay"], "P emits the Pay action (got %s)" % [captured])
 	captured.clear()
-	# S キーは handle_key が消費する (write を送る経路)
-	check(tab.handle_key(_key(KEY_S)), "handle_key consumes S")
+	var queue: Array = tab.session.get("_send_queue")
+	queue.clear()
+	check(tab.handle_key(_key(KEY_S)), "handle_key handles S")
+	check(queue == ["write"], "S sends write (got %s)" % [queue])
+	queue.clear()
 
 	# (3) ログ統合: タグ入りの行はタグが効いた表示になり、
 	# 記録 (display) は素の文字のまま

@@ -46,9 +46,9 @@ const ACTIONS := {
 	"Sort": {"caption": "アイテム整理 [V]", "hint": "アイテム整理する [V]", "kind": "send", "send": "sort"},
 	"FloorItem": {"caption": "アイテムに注意する [F]", "hint": "落ちているアイテムに注意する(ON/OFF) [F]", "kind": "send", "send": "floor item"},
 	"Spells": {"caption": "魔法一覧 [R]", "hint": "所持魔法の一覧を見る [R]", "kind": "send", "send": "spells"},
-	"Pay": {"caption": "お金を払う [P]", "hint": "お金を払う [P]", "kind": "ask", "template": "pay %s", "title": "支払い金額", "label": "支払う金額を入力してください", "integer": true},
-	"Hit": {"caption": "攻撃する [Space]", "hint": "攻撃する [SPACE]", "kind": "send", "send": "hit"},
-	"Talk": {"caption": "話しかける [H]", "hint": "近くの NPC に『hi』と話しかける [H]", "kind": "send", "send": "hi"},
+	"Pay": {"caption": "お金を払う [P]", "hint": "お金を払う", "kind": "ask", "template": "pay %s", "title": "支払い金額", "label": "支払う金額を入力してください", "integer": true},
+	"Hit": {"caption": "攻撃する [Space]", "hint": "攻撃する [Space]", "kind": "send", "send": "hit"},
+	"Talk": {"caption": "話しかける [Alt+H]", "hint": "近くの NPC に『hi』と話しかける [Alt+H]", "kind": "send", "send": "hi"},
 	"Check": {"caption": "ステータスを見る [M,0]", "hint": "ステータスを見る [M、0]", "kind": "send", "send": "check\nlook"},
 	"Skills": {"caption": "スキルを見る", "hint": "スキルを見る", "kind": "send", "send": "skills"},
 	"WizardEye": {"caption": "Wizard eye", "hint": "世界にいる人を一覧する [Alt+W]", "kind": "send", "send": "cast\nwizard eye"},
@@ -97,11 +97,11 @@ const ACTIONS := {
 	"LogSaveDir": {"caption": "ログの保存先...", "hint": "ログを保存するフォルダを指定する", "kind": "log-save-dir"},
 	"LogDeleteFilter": {"caption": "削除フィルタ", "hint": "設定した正規表現に合う行をログに表示しない", "kind": "delete-filter-toggle"},
 	"ImageWindow": {"caption": "画像一覧", "hint": "ログ中の画像参照の一覧を開く(選ぶと取得して表示)", "kind": "image-window"},
-	"M5x5": {"caption": "5x5 マップモード", "hint": "表示する地図を5x5マスにする [Shift+5]", "kind": "send", "send": "#ex-map size=40"},
-	"M7x7": {"caption": "7x7 マップモード", "hint": "表示する地図を7x7マスにする [Shift+7]", "kind": "send", "send": "#ex-map size=57"},
-	"M9x9": {"caption": "9x9 マップモード", "hint": "表示する地図を9x9マスにする [Shift+9]", "kind": "send", "send": "#ex-map size=81"},
-	"MTurn": {"caption": "回転マップモード", "hint": "自分の向きに合わせて地図を回転させる [T]", "kind": "send", "send": "#ex-map style=turn"},
-	"MSolid": {"caption": "北固定マップモード", "hint": "北を上に固定して地図を表示する [Shift+T]", "kind": "send", "send": "#ex-map style=solid"},
+	"M5x5": {"caption": "5x5 マップモード [Alt+5]", "hint": "表示する地図を5x5マスにする [Alt+5]", "kind": "send", "send": "#ex-map size=40"},
+	"M7x7": {"caption": "7x7 マップモード [Alt+7]", "hint": "表示する地図を7x7マスにする [Alt+7]", "kind": "send", "send": "#ex-map size=57"},
+	"M9x9": {"caption": "9x9 マップモード [Alt+9]", "hint": "表示する地図を9x9マスにする [Alt+9]", "kind": "send", "send": "#ex-map size=81"},
+	"MTurn": {"caption": "回転マップモード [Alt+T]", "hint": "自分の向きに合わせて地図を回転させる [Alt+T で切替]", "kind": "send", "send": "#ex-map style=turn"},
+	"MSolid": {"caption": "北固定マップモード [Alt+T]", "hint": "北を上に固定して地図を表示する [Alt+T で切替]", "kind": "send", "send": "#ex-map style=solid"},
 	"SSMap": {"caption": "マップ画像の保存", "hint": "地図だけの画像を ScreenShot フォルダに保存する", "kind": "screenshot"},
 	"LogScrollStop": {"caption": "ログスクロール停止", "hint": "新しい行が来てもログを自動でスクロールしない", "kind": "scroll-toggle"},
 	"SmoothScroll": {"caption": "スムーズマップスクロール", "hint": "移動時に地図をドット単位で滑らかにスクロールする(北固定の時だけ)", "kind": "smooth-scroll-toggle"},
@@ -135,17 +135,13 @@ const TOOLBAR := ["Open", "Close", "-", "Equip", "Unequip", "Read", "Write", "Er
 
 
 ## メニュー項目の右端に表示するショートカット（アクセラレータ）。
-## 実際のキー処理は従来どおり各所の _input にあり、これは表示と
-## メニューを開いている間の発動用。修飾は KEY_MASK_* との OR で表す。
+## 実際のキー処理は従来どおり各所の _input にある。
+## 第111段の注意: Alt を含む組み合わせだけにすること。macOS では
+## IME の変換開始キー (日本語入力の最初の t など) が TextEdit に
+## 受け取られず、閉じたメニューのアクセラレータにまで届いて
+## 発動してしまう (T = 回転マップが入力中に誤爆した原因)。
+## 素のキーや Shift だけの組み合わせは絶対に登録しない。
 const ACCELERATORS := {
-	"Cast1": KEY_F1, "Cast2": KEY_F2, "Cast3": KEY_F3, "Cast4": KEY_F4,
-	"Cast5": KEY_F5, "Cast6": KEY_F6, "Cast7": KEY_F7,
-	"M5x5": KEY_5 | KEY_MASK_SHIFT, "M7x7": KEY_7 | KEY_MASK_SHIFT,
-	"M9x9": KEY_9 | KEY_MASK_SHIFT,
-	"MTurn": KEY_T, "MSolid": KEY_T | KEY_MASK_SHIFT,
-	"Talk": KEY_H,
-	"NewPrivWindow": KEY_F6 | KEY_MASK_SHIFT,
-	"ForceClose": KEY_F1 | KEY_MASK_SHIFT,
 	"ForceCloseAll": KEY_PAUSE | KEY_MASK_ALT,
 	"WizardEye": KEY_W | KEY_MASK_ALT, "PartyEye": KEY_P | KEY_MASK_ALT,
 	"EagleEye": KEY_E | KEY_MASK_ALT, "Identify": KEY_I | KEY_MASK_ALT,
@@ -166,6 +162,14 @@ const ACCELERATORS := {
 
 static func accelerator_for(action_name: String) -> int:
 	return int(ACCELERATORS.get(action_name, 0))
+
+
+static func key_label(text: String) -> String:
+	## キー名の表示。データ上は Alt で統一し、Mac では
+	## Option と表示する (同じキーの OS ごとの呼び名)。
+	if OS.has_feature("macos"):
+		return text.replace("Alt", "Option")
+	return text
 
 
 ## Alt キーの魔法ショートカット(Philly KeyBindAlt)。キーは PhiKeys の

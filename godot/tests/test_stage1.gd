@@ -530,15 +530,20 @@ func _test_actions() -> void:
 		if str(item) == "-":
 			continue
 		_check(not PhiActions.get_action(str(item)).is_empty(), "actions toolbar item exists: " + str(item))
-	# メニューに表示するショートカット（アクセラレータ）の対応
-	_check_eq(PhiActions.accelerator_for("Cast1"), KEY_F1, "accel Cast1 = F1")
-	_check_eq(PhiActions.accelerator_for("Cast7"), KEY_F7, "accel Cast7 = F7")
-	_check_eq(PhiActions.accelerator_for("M5x5"), KEY_5 | KEY_MASK_SHIFT, "accel M5x5 = Shift+5")
-	_check_eq(PhiActions.accelerator_for("M7x7"), KEY_7 | KEY_MASK_SHIFT, "accel M7x7 = Shift+7")
-	_check_eq(PhiActions.accelerator_for("MTurn"), KEY_T, "accel MTurn = T")
-	_check_eq(PhiActions.accelerator_for("MSolid"), KEY_T | KEY_MASK_SHIFT, "accel MSolid = Shift+T")
-	_check_eq(PhiActions.accelerator_for("NewPrivWindow"), KEY_F6 | KEY_MASK_SHIFT, "accel priv = Shift+F6")
+	# メニューに表示するショートカット（アクセラレータ）の対応。
+	# 第111段: Alt を含まない組み合わせは登録しない (macOS で
+	# IME の変換開始キーが閉じたメニューのアクセラレータを
+	# 発動させてしまうため)。実際のキー処理は _input 側にある。
+	_check_eq(PhiActions.accelerator_for("Cast1"), 0, "accel Cast1 removed (stage111)")
+	_check_eq(PhiActions.accelerator_for("M5x5"), 0, "accel M5x5 removed (stage111)")
+	_check_eq(PhiActions.accelerator_for("MTurn"), 0, "accel MTurn removed (stage111)")
+	_check_eq(PhiActions.accelerator_for("MSolid"), 0, "accel MSolid removed (stage111)")
+	_check_eq(PhiActions.accelerator_for("Talk"), 0, "accel Talk removed (stage111)")
+	_check_eq(PhiActions.accelerator_for("NewPrivWindow"), 0, "accel priv removed (stage111)")
 	_check_eq(PhiActions.accelerator_for("Cast"), 0, "accel none for Cast")
+	for action_name in PhiActions.ACCELERATORS.keys():
+		var accel: int = PhiActions.ACCELERATORS[action_name]
+		_check(accel & (KEY_MASK_ALT | KEY_MASK_META) != 0, "accel always has Alt/Meta: " + str(action_name))
 	# Alt / Shift+Alt の魔法キー(Philly KeyBindAlt / KeyBindShiftAlt)
 	_check_eq(PhiActions.accelerator_for("WizardEye"), KEY_W | KEY_MASK_ALT, "accel WizardEye = Alt+W")
 	_check_eq(PhiActions.accelerator_for("WizardLight"), KEY_W | KEY_MASK_ALT | KEY_MASK_SHIFT, "accel WizardLight = Shift+Alt+W")

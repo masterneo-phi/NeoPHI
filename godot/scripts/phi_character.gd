@@ -1104,7 +1104,7 @@ func _build_toolbar_overlay() -> void:
 		if action.is_empty():
 			continue
 		var button := Button.new()
-		button.tooltip_text = str(action["hint"])
+		button.tooltip_text = PhiActions.key_label(str(action["hint"]))
 		button.focus_mode = Control.FOCUS_NONE
 		button.expand_icon = true
 		button.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
@@ -1116,7 +1116,7 @@ func _build_toolbar_overlay() -> void:
 		if icon != null:
 			button.icon = icon
 		else:
-			button.text = _short_caption(str(action["caption"]))
+			button.text = _short_caption(PhiActions.key_label(str(action["caption"])))
 		button.pressed.connect(_on_toolbar_button_pressed.bind(action_name))
 		button.set_meta("action", action_name)
 		group.append(button)
@@ -4543,33 +4543,15 @@ func ime_composing() -> bool:
 	return not DisplayServer.ime_get_text().is_empty()
 
 
-func _is_chat_text_key(key_event: InputEventKey, code: String, shift: bool, ctrl: bool, alt: bool, meta: bool) -> bool:
-	## 文字入力として届いたキーか (第109段)。確定文字
-	## (unicode) を持つものと、IME の都合で unicode が付かない
-	## まま届く英字キー (送信キー表に載るもの) を対象にする。
-	## Ctrl/Alt/Meta の組み合わせは文字入力ではない。
-	if ctrl or alt or meta:
-		return false
-	if key_event.unicode >= 0x20 and key_event.unicode != 0x7F:
-		return true
-	if key_event.unicode == 0:
-		return not PhiKeys.key_send(code, shift, false, false, false, true).is_empty()
-	return false
-
-
-func _mouse_over_input_float() -> bool:
-	## 新スタイルで、マウスが入力フロート窓の上にあるか。
-	if not _float_mode or _input_float == null or not _input_float.visible:
-		return false
-	return _input_float.get_global_rect().has_point(get_global_mouse_position())
-
-
 func handle_key(key_event: InputEventKey) -> bool:
 	## キー処理。扱ったら true。Ctrl+Tab・Shift+F6・Alt+G は
 	## 全体にかかるのでメイン画面が先に取り、ここには来ない。
 	## 順序: (3)Esc (4)Tab (5)Enter (7)入力欄フォーカス時は
 	## TextEdit 任せ (8)F1〜F12 (9)リストのキー (10)移動キー
 	## (11)その他の送信キー。Ctrl+C はログの選択をそのまま写す。
+	## 1文字ショートカットは当初の割り当てのまま (第111段の
+	## 最終決定)。入力中の誤爆はメニューのアクセラレータを
+	## Alt 系のみにしたことで止める。
 	## IME の変換中はキーを一切横取りしない (第79段)。Windows では
 	## 変換確定の Enter が通常キーとして届き、送信と取り違えて
 	## 変換前の文字列を送ったり変換を打ち切ったりしていた。
@@ -4631,20 +4613,6 @@ func handle_key(key_event: InputEventKey) -> bool:
 		if _try_talk_add_recall(code, shift, ctrl, alt, meta):
 			return true
 		return false
-	# (7.5)入力の続きなのにフォーカスが外れている場合の救済
-	# (第109段、ユーザー報告)。新スタイルでは全域が地図になり、
-	# フロート窓の帯をクリックしたりタブを切り替えたりすると
-	# 入力欄のフォーカスが外れたまま打ち始めることがあり、
-	# T (回転マップ) などの送信キーが誤爆していた。入力欄に
-	# 下書きが残っているか、入力フロート窓の上で文字キーが
-	# 届いたら、入力中とみなしてフォーカスを戻し、
-	# ショートカットにはしない。
-	if not _list_active and _is_chat_text_key(key_event, code, shift, ctrl, alt, meta):
-		var has_draft := not input_box.text.is_empty()
-		var typing_over_float := key_event.unicode >= 0x20 and _mouse_over_input_float()
-		if has_draft or typing_over_float:
-			input_box.grab_focus()
-			return false
 	# (8)F1〜F7 は呪文、F8〜F12 は自由ショートカット。修飾キー無しの時だけ。
 	if not shift and not ctrl and not alt and not meta:
 		if code.begins_with("F") and code.length() <= 3 and code.substr(1).is_valid_int():
@@ -4666,13 +4634,18 @@ func handle_key(key_event: InputEventKey) -> bool:
 		press_held_move(key_event, str(moved[0]), str(moved[1]))
 		_on_move_key_pressed()
 		return true
-	# P は支払い (金額を聞いてから送る ask アクション。Philly の
-	# 修飾なしキー表にあるが、送るだけのキー表では表せないので
-	# ここで受ける)。
+	# Option+T (Alt+T) は回転マップと北固定の切り替え
+	# (第111段、ユーザーの指定)。押すたびにもう一方へ。
+	# アクション経由で出し、設定への保存やメニューの
+	# チェックも本体側に任せる。
+	if code == "KeyT" and alt and not shift and not ctrl and not meta:
+		action_requested.emit("MSolid" if session.map_style == "turn" else "MTurn")
+		return true
+	# (11)その他の送信キー(攻撃・看板など)。繰り返しはしない。
+	# P は支払いの ask を出す (Philly と同じ)。
 	if code == "KeyP" and not shift and not ctrl and not alt and not meta:
 		action_requested.emit("Pay")
 		return true
-	# (11)その他の送信キー(攻撃・看板など)。繰り返しはしない。
 	var send := PhiKeys.key_send(code, shift, ctrl, alt, meta, true)
 	if not send.is_empty():
 		if code == "End" and not shift and not ctrl and not alt and not meta:

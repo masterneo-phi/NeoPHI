@@ -75,14 +75,21 @@ const _NORTH_FIX := {
 	},
 }
 
-## 修飾なしの操作。値は送る行(`\n` 区切りで複数行)。試作では send のみ扱う。
+## 送信キーの割り当て (第111段の最終決定、ユーザーの指示)。
+## 基本はバグ報告前の割り当て (Philly どおり) に戻す。
+## 1文字コマンド (拾う・置く・使う・読む・書く等) は今までの
+## 操作性を壊すため変えない。変えるのは Shift を使うものと
+## 後付けのものだけ: 回転/北固定 (T / Shift+T) と話しかける
+## (H) とマップサイズ (Shift+5/7/9) は Option 系へ移した
+## (Option+T はトグル、handle_key が処理)。入力中の誤爆対策
+## はメニューのアクセラレータを Alt 系のみにしたことが担う。
+## 値は送る行 (`\n` 区切りで複数行)。
 const _NONE_SEND := {
 	"KeyA": "read",
 	"KeyB": "board",
 	"KeyC": "use",
 	"KeyD": "erase",
 	"KeyF": "floor item",
-	"KeyH": "hi",
 	"KeyM": "check\nlook",
 	"KeyN": "n",
 	"KeyQ": "equip",
@@ -95,6 +102,8 @@ const _NONE_SEND := {
 	"KeyZ": "get",
 	"Period": ".",
 	"Space": "hit",
+	"Home": "equip\nsort",
+	"End": "unequip\n1",
 	"Digit1": "1",
 	"Digit2": "2",
 	"Digit3": "3",
@@ -105,8 +114,6 @@ const _NONE_SEND := {
 	"Digit8": "8",
 	"Digit9": "9",
 	"Digit0": ".",
-	"Home": "equip\nsort",
-	"End": "unequip\n1",
 	"Numpad0": "check\nlook",
 	"Numpad1": "hit",
 	"Numpad3": "cast",
@@ -123,24 +130,34 @@ const _NONE_SEND := {
 	"F5": "cast\n5",
 	"F6": "cast\n6",
 	"F7": "cast\n7",
-	"KeyT": "#ex-map style=turn",
 }
 
+## Shift+キー。Shift を使うショートカット (北固定 Shift+T、
+## マップサイズ Shift+5/7/9) は第111段で廃止し、Option 系へ
+## 移した (ユーザーの指示)。残るのは Space (攻撃) だけ。
 const _SHIFT_SEND := {
 	"Space": "hit",
-	"KeyT": "#ex-map style=solid",
-	"Digit5": "#ex-map size=40",
-	"Numpad5": "#ex-map size=40",
-	"Digit7": "#ex-map size=57",
-	"Numpad7": "#ex-map size=57",
-	"Digit9": "#ex-map size=81",
-	"Numpad9": "#ex-map size=81",
 }
 
 const _CTRL_SEND := {
 	"Numpad1": "hit",
 	"Numpad3": "cast",
 	"Space": "hit",
+}
+
+## Alt+キー (送信系の追加分。魔法系は PhiActions の Alt 表が
+## 担う)。ユーザーの指定: 話しかけるは Option+H、マップ
+## サイズは Option+5/7/9 (Shift+数字の従来分も残してある)。
+## 回転/北固定の切替 (Alt+T) は表ではなく handle_key の
+## トグル処理が担う。
+const _ALT_SEND := {
+	"KeyH": "hi",
+	"Digit5": "#ex-map size=40",
+	"Numpad5": "#ex-map size=40",
+	"Digit7": "#ex-map size=57",
+	"Numpad7": "#ex-map size=57",
+	"Digit9": "#ex-map size=81",
+	"Numpad9": "#ex-map size=81",
 }
 
 
@@ -372,4 +389,6 @@ static func key_send(code: String, shift: bool = false, ctrl: bool = false, alt:
 		return _NONE_SEND.get(norm_code, "")
 	if mods == "ctrl":
 		return _CTRL_SEND.get(norm_code, "")
+	if mods == "alt":
+		return _ALT_SEND.get(norm_code, "")
 	return ""

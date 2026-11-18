@@ -114,7 +114,7 @@ func _run() -> void:
 			disp_items = menu.get("items", [])
 	check(disp_items.has("M9x9"), "M9x9 in Disp menu")
 	check(PhiActions.TOOLBAR.has("M9x9"), "M9x9 in toolbar")
-	check(PhiActions.accelerator_for("M9x9") == (KEY_9 | KEY_MASK_SHIFT), "M9x9 accelerator Shift+9")
+	check(PhiActions.accelerator_for("M9x9") == 0, "M9x9 accelerator removed (stage111)")
 
 	# (5) ログイン行
 	var lines := PhiSession.login_lines("someid", 81, "solid")

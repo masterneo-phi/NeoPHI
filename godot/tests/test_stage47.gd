@@ -74,12 +74,14 @@ func _static_checks() -> void:
 		check(PhiActions.ACTIONS.has(name), "accelerator target: " + name)
 	for name in PhiActions.SYSTEM_MAGIC:
 		check(PhiActions.ACTIONS.has(name), "system magic exists: " + name)
-	# キー表 (Python 版 keys.py と一致すること)。
+	# キー表 (第111段で全面変更: 文字を打つキーは割り当てず、
+	# 1文字ショートカットは当初の割り当てのまま (第111段の
+	# 最終決定)。追加分は Option (Alt) 系だけ。
 	var none_expect := {
 		"KeyA": "read", "KeyB": "board", "KeyC": "use", "KeyD": "erase",
-		"KeyF": "floor item", "KeyH": "hi", "KeyM": "check\nlook",
+		"KeyF": "floor item", "KeyM": "check\nlook",
 		"KeyN": "n", "KeyQ": "equip", "KeyR": "spells", "KeyS": "write",
-		"KeyT": "#ex-map style=turn", "KeyV": "sort", "KeyW": "unequip",
+		"KeyV": "sort", "KeyW": "unequip",
 		"KeyX": "put", "KeyY": "y", "KeyZ": "get", "Period": ".",
 		"Space": "hit", "Digit0": ".", "Home": "equip\nsort",
 		"End": "unequip\n1", "Numpad0": "check\nlook",
@@ -100,19 +102,34 @@ func _static_checks() -> void:
 	for code in none_expect:
 		check(PhiKeys.key_send(code) == str(none_expect[code]), "key_send none: " + code)
 	check(PhiKeys.key_send("KeyP") == "", "key_send KeyP is ask, not send")
-	var shift_expect := {
-		"Space": "hit", "KeyT": "#ex-map style=solid",
-		"Digit5": "#ex-map size=40", "Numpad5": "#ex-map size=40",
-		"Digit7": "#ex-map size=57", "Numpad7": "#ex-map size=57",
-		"Digit9": "#ex-map size=81", "Numpad9": "#ex-map size=81",
-	}
+	# Shift を使うショートカットは廃止 (第111段)。回転 (T /
+	# Shift+T)・話しかける (H)・サイズ (Shift+数字) は Option
+	# 系へ移した。
+	var shift_expect := {"Space": "hit"}
 	for code in shift_expect:
 		check(PhiKeys.key_send(code, true) == str(shift_expect[code]), "key_send shift: " + code)
-	check(PhiKeys.move_input("Digit9", true) == null, "shift+9 is not a move")
-	check(PhiKeys.move_input("Numpad9", true) == null, "shift+numpad9 is not a move")
+	check(PhiKeys.key_send("KeyT") == "", "key_send KeyT removed (Option+T toggle)")
+	check(PhiKeys.key_send("KeyT", true) == "", "key_send Shift+KeyT removed")
+	check(PhiKeys.key_send("KeyH") == "", "key_send KeyH removed (Option+H)")
+	check(PhiKeys.key_send("Digit5", true) == "", "key_send Shift+Digit5 removed")
+	check(PhiKeys.move_input("Digit9", true) != null, "shift+9 is a shift-move now")
+	check(PhiKeys.move_input("Numpad9", true) != null, "shift+numpad9 is a shift-move now")
 	var ctrl_expect := {"Numpad1": "hit", "Numpad3": "cast", "Space": "hit"}
 	for code in ctrl_expect:
 		check(PhiKeys.key_send(code, false, true) == str(ctrl_expect[code]), "key_send ctrl: " + code)
+	# Alt 系の追加分: 話しかける (Option+H) とマップサイズ
+	# (Option+5/7/9)。Alt+T は送信表ではなくトグル処理
+	# (handle_key) が担うので空。
+	var alt_expect := {
+		"KeyH": "hi",
+		"Digit5": "#ex-map size=40", "Numpad5": "#ex-map size=40",
+		"Digit7": "#ex-map size=57",
+		"Numpad7": "#ex-map size=57", "Digit9": "#ex-map size=81",
+		"Numpad9": "#ex-map size=81",
+	}
+	for code in alt_expect:
+		check(PhiKeys.key_send(code, false, false, true) == str(alt_expect[code]), "key_send alt: " + code)
+	check(PhiKeys.key_send("KeyT", false, false, true) == "", "key_send alt KeyT is toggle, not send")
 	# 超魔法データ: 全項目に処理できる step がある。
 	var mm := PhiMasterMagic.parse(PhiMasterMagic.DEFAULT_XML)
 	var menus: Array = mm.get("menus", [])
@@ -223,7 +240,7 @@ func _run() -> void:
 	check(tab.get("_suppress_lists") == 1, "End suppresses the equip list")
 	tab.call("_on_event", {"type": "list", "active": true, "lines": ["[ 1] Sword "]})
 	check(not tab.get("_list_active"), "suppressed list stays hidden")
-	# P キー: Pay の ask が飛ぶ。
+	# P キー: Pay の ask を出す (当初の割り当て)。
 	var pay_box := [""]
 	tab.action_requested.connect(func(action_name: String) -> void: pay_box[0] = action_name)
 	var p_event := InputEventKey.new()

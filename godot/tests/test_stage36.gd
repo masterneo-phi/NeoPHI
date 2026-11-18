@@ -130,7 +130,7 @@ func _test_talk_action() -> void:
 		if str(menu.get("name", "")) == "行動" and (menu.get("items", []) as Array).has("Talk"):
 			in_menu = true
 	check(in_menu, "Talk が行動メニューにある")
-	check(int(PhiActions.ACCELERATORS.get("Talk", 0)) == KEY_H, "Talk のキーは H")
+	check(int(PhiActions.ACCELERATORS.get("Talk", 0)) == 0, "Talk にアクセラレータは無い (第111段で廃止)")
 
 
 func _connect_tab(srv: FakeServer) -> Node:

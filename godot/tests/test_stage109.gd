@@ -65,33 +65,25 @@ func _on_frame() -> void:
 func _test_shortcut_guard() -> void:
 	var tab := _tab
 	var queue: Array = tab.session.get("_send_queue")
-	# (1) 下書きあり + フォーカス喪失 + T (unicode 付き):
-	# 送信キーにせず、フォーカスを戻す。
+	# 第111段の最終決定: バグ報告前の割り当てに戻し、変える
+	# のは Shift を使うものと後付けのもの (回転 T / Shift+T、
+	# 話しかける H、マップサイズ Shift+数字) だけ → Option 系
+	# へ移した。1文字コマンド (Z や S 等) は当初のまま。
+	# 入力中の誤爆対策はメニューのアクセラレータを Alt 系のみ
+	# にしたことで担う (test_stage111 が実 Main で確認)。
+	# (1) フォーカス喪失 + T: もう回転キーではない (何も
+	# 送らない)。下書きも壊れない。
 	tab.input_box.grab_focus()
 	tab.input_box.text = "hello"
 	tab.input_box.release_focus()
 	_check(not tab.input_box.has_focus(), "s109 focus lost setup")
-	_check(not tab.handle_key(_key(KEY_T, "t".unicode_at(0))), "s109 T with draft not a shortcut")
-	_check_eq(queue, [], "s109 nothing sent with draft")
-	_check(tab.input_box.has_focus(), "s109 focus restored by draft rescue")
+	_check(not tab.handle_key(_key(KEY_T, "t".unicode_at(0))), "s109 T unfocused does nothing")
+	_check_eq(queue, [], "s109 nothing sent for T")
 	_check_eq(tab.input_box.text, "hello", "s109 draft untouched")
-	# (2) 下書きあり + フォーカス喪失 + T (unicode 無し。
-	# IME の変換開始と競合して文字なしで届く形): 同じく救済。
-	tab.input_box.release_focus()
-	_check(not tab.handle_key(_key(KEY_T, 0)), "s109 T unicode0 with draft not a shortcut")
-	_check_eq(queue, [], "s109 nothing sent unicode0")
-	_check(tab.input_box.has_focus(), "s109 focus restored unicode0")
-	# (3) 下書きあり + Shift+T: solid への切替もしない。
-	tab.input_box.release_focus()
-	_check(not tab.handle_key(_key(KEY_T, "T".unicode_at(0), true)), "s109 Shift+T with draft not a shortcut")
-	_check_eq(queue, [], "s109 nothing sent shift+T")
-	# (4) 下書きなし + フォーカスなし + T: 従来どおり
-	# 回転マップのショートカットとして効く。
+	# (2) Shift+T: 北固定キーでもない。
+	_check(not tab.handle_key(_key(KEY_T, "T".unicode_at(0), true)), "s109 Shift+T unfocused does nothing")
+	_check_eq(queue, [], "s109 nothing sent for Shift+T")
 	tab.input_box.text = ""
-	tab.input_box.release_focus()
-	_check(tab.handle_key(_key(KEY_T, 0)), "s109 T without draft is a shortcut")
-	_check_eq(queue, ["#ex-map style=turn"], "s109 turn sent without draft")
-	queue.clear()
 	# (5) 下書きあり + 移動キー (↑): 救済対象ではなく移動する。
 	tab.input_box.text = "hello"
 	tab.input_box.release_focus()

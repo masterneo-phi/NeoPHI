@@ -406,52 +406,52 @@ func _build_menu_bar(root: VBoxContainer) -> void:
 			if action.is_empty():
 				continue
 			if action_name == "LogScrollStop":
-				popup.add_check_item(str(action["caption"]), item_id)
+				popup.add_check_item(PhiActions.key_label(str(action["caption"])), item_id)
 				_scroll_popup = popup
 				_scroll_item = popup.get_item_index(item_id)
 			elif action_name == "SmoothScroll":
-				popup.add_check_item(str(action["caption"]), item_id)
+				popup.add_check_item(PhiActions.key_label(str(action["caption"])), item_id)
 				_smooth_popup = popup
 				_smooth_item = popup.get_item_index(item_id)
 			elif action_name == "Loud":
-				popup.add_check_item(str(action["caption"]), item_id)
+				popup.add_check_item(PhiActions.key_label(str(action["caption"])), item_id)
 				_loud_popup = popup
 				_loud_item = popup.get_item_index(item_id)
 			elif action_name == "DispMagic":
-				popup.add_check_item(str(action["caption"]), item_id)
+				popup.add_check_item(PhiActions.key_label(str(action["caption"])), item_id)
 				_disp_magic_popup = popup
 				_disp_magic_item = popup.get_item_index(item_id)
 			elif action_name == "LogImage":
-				popup.add_check_item(str(action["caption"]), item_id)
+				popup.add_check_item(PhiActions.key_label(str(action["caption"])), item_id)
 				_log_image_popup = popup
 				_log_image_item = popup.get_item_index(item_id)
 			elif action_name == "LogAutoSave":
-				popup.add_check_item(str(action["caption"]), item_id)
+				popup.add_check_item(PhiActions.key_label(str(action["caption"])), item_id)
 				_autosave_popup = popup
 				_autosave_item = popup.get_item_index(item_id)
 			elif action_name == "LogDeleteFilter":
-				popup.add_check_item(str(action["caption"]), item_id)
+				popup.add_check_item(PhiActions.key_label(str(action["caption"])), item_id)
 				_delete_filter_popup = popup
 				_delete_filter_item = popup.get_item_index(item_id)
 			elif action_name == "PlayBGM":
-				popup.add_check_item(str(action["caption"]), item_id)
+				popup.add_check_item(PhiActions.key_label(str(action["caption"])), item_id)
 				_bgm_popup = popup
 				_bgm_item = popup.get_item_index(item_id)
 			elif action_name == "PlaySE":
-				popup.add_check_item(str(action["caption"]), item_id)
+				popup.add_check_item(PhiActions.key_label(str(action["caption"])), item_id)
 				_se_popup = popup
 				_se_item = popup.get_item_index(item_id)
 			elif action_name == "MasterMagicAlways":
-				popup.add_check_item(str(action["caption"]), item_id)
+				popup.add_check_item(PhiActions.key_label(str(action["caption"])), item_id)
 				_mm_always_popup = popup
 				_mm_always_item = popup.get_item_index(item_id)
 			elif action_name == "UiStyleFloat":
-				popup.add_check_item(str(action["caption"]), item_id)
+				popup.add_check_item(PhiActions.key_label(str(action["caption"])), item_id)
 				_ui_style_popup = popup
 				_ui_style_item = popup.get_item_index(item_id)
 			elif action_name == "MapAlignCenter" or action_name == "MapAlignLeft" or action_name == "MapAlignRight":
 				# マップ配置は排他なのでラジオチェックで出す。
-				popup.add_radio_check_item(str(action["caption"]), item_id)
+				popup.add_radio_check_item(PhiActions.key_label(str(action["caption"])), item_id)
 				_map_align_popup = popup
 				var align_index := popup.get_item_index(item_id)
 				match action_name:
@@ -463,7 +463,7 @@ func _build_menu_bar(root: VBoxContainer) -> void:
 						_ma_right_item = align_index
 			elif action_name == "M5x5" or action_name == "M7x7" or action_name == "M9x9" or action_name == "MTurn" or action_name == "MSolid":
 				# 地図モードは排他なのでラジオチェックで出す。
-				popup.add_radio_check_item(str(action["caption"]), item_id)
+				popup.add_radio_check_item(PhiActions.key_label(str(action["caption"])), item_id)
 				_map_mode_popup = popup
 				var mode_index := popup.get_item_index(item_id)
 				match action_name:
@@ -478,10 +478,10 @@ func _build_menu_bar(root: VBoxContainer) -> void:
 					"MSolid":
 						_msolid_item = mode_index
 			else:
-				popup.add_item(str(action["caption"]), item_id)
+				popup.add_item(PhiActions.key_label(str(action["caption"])), item_id)
 			var index := popup.get_item_index(item_id)
 			popup.set_item_metadata(index, action_name)
-			popup.set_item_tooltip(index, str(action["hint"]))
+			popup.set_item_tooltip(index, PhiActions.key_label(str(action["hint"])))
 			var accel := PhiActions.accelerator_for(action_name)
 			if accel != 0:
 				popup.set_item_accelerator(index, accel)
@@ -3705,14 +3705,10 @@ func _input(event: InputEvent) -> void:
 		get_viewport().set_input_as_handled()
 		return
 	# Alt / Shift+Alt の魔法キー(Philly KeyBindAlt / KeyBindShiftAlt)。
-	# Alt+G と同じくフォーカスに関わらず効く。Alt+数字は所持魔法 1〜7。
+	# Alt+G と同じくフォーカスに関わらず効く。Alt+数字は第111段で
+	# マップサイズ (Option+5/7/9、ユーザーの指定) に譲ったため、
+	# 数字での詠唱はしない (詠唱は F1〜F7)。
 	if alt and not ctrl and not meta:
-		if not shift and code.begins_with("Digit"):
-			var digit_no := int(code.trim_prefix("Digit"))
-			if digit_no >= 1 and digit_no <= 7:
-				tab.on_magic_key(digit_no)
-				get_viewport().set_input_as_handled()
-				return
 		var alt_action := PhiActions.alt_action_for(code, shift)
 		if not alt_action.is_empty():
 			_dispatch_alt_action(tab, alt_action)

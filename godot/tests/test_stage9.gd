@@ -50,7 +50,7 @@ func _test_actions() -> void:
 	_check_eq(str(PhiActions.get_action("OpenAll").get("caption", "")), "全キャラを接続", "OpenAll caption")
 	_check_eq(str(PhiActions.get_action("CloseAll").get("caption", "")), "全キャラを切断", "CloseAll caption")
 	_check_eq(str(PhiActions.get_action("ForceCloseAll").get("caption", "")), "全キャラを強制切断", "ForceCloseAll caption")
-	_check_eq(PhiActions.accelerator_for("ForceClose"), KEY_F1 | KEY_MASK_SHIFT, "accel ForceClose = Shift+F1")
+	_check_eq(PhiActions.accelerator_for("ForceClose"), 0, "accel ForceClose removed (stage111)")
 	_check_eq(PhiActions.accelerator_for("ForceCloseAll"), KEY_PAUSE | KEY_MASK_ALT, "accel ForceCloseAll = Alt+Pause")
 	_check(not PhiActions.enabled_when("ForceClose", false), "ForceClose disabled when offline")
 	_check(PhiActions.enabled_when("ForceClose", true), "ForceClose enabled when online")
