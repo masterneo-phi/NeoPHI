@@ -951,7 +951,7 @@ func _restore_tabs() -> PhiCharacter:
 			# のみ)。これで復元タブも「全キャラを接続」や再接続の
 			# 対象になる。
 			if restored.session.char_id.is_empty():
-				var resolved_id := _registered_id_for(restored.host, restored.port, restored.restored_name)
+				var resolved_id := _resolve_registered_id(restored.host, restored.port, restored.restored_name)
 				if not resolved_id.is_empty():
 					restored.session.char_id = resolved_id
 			if first == null:
@@ -997,6 +997,41 @@ func _registered_id_for(host: String, port: int, chara_name: String) -> String:
 		var display := str(entry["display_name"])
 		if display == chara_name or _display_name_body(display) == chara_name:
 			return str(entry["id"])
+	return ""
+
+
+func _resolve_registered_id(host: String, port: int, chara_name: String) -> String:
+	## 復元タブの ID 引き直し (第108段)。名前の完全一致で引けない
+	## 場合の受け皿を用意する。セッションに保存される名前は
+	## サーバが知らせるログイン名で、登録時の表示名と食い違う
+	## ことがある (例: 表示名 `03_Ring` に対してログイン名
+	## `Ring material`)。また接続先の表記 (ホスト名/IP) が
+	## `.phirc` と食い違うこともある。どちらも「候補が1つだけ」
+	## の時に限って引き直すので、取り違えは起きない。
+	var exact := _registered_id_for(host, port, chara_name)
+	if not exact.is_empty():
+		return exact
+	var entries := _registered_characters()
+	# 接続先が一致する登録済みキャラが1つだけなら、それを使う。
+	# (辞書は参照渡しなので、候補の保持に clear() 等で触らない)
+	var host_hits: Array = []
+	for entry in entries:
+		if str(entry["host"]) == host and int(entry["port"]) == port:
+			host_hits.append(entry)
+	if host_hits.size() == 1:
+		return str(host_hits[0]["id"])
+	# 名前とポートが一致する登録済みキャラが1つだけなら、それを使う
+	# (ホスト表記の揺れの受け皿)。
+	if not chara_name.is_empty():
+		var name_hits: Array = []
+		for entry in entries:
+			if int(entry["port"]) != port:
+				continue
+			var display := str(entry["display_name"])
+			if display == chara_name or _display_name_body(display) == chara_name:
+				name_hits.append(entry)
+		if name_hits.size() == 1:
+			return str(name_hits[0]["id"])
 	return ""
 
 
@@ -2838,7 +2873,7 @@ func _show_connect_dialog(target: PhiCharacter) -> void:
 		var target_name := target.player_name()
 		if target_name.is_empty():
 			target_name = target.restored_name
-		var resolved := _registered_id_for(target.host, target.port, target_name)
+		var resolved := _resolve_registered_id(target.host, target.port, target_name)
 		if not resolved.is_empty():
 			_connect_id_edit.text = resolved
 	_connect_dialog.popup_centered(Vector2i(380, 230))

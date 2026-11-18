@@ -3,7 +3,7 @@ extends RefCounted
 ## NeoPHI のバージョン番号。番号の定義はここだけ。
 ## メニューの項目と About ダイアログは、ここを見て表示する。
 
-const VERSION := "0.5.1"
+const VERSION := "0.5.2"
 ## 作者名。About ダイアログにだけ出す(メニューの項目名には
 ## 入れない。項目名は「NeoPHI <番号>」だけにする決まり)。
 const AUTHOR := "Master NEO"
