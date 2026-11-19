@@ -161,8 +161,8 @@ const _SHIFT_ALT_SEND := {
 	"Numpad5": "#ex-map size=40",
 	"Digit7": "#ex-map size=57",
 	"Numpad7": "#ex-map size=57",
-	"Digit9": "#ex-map size=81",
-	"Numpad9": "#ex-map size=81",
+	"Digit9": "#ex-map size=121",
+	"Numpad9": "#ex-map size=121",
 }
 
 

@@ -82,7 +82,7 @@ var _master_magic_button: MenuButton = null
 var _map_mode_popup: PopupMenu = null
 var _m5_item := -1
 var _m7_item := -1
-var _m9_item := -1
+var _m11_item := -1
 var _mturn_item := -1
 var _msolid_item := -1
 ## 音の司令塔(第5段)。全タブ共有で1つだけ持つ。
@@ -461,7 +461,7 @@ func _build_menu_bar(root: VBoxContainer) -> void:
 						_ma_left_item = align_index
 					"MapAlignRight":
 						_ma_right_item = align_index
-			elif action_name == "M5x5" or action_name == "M7x7" or action_name == "M9x9" or action_name == "MTurn" or action_name == "MSolid":
+			elif action_name == "M5x5" or action_name == "M7x7" or action_name == "M11x11" or action_name == "MTurn" or action_name == "MSolid":
 				# 地図モードは排他なのでラジオチェックで出す。
 				popup.add_radio_check_item(PhiActions.key_label(str(action["caption"])), item_id)
 				_map_mode_popup = popup
@@ -471,8 +471,8 @@ func _build_menu_bar(root: VBoxContainer) -> void:
 						_m5_item = mode_index
 					"M7x7":
 						_m7_item = mode_index
-					"M9x9":
-						_m9_item = mode_index
+					"M11x11":
+						_m11_item = mode_index
 					"MTurn":
 						_mturn_item = mode_index
 					"MSolid":
@@ -1101,15 +1101,15 @@ func _connect_character(host: String, port: int, char_id: String, display_name: 
 func _connect_tab(tab: PhiCharacter, host: String, port: int, char_id: String, use_startup: bool = false) -> void:
 	## タブを接続する。地図の大きさ・様式は、初回の自動接続だけ
 	## コマンドライン引数を優先し、あとは設定の値を使う。
-	# 9x9 希望でも、接続はまず 7x7 で始める (第68段改)。
+	# 11x11 希望でも、接続はまず 7x7 で始める (第68段改)。
 	tab.session.desired_map_size = _config.map_size
-	tab.session.map_size = 57 if _config.map_size == 81 else _config.map_size
+	tab.session.map_size = 57 if _config.map_size == 121 else _config.map_size
 	tab.session.map_style = _config.map_style
 	tab.session.disp_magic = _config.disp_magic
 	if use_startup:
 		if _startup_map_size > 0:
 			tab.session.desired_map_size = _startup_map_size
-			tab.session.map_size = 57 if _startup_map_size == 81 else _startup_map_size
+			tab.session.map_size = 57 if _startup_map_size == 121 else _startup_map_size
 		if not _startup_map_style.is_empty():
 			tab.session.map_style = _startup_map_style
 	tab.connect_to(host, port, char_id)
@@ -1185,8 +1185,8 @@ func _update_action_states() -> void:
 			_map_mode_popup.set_item_checked(_m5_item, _config.map_size == 40)
 		if _m7_item >= 0:
 			_map_mode_popup.set_item_checked(_m7_item, _config.map_size == 57)
-		if _m9_item >= 0:
-			_map_mode_popup.set_item_checked(_m9_item, _config.map_size == 81)
+		if _m11_item >= 0:
+			_map_mode_popup.set_item_checked(_m11_item, _config.map_size == 121)
 		if _mturn_item >= 0:
 			_map_mode_popup.set_item_checked(_mturn_item, _config.map_style == "turn")
 		if _msolid_item >= 0:
@@ -2160,8 +2160,8 @@ func _remember_map_mode(action_name: String, tab: PhiCharacter) -> void:
 					tab.do_send_action("MTurn")
 		"M7x7":
 			_config.map_size = 57
-		"M9x9":
-			_config.map_size = 81
+		"M11x11":
+			_config.map_size = 121
 		"MTurn":
 			_config.map_style = "turn"
 		"MSolid":

@@ -1,7 +1,7 @@
 extends SceneTree
-## 第41段: 9x9 マップモード (#ex-map size=81 / #m81)。
-## パーサが #m81 フレームを size=9・81セルで解釈すること、設定の
-## 81 往復、アクションとログイン行の配線を見る (ネットワークには出ない)。
+## 第41段: 11x11 マップモード (#ex-map size=121 / #m121)。
+## パーサが #m81 フレーム (旧サーバ互換の受信) を解釈すること、設定の
+## 121 往復と旧 81 からの移行、アクションとログイン行の配線を見る。
 
 var _checks := 0
 var _failures := 0
@@ -105,38 +105,46 @@ func _run() -> void:
 	check(MapView.grid_dim(57) == 7, "grid_dim(57) falls back to 7")
 
 	# (4) アクション定義とメニュー・ツールバー・キー
-	var def: Dictionary = PhiActions.get_action("M9x9")
-	check(str(def.get("send", "")) == "#ex-map size=81", "M9x9 sends size=81")
-	check(str(def.get("caption", "")).begins_with("9x9"), "M9x9 caption")
+	var def: Dictionary = PhiActions.get_action("M11x11")
+	check(str(def.get("send", "")) == "#ex-map size=121", "M11x11 sends size=121")
+	check(str(def.get("caption", "")).begins_with("11x11"), "M11x11 caption")
 	var disp_items: Array = []
 	for menu in PhiActions.MENUS:
 		if str(menu.get("name", "")) == "表示":
 			disp_items = menu.get("items", [])
-	check(disp_items.has("M9x9"), "M9x9 in Disp menu")
-	check(PhiActions.TOOLBAR.has("M9x9"), "M9x9 in toolbar")
-	check(PhiActions.accelerator_for("M9x9") == 0, "M9x9 accelerator removed (stage111)")
+	check(disp_items.has("M11x11"), "M11x11 in Disp menu")
+	check(not disp_items.has("M9x9"), "M9x9 removed from Disp menu")
+	check(PhiActions.TOOLBAR.has("M11x11"), "M11x11 in toolbar")
+	check(PhiActions.accelerator_for("M11x11") == 0, "M11x11 accelerator removed (stage111)")
 
 	# (5) ログイン行
-	var lines := PhiSession.login_lines("someid", 81, "solid")
-	check(lines.has("#ex-map size=81"), "login lines carry size=81")
-	var reg := PhiSession.post_register_lines(81, "turn")
-	check(reg.has("#ex-map size=81"), "post-register lines carry size=81")
+	var lines := PhiSession.login_lines("someid", 121, "solid")
+	check(lines.has("#ex-map size=121"), "login lines carry size=121")
+	var reg := PhiSession.post_register_lines(121, "turn")
+	check(reg.has("#ex-map size=121"), "post-register lines carry size=121")
 
-	# (6) 設定の往復 (MapSize=81 が保存・復元できる)
+	# (6) 設定の往復 (MapSize=121 が保存・復元できる)
 	var path := OS.get_temp_dir().path_join("neophi_stage41_config.ini")
 	var cfg := PhiConfig.new()
-	cfg.map_size = 81
+	cfg.map_size = 121
 	check(cfg.save_file(path), "config save")
 	var cfg2 := PhiConfig.new()
 	check(cfg2.load_file(path), "config load")
-	check(cfg2.map_size == 81, "config roundtrip keeps 81")
+	check(cfg2.map_size == 121, "config roundtrip keeps 121")
+	DirAccess.remove_absolute(path)
+	# 旧 81 (9x9) の設定は仕様削除に伴い 121 で読み戻される
+	cfg.map_size = 81
+	check(cfg.save_file(path), "config save (old 81)")
+	var cfg3 := PhiConfig.new()
+	check(cfg3.load_file(path), "config load (old 81)")
+	check(cfg3.map_size == 121, "old 81 config migrates to 121")
 	DirAccess.remove_absolute(path)
 
-	# (7) 既定は 9x9 (新規設定では MapSize=81)
-	check(PhiConfig.new().map_size == 81, "fresh config defaults to 81")
-	check(PhiSession.new().map_size == 81, "fresh session defaults to 81")
+	# (7) 既定は 11x11 (新規設定では MapSize=121)
+	check(PhiConfig.new().map_size == 121, "fresh config defaults to 121")
+	check(PhiSession.new().map_size == 121, "fresh session defaults to 121")
 
-	# (8) 未対応サーバへのフォールバック (第68段改): 81 を試して
+	# (8) 未対応サーバへのフォールバック (第68段改): 121 を試して
 	# 応答が無ければ数回送り直し、それでも来なければその接続
 	# だけ 7x7 に落とす。実タブ (main シーン) で見る。
 	var ps := load("res://main.tscn") as PackedScene
@@ -145,30 +153,30 @@ func _run() -> void:
 	await create_timer(1.0).timeout
 	var tab: PhiCharacter = main.call("_active_tab")
 	tab.session.set("_state", "open")
-	tab.session.map_size = 81
-	tab.set("_m81_fell_back", false)
-	tab.set("_m81_attempts", 0)
-	tab.set("_m81_watch_since", 0)
+	tab.session.map_size = 121
+	tab.set("_bigmap_fell_back", false)
+	tab.set("_bigmap_attempts", 0)
+	tab.set("_bigmap_watch_since", 0)
 	tab.set("_map_dim_now", 7)
-	tab.call("_check_m81_watchdog", 5000)
-	tab.call("_check_m81_watchdog", 6500)
-	check(tab.session.map_size == 81, "fallback: first timeout resends 81")
-	tab.call("_check_m81_watchdog", 8000)
-	tab.call("_check_m81_watchdog", 9500)
-	check(tab.session.map_size == 81, "fallback: second timeout still trying")
-	tab.call("_check_m81_watchdog", 11000)
-	tab.call("_check_m81_watchdog", 12500)
+	tab.call("_check_bigmap_watchdog", 5000)
+	tab.call("_check_bigmap_watchdog", 6500)
+	check(tab.session.map_size == 121, "fallback: first timeout resends 121")
+	tab.call("_check_bigmap_watchdog", 8000)
+	tab.call("_check_bigmap_watchdog", 9500)
+	check(tab.session.map_size == 121, "fallback: second timeout still trying")
+	tab.call("_check_bigmap_watchdog", 11000)
+	tab.call("_check_bigmap_watchdog", 12500)
 	check(tab.session.map_size == 57, "fallback: gives up to 57")
-	check(bool(tab.get("_m81_fell_back")), "fallback: flag set")
-	# 9x9 が届いている間は諦めない
-	tab.set("_m81_fell_back", false)
-	tab.set("_m81_attempts", 0)
-	tab.set("_m81_watch_since", 0)
-	tab.session.map_size = 81
-	tab.set("_map_dim_now", 9)
-	tab.call("_check_m81_watchdog", 20000)
-	tab.call("_check_m81_watchdog", 20000 + 60000)
-	check(tab.session.map_size == 81, "fallback: size 9 keeps 81")
+	check(bool(tab.get("_bigmap_fell_back")), "fallback: flag set")
+	# 11x11 が届いている間は諦めない
+	tab.set("_bigmap_fell_back", false)
+	tab.set("_bigmap_attempts", 0)
+	tab.set("_bigmap_watch_since", 0)
+	tab.session.map_size = 121
+	tab.set("_map_dim_now", 11)
+	tab.call("_check_bigmap_watchdog", 20000)
+	tab.call("_check_bigmap_watchdog", 20000 + 60000)
+	check(tab.session.map_size == 121, "fallback: size 11 keeps 121")
 	tab.session.set("_state", "idle")
 	main.queue_free()
 

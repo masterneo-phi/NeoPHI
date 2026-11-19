@@ -99,7 +99,7 @@ const ACTIONS := {
 	"ImageWindow": {"caption": "画像一覧", "hint": "ログ中の画像参照の一覧を開く(選ぶと取得して表示)", "kind": "image-window"},
 	"M5x5": {"caption": "5x5 マップモード [Shift+Alt+5]", "hint": "表示する地図を5x5マスにする [Shift+Alt+5]", "kind": "send", "send": "#ex-map size=40"},
 	"M7x7": {"caption": "7x7 マップモード [Shift+Alt+7]", "hint": "表示する地図を7x7マスにする [Shift+Alt+7]", "kind": "send", "send": "#ex-map size=57"},
-	"M9x9": {"caption": "9x9 マップモード [Shift+Alt+9]", "hint": "表示する地図を9x9マスにする [Shift+Alt+9]", "kind": "send", "send": "#ex-map size=81"},
+	"M11x11": {"caption": "11x11 マップモード [Shift+Alt+9]", "hint": "表示する地図を11x11マスにする [Shift+Alt+9]", "kind": "send", "send": "#ex-map size=121"},
 	"MTurn": {"caption": "回転マップモード [Alt+T]", "hint": "自分の向きに合わせて地図を回転させる [Alt+T で切替]", "kind": "send", "send": "#ex-map style=turn"},
 	"MSolid": {"caption": "北固定マップモード [Alt+T]", "hint": "北を上に固定して地図を表示する [Alt+T で切替]", "kind": "send", "send": "#ex-map style=solid"},
 	"SSMap": {"caption": "マップ画像の保存", "hint": "地図だけの画像を ScreenShot フォルダに保存する", "kind": "screenshot"},
@@ -126,12 +126,12 @@ const MENUS := [
 	{"name": "操作", "items": ["NewPrivWindow", "Loud", "TalkAdd", "SayAllTabs"]},
 	{"name": "行動", "items": ["Equip", "Unequip", "-", "Talk", "Read", "Write", "Erase", "Board", "-", "Get", "Put", "Use", "Sort", "FloorItem", "-", "Spells", "Pay", "Hit", "Check", "Skills"]},
 	{"name": "魔法", "items": ["WizardEye", "PartyEye", "EagleEye", "Identify", "Search", "WizardLock", "Unlock", "Detect", "Create", "Analyze", "Forget", "Call", "Return", "-", "WizardLight", "EagleEyeText", "List", "Destroy", "ChargeSpell", "Appear", "Disappear", "-", "Cast", "Cast1", "Cast2", "Cast3", "Cast4", "Cast5", "Cast6", "Cast7"]},
-	{"name": "表示", "items": ["M9x9", "M7x7", "M5x5", "MSolid", "MTurn", "MapAlignCenter", "MapAlignLeft", "MapAlignRight", "-", "UiStyleFloat", "LayoutToAllTabs", "-", "SSMap", "LogScrollStop", "SmoothScroll", "DispMagic", "LogImage", "PlayBGM", "PlaySE", "MasterMagicAlways", "-", "LogAutoSave", "LogSave", "LogSaveDir", "LogDeleteFilter", "ImageWindow"]},
+	{"name": "表示", "items": ["M11x11", "M7x7", "M5x5", "MSolid", "MTurn", "MapAlignCenter", "MapAlignLeft", "MapAlignRight", "-", "UiStyleFloat", "LayoutToAllTabs", "-", "SSMap", "LogScrollStop", "SmoothScroll", "DispMagic", "LogImage", "PlayBGM", "PlaySE", "MasterMagicAlways", "-", "LogAutoSave", "LogSave", "LogSaveDir", "LogDeleteFilter", "ImageWindow"]},
 	{"name": "ツール", "items": ["UnewPanel", "SoundTest", "ChipViewer", "CharaViewer", "ShortcutConfig", "OpenConfigFolder", "CheckUpdate", "VersionInfo"]},
 ]
 
 ## ツールバーに並べるアクション。"-" は区切り。
-const TOOLBAR := ["Open", "Close", "-", "Equip", "Unequip", "Read", "Write", "Erase", "Get", "Put", "Use", "-", "Spells", "Hit", "Check", "NewPrivWindow", "Loud", "-", "Cast", "M9x9", "M7x7", "M5x5", "MSolid", "MTurn", "-", "SSMap", "-", "PlayBGM", "LogAutoSave", "LayoutToAllTabs"]
+const TOOLBAR := ["Open", "Close", "-", "Equip", "Unequip", "Read", "Write", "Erase", "Get", "Put", "Use", "-", "Spells", "Hit", "Check", "NewPrivWindow", "Loud", "-", "Cast", "M11x11", "M7x7", "M5x5", "MSolid", "MTurn", "-", "SSMap", "-", "PlayBGM", "LogAutoSave", "LayoutToAllTabs"]
 
 
 ## メニュー項目の右端に表示するショートカット（アクセラレータ）。

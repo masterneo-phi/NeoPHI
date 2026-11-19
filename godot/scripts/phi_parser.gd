@@ -13,7 +13,7 @@ const _MAP_CELLS := 49
 const _M57_DIRECTION_OFFSET := 7
 const _M57_CHIP_OFFSET := 18
 const _MAP_CHIP_BYTES := _MAP_CELLS * 2
-const _MAX_EAGLE_EYE := 20
+const _MAX_EAGLE_EYE := 25
 const _MAX_LIST_LINES := 1000
 const _MAX_MAP_CHARS := 1000
 const _I64_MIN := -9223372036854775808
@@ -296,6 +296,9 @@ func feed(raw: PackedByteArray) -> Array[Dictionary]:
 		if _starts_with_bytes(raw, "#m81 M"):
 			_parse_m81_m(raw)
 			return []
+		if _starts_with_bytes(raw, "#m121 M"):
+			_parse_m121_m(raw)
+			return []
 		if _starts_with_bytes(raw, "#map M"):
 			_parse_map_m(raw)
 			return []
@@ -401,6 +404,9 @@ func _dispatch_command(text: String, raw: PackedByteArray) -> Array[Dictionary]:
 	if text == "#m81 .":
 		_map_size = 9
 		return _finish_map()
+	if text == "#m121 .":
+		_map_size = 11
+		return _finish_map()
 	if text == "#map .":
 		_map_size = 5
 		return _finish_map()
@@ -426,6 +432,9 @@ func _dispatch_command(text: String, raw: PackedByteArray) -> Array[Dictionary]:
 	if _starts_with_bytes(raw, "#m81 O "):
 		# O 行の欄の並びは #m57 と同じ (接頭辞だけが違う)。
 		_parse_m57_o(raw)
+		return []
+	if _starts_with_bytes(raw, "#m121 O "):
+		_parse_m121_o(raw)
 		return []
 	if _starts_with_bytes(raw, "#m57 W "):
 		for span in [[7, 74], [75, 142]]:
@@ -585,6 +594,12 @@ func _parse_m81_m(raw: PackedByteArray) -> void:
 	_parse_mx_m(raw, 9, 162)
 
 
+func _parse_m121_m(raw: PackedByteArray) -> void:
+	## `#m121 M`。書式は #m81 M と同じで、(chip, attr) が121組並ぶ。
+	## 接頭辞が 1 バイト長い分、方向は [8]、チップは [19] から。
+	_parse_mx_m(raw, 11, 242, 19, 8)
+
+
 func _note_frame_size(size: int) -> void:
 	## 地図の大きさが変わったら、前フレームのキャラ行を捨てる。
 	## 大きさが同じ間は、行が来ないフレームでも前フレームの
@@ -598,18 +613,18 @@ func _note_frame_size(size: int) -> void:
 	_last_frame_size = size
 
 
-func _parse_mx_m(raw: PackedByteArray, size: int, chip_bytes: int) -> void:
+func _parse_mx_m(raw: PackedByteArray, size: int, chip_bytes: int, chip_offset: int = _M57_CHIP_OFFSET, dir_offset: int = _M57_DIRECTION_OFFSET) -> void:
 	_note_frame_size(size)
 	_map_size = size
-	if raw.size() > _M57_DIRECTION_OFFSET:
-		_map_dir = _dir_to_num(raw[_M57_DIRECTION_OFFSET])
-	var end := _M57_CHIP_OFFSET + chip_bytes
+	if raw.size() > dir_offset:
+		_map_dir = _dir_to_num(raw[dir_offset])
+	var end := chip_offset + chip_bytes
 	if raw.size() < end:
 		_map_cells = null
 		return
 	var cells: Array[Dictionary] = []
 	for i in range(0, chip_bytes, 2):
-		cells.append({"chip": raw[_M57_CHIP_OFFSET + i], "attr": raw[_M57_CHIP_OFFSET + i + 1]})
+		cells.append({"chip": raw[chip_offset + i], "attr": raw[chip_offset + i + 1]})
 	_map_cells = cells
 
 
@@ -727,6 +742,75 @@ func _parse_m57_o(raw: PackedByteArray) -> void:
 		"gra": gra,
 		"status": status,
 		"gigant": PackedByteArray([raw[70]]).get_string_from_ascii(),
+		"layer": layer,
+		"default": default,
+	}
+	if magnify != null:
+		chara["magnify"] = magnify
+	_map_chars.append(chara)
+
+
+func _parse_m121_o(raw: PackedByteArray) -> void:
+	## `#m121 O`。欄の並びは #m57 O と同じだが、接頭辞が 1 バイト
+	## 長く、X/Y が 2 桁 (10) になることがある。X/Y は数字を読み
+	## 飛ばして位置を求め、以降の欄は名前の開始位置からの相対で読む。
+	## [8]層 [9..12]ID(16進) [13]':' [14..]X ' ' Y ' ' 向き ' ' 名前…
+	if raw.size() < 70:
+		return
+	var layer := _hex_digit(raw[8])
+	if layer < 0:
+		return
+	var char_id: Variant = _hex_u32(raw.slice(9, 13))
+	if char_id == null or raw[13] != 0x3A: # ':'
+		return
+	var pos := 14
+	var x := 0
+	var digits := 0
+	while pos < raw.size() and 0x30 <= raw[pos] and raw[pos] <= 0x39:
+		x = x * 10 + raw[pos] - 0x30
+		pos += 1
+		digits += 1
+	if digits == 0 or pos >= raw.size():
+		return
+	pos += 1 # X の後の空白
+	var y := 0
+	digits = 0
+	while pos < raw.size() and 0x30 <= raw[pos] and raw[pos] <= 0x39:
+		y = y * 10 + raw[pos] - 0x30
+		pos += 1
+		digits += 1
+	if digits == 0 or pos + 1 >= raw.size():
+		return
+	pos += 1 # Y の後の空白
+	var dir_ch := raw[pos]
+	var base := pos + 2 # 名前の開始位置 (向き + 空白の次)
+	if raw.size() < base + 55:
+		return
+	var status: Variant = _hex_u32(raw.slice(base + 32, base + 34))
+	var default: Variant = _hex_u32(raw.slice(base + 53, base + 55))
+	if status == null or default == null:
+		return
+	var chara_name := Cp932.decode(raw.slice(base, base + 31)).strip_edges(false, true)
+	var gra := Cp932.decode(raw.slice(base + 35, base + 50)).strip_edges(false, true)
+	if _chara_clear_pending:
+		_map_chars = []
+		_chara_clear_pending = false
+	var magnify: Variant = null
+	for pair in _name_magnify:
+		if pair[0] == chara_name:
+			magnify = pair[1]
+			break
+	if _map_chars.size() >= _MAX_MAP_CHARS:
+		return
+	var chara := {
+		"id": char_id,
+		"x": x,
+		"y": y,
+		"dir": PackedByteArray([dir_ch]).get_string_from_ascii(),
+		"name": chara_name,
+		"gra": gra,
+		"status": status,
+		"gigant": PackedByteArray([raw[base + 51]]).get_string_from_ascii(),
 		"layer": layer,
 		"default": default,
 	}

@@ -7,8 +7,8 @@ extends SceneTree
 ##     フレームのキャラ行を捨てる / グラ名と一致する名前は
 ##     プレイヤー名として取り込まない / 自分行の判定にグラ名
 ##     行も含める。
-## (2) 9x9 へ戻れない: 9x9 未対応サーバ (rel5g 系は size=81 を
-##     無視する) では、明示的に 9x9 を要求した時も応答が無い
+## (2) 11x11 へ戻れない: 11x11 未対応サーバ (rel5g 系は size=121 を
+##     無視する) では、明示的に 11x11 を要求した時も応答が無い
 ##     ので 7x7 へ落とし直す必要がある。対策: 送った
 ##     #ex-map size= をセッションが覚え、落とし直しの判断に使う。
 
@@ -118,8 +118,8 @@ func _run() -> void:
 
 	# --- (2a) セッションが要求した大きさを覚える ---
 	var session := PhiSession.new()
-	session.send_text("#ex-map size=81")
-	check(session.map_size == 81, "session tracks size=81 request")
+	session.send_text("#ex-map size=121")
+	check(session.map_size == 121, "session tracks size=121 request")
 	session.send_line("#ex-map size=40")
 	check(session.map_size == 40, "session tracks size=40 request")
 	session.send_text("hello")
@@ -161,22 +161,22 @@ func _run() -> void:
 	check((ev_syn["chars"] as Array).size() == 1, "self synthesized when no row")
 	check(str(ev_syn["chars"][0]["name"]) == "KURO", "synthesized self uses player name")
 
-	# --- (2b) 明示的に 9x9 を要求したら、未対応サーバでは 7x7 へ ---
+	# --- (2b) 明示的に 11x11 を要求したら、未対応サーバでは 7x7 へ ---
 	# (第68段改: 応答が無ければ数回送り直してから諦める)
 	var tsession: Variant = tab.get("session")
 	tsession.map_size = 57
-	tab.call("do_send_action", "M9x9")
-	check(int(tsession.map_size) == 81, "M9x9 request tracked in session")
+	tab.call("do_send_action", "M11x11")
+	check(int(tsession.map_size) == 121, "M11x11 request tracked in session")
 	var ev_classic: Dictionary = {"type": "map", "size": 5, "cells": cells5, "chars": [], "dir": 4}
 	tab.call("_on_event", ev_classic)
-	check(int(tsession.map_size) == 81, "no instant fallback on a non-9x9 frame")
+	check(int(tsession.map_size) == 121, "no instant fallback on a non-11x11 frame")
 	tsession.set("_state", "open")
-	tab.set("_m81_attempts", 0)
-	tab.set("_m81_watch_since", 0)
+	tab.set("_bigmap_attempts", 0)
+	tab.set("_bigmap_watch_since", 0)
 	for t in [1000, 2500, 2501, 4001, 4002, 5502]:
-		tab.call("_check_m81_watchdog", t)
+		tab.call("_check_bigmap_watchdog", t)
 	check(int(tsession.map_size) == 57, "watchdog gives up to 57 after retries")
-	check(bool(tab.get("_m81_fell_back")) == true, "fallback latched after retries")
+	check(bool(tab.get("_bigmap_fell_back")) == true, "fallback latched after retries")
 	tsession.set("_state", "idle")
 
 	# --- (3) 洪水時はログの切り詰めを後回しにせず即行う ---

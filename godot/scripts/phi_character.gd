@@ -213,7 +213,7 @@ var _last_repeat_send := 0
 var _held_step_pending_until := 0
 var _held_seq_sent := false
 var _map_dim_now := 0
-var _m81_fell_back := false
+var _bigmap_fell_back := false
 var _map_style_now := ""
 var _loud := false
 var _loud_all := false
@@ -633,7 +633,7 @@ func _process(_delta: float) -> void:
 	if not session.is_open() or session.is_transferring() \
 			or _bgm_activity_busy():
 		_bgm_busy_until = Time.get_ticks_msec() + BGM_SETTLE_MSEC
-	_check_m81_watchdog(Time.get_ticks_msec())
+	_check_bigmap_watchdog(Time.get_ticks_msec())
 	_flush_log_batch()
 	# 表示を間引いた分は、受信が捌けてから記録で揃える (第69段)。
 	if _view_gap and _log_batch.is_empty() and not _flooding() \
@@ -662,12 +662,12 @@ func _process(_delta: float) -> void:
 			_save_flush_acc = 0.0
 			_flush_log_save()
 	var now_open := session.is_open()
-	# 接続が開いたら 9x9 の試行を仕切り直す (第68段改)。
-	if now_open and not _m81_open_seen:
-		_m81_open_seen = true
-		_on_m81_session_opened()
+	# 接続が開いたら 11x11 の試行を仕切り直す (第68段改)。
+	if now_open and not _bigmap_open_seen:
+		_bigmap_open_seen = true
+		_on_bigmap_session_opened()
 	elif not now_open:
-		_m81_open_seen = false
+		_bigmap_open_seen = false
 	# 切断中はキャラの歩行アニメーションを止める (第65段)。
 	# session_closed シグナル側が先に _was_open を戻すと変化
 	# 検出が行き違えるため、検出は _was_open ではなく、最後に
@@ -2213,77 +2213,77 @@ func _on_input_split_dragged(offset: int) -> void:
 
 # -- 接続 --------------------------------------------------------------------
 
-func _do_fallback_m81() -> void:
-	## 9x9 を諦めて 7x7 を要求し直す (この接続だけ)。
-	_m81_fell_back = true
-	_m81_upgrade_pending = false
-	_m81_attempts = 0
+func _do_fallback_bigmap() -> void:
+	## 11x11 を諦めて 7x7 を要求し直す (この接続だけ)。
+	_bigmap_fell_back = true
+	_bigmap_upgrade_pending = false
+	_bigmap_attempts = 0
 	session.map_size = 57
 	session.send_line("#ex-map size=57")
-	log_message("system", "このサーバは 9x9 マップに未対応のため、7x7 マップで表示します")
+	log_message("system", "このサーバは 11x11 マップに未対応のため、7x7 マップで表示します")
 
 
-## 9x9 の試し方 (第68段改、ユーザーの提案): 最初から 81 を
-## 要求すると、未対応サーバでは無視されて 5x5 になり、後から
-## 送る落とし直しもログイン直後の状態では届かないことがある。
-## そこで、まず 7x7 (57) で入って表示を確保し、接続が落ち
-## 着いてから 81 を試す。81 が届かなければ数回送り直し、
-## それでも来なければ 7x7 のまま確定する (表示は最初から
-## 7x7 なので、諦めても画面は変わらない)。
-const M81_UPGRADE_DELAY_MSEC := 800
-const M81_WATCHDOG_MSEC := 1500
-const M81_MAX_ATTEMPTS := 3
-var _m81_watch_since := 0
-var _m81_upgrade_pending := false
-var _m81_attempts := 0
-var _m81_open_seen := false
+## 11x11 の試し方 (第68段の 9x9 方式を 2026-11-20 に移行):
+## 最初から 121 を要求すると、未対応サーバでは無視されて
+## 5x5 になり、後から送る落とし直しもログイン直後の状態では
+## 届かないことがある。そこで、まず 7x7 (57) で入って表示を
+## 確保し、接続が落ち着いてから 121 を試す。121 が届かなければ
+## 数回送り直し、それでも来なければ 7x7 のまま確定する
+## (表示は最初から 7x7 なので、諦めても画面は変わらない)。
+const BIGMAP_UPGRADE_DELAY_MSEC := 800
+const BIGMAP_WATCHDOG_MSEC := 1500
+const BIGMAP_MAX_ATTEMPTS := 3
+var _bigmap_watch_since := 0
+var _bigmap_upgrade_pending := false
+var _bigmap_attempts := 0
+var _bigmap_open_seen := false
 
 
-func _on_m81_session_opened() -> void:
-	## 接続 (世界移動後の再接続を含む) が開くたびに、9x9 の
-	## 試行を仕切り直す。希望が 81 で現在値が小さい時は、
+func _on_bigmap_session_opened() -> void:
+	## 接続 (世界移動後の再接続を含む) が開くたびに、11x11 の
+	## 試行を仕切り直す。希望が 121 で現在値が小さい時は、
 	## まず今の大きさで入ってから昇格を試す。
-	_m81_fell_back = false
-	_m81_attempts = 0
-	_m81_watch_since = 0
-	_m81_upgrade_pending = session != null \
-		and session.desired_map_size == 81 and session.map_size < 81
+	_bigmap_fell_back = false
+	_bigmap_attempts = 0
+	_bigmap_watch_since = 0
+	_bigmap_upgrade_pending = session != null \
+		and session.desired_map_size == 121 and session.map_size < 121
 
 
-func _check_m81_watchdog(now_ms: int) -> void:
+func _check_bigmap_watchdog(now_ms: int) -> void:
 	if session == null or not session.is_open():
-		_m81_watch_since = 0
+		_bigmap_watch_since = 0
 		return
-	if _m81_upgrade_pending:
-		if _m81_watch_since == 0:
-			_m81_watch_since = now_ms
-		elif now_ms - _m81_watch_since >= M81_UPGRADE_DELAY_MSEC:
-			_m81_upgrade_pending = false
-			_m81_watch_since = 0
-			_m81_attempts = 1
-			session.send_line("#ex-map size=81")
+	if _bigmap_upgrade_pending:
+		if _bigmap_watch_since == 0:
+			_bigmap_watch_since = now_ms
+		elif now_ms - _bigmap_watch_since >= BIGMAP_UPGRADE_DELAY_MSEC:
+			_bigmap_upgrade_pending = false
+			_bigmap_watch_since = 0
+			_bigmap_attempts = 1
+			session.send_line("#ex-map size=121")
 		return
-	if _m81_fell_back:
-		# 諦めた後に手動で 9x9 を選び直したら、試し直す。
-		if session.map_size == 81:
-			_m81_fell_back = false
-			_m81_attempts = 1
-			_m81_watch_since = 0
+	if _bigmap_fell_back:
+		# 諦めた後に手動で 11x11 を選び直したら、試し直す。
+		if session.map_size == 121:
+			_bigmap_fell_back = false
+			_bigmap_attempts = 1
+			_bigmap_watch_since = 0
 		return
-	if session.map_size != 81 or _map_dim_now == 9:
-		_m81_watch_since = 0
+	if session.map_size != 121 or _map_dim_now == 11:
+		_bigmap_watch_since = 0
 		return
-	if _m81_attempts == 0:
-		_m81_attempts = 1
-	if _m81_watch_since == 0:
-		_m81_watch_since = now_ms
-	elif now_ms - _m81_watch_since >= M81_WATCHDOG_MSEC:
-		_m81_watch_since = 0
-		if _m81_attempts < M81_MAX_ATTEMPTS:
-			_m81_attempts += 1
-			session.send_line("#ex-map size=81")
+	if _bigmap_attempts == 0:
+		_bigmap_attempts = 1
+	if _bigmap_watch_since == 0:
+		_bigmap_watch_since = now_ms
+	elif now_ms - _bigmap_watch_since >= BIGMAP_WATCHDOG_MSEC:
+		_bigmap_watch_since = 0
+		if _bigmap_attempts < BIGMAP_MAX_ATTEMPTS:
+			_bigmap_attempts += 1
+			session.send_line("#ex-map size=121")
 		else:
-			_do_fallback_m81()
+			_do_fallback_bigmap()
 
 
 func connect_to(p_host: String, p_port: int, p_char_id: String) -> void:
@@ -2297,11 +2297,11 @@ func connect_to(p_host: String, p_port: int, p_char_id: String) -> void:
 	_save_failed = false
 	_close_handled = false
 	_cut_by_other = false
-	_m81_fell_back = false
-	_m81_watch_since = 0
-	_m81_attempts = 0
-	_m81_upgrade_pending = false
-	_m81_open_seen = false
+	_bigmap_fell_back = false
+	_bigmap_watch_since = 0
+	_bigmap_attempts = 0
+	_bigmap_upgrade_pending = false
+	_bigmap_open_seen = false
 	log_message("system", "%s:%d に接続します..." % [host, port])
 	session.connect_to(host, port, p_char_id)
 	title_changed.emit(tab_title())
@@ -3765,20 +3765,20 @@ func _fixup_classic_self(event: Dictionary) -> void:
 
 func north_fix_now() -> bool:
 	## 移動キー表を北固定にするか。Philly は「地図の大きさが 57 で
-	## 様式が回転でない時」に北固定表を使う。9x9 (81) も北固定では
+	## 様式が回転でない時」に北固定表を使う。11x11 (121) も北固定では
 	## 同じ扱いにする。地図イベントの size はマスの数 (7 が 57、
-	## 5 が 40、9 が 81) なので、セッションのプロトコル値から戻す。
+	## 5 が 40、11 が 121) なので、セッションのプロトコル値から戻す。
 	var dim := _map_dim_now
 	if dim <= 0:
 		match session.map_size:
 			40:
 				dim = 5
-			81:
-				dim = 9
+			121:
+				dim = 11
 			_:
 				dim = 7
 	var style := _map_style_now if not _map_style_now.is_empty() else session.map_style
-	return (dim == 7 or dim == 9) and style != "turn"
+	return (dim == 7 or dim == 11) and style != "turn"
 
 
 func press_held_move(key_event: InputEventKey, key: String, mods: String) -> void:
@@ -4101,10 +4101,11 @@ func send_greeting() -> void:
 func do_send_action(action_name: String) -> void:
 	## メニュー・ツールバーの送信アクション(Cast1〜Cast7 は
 	## 次のリストを抑える。Philly NextListCancel)。
-	# 9x9 へは、まず 7x7 を送ってから 81 を送る (第68段改)。
-	if action_name == "M9x9" and session != null and session.map_size == 40:
-		session.desired_map_size = 81
-		session.send_line("#ex-map size=57")
+	# 11x11 へは、まず 7x7 を送ってから 121 を送る (第68段改の方式)。
+	if action_name == "M11x11" and session != null:
+		session.desired_map_size = 121
+		if session.map_size == 40:
+			session.send_line("#ex-map size=57")
 	if action_name.length() == 5 and action_name.begins_with("Cast"):
 		_suppress_lists = 1
 	var was_list := _list_active

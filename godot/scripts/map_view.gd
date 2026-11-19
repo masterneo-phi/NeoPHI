@@ -744,7 +744,7 @@ func debug_ghost_count() -> int:
 
 
 static func grid_dim(size: int) -> int:
-	return size if size == 5 or size == 7 or size == 9 else 7
+	return size if size == 5 or size == 7 or size == 9 or size == 11 else 7
 
 
 static func chip_indices(chip_byte: int) -> Array:

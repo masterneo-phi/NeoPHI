@@ -1,5 +1,5 @@
 extends SceneTree
-## 第68段: (1) 9x9 を要求してもサーバが無応答 (地図フレーム
+## 第68段: (1) 11x11 を要求してもサーバが無応答 (地図フレーム
 ## 自体が来ない) な場合に、1.5 秒で見切って 7x7 へ送り直す
 ## ウォッチドッグ (第66段のフレーム駆動フォールバックの補完)。
 ## (2) パーサの行クリア精緻化: 大きさが変わっても、その
@@ -117,42 +117,42 @@ func _run() -> void:
 	var tab: Variant = main.call("_active_tab")
 	var tsession: Variant = tab.get("session")
 
-	# --- (1) まず 7x7 で入り、落ち着いてから 81 へ昇格を試す ---
+	# --- (1) まず 7x7 で入り、落ち着いてから 121 へ昇格を試す ---
 	tsession.set("_state", "open")
-	tsession.set("desired_map_size", 81)
+	tsession.set("desired_map_size", 121)
 	tsession.map_size = 57
 	tab.set("_map_dim_now", 7)
-	tab.set("_m81_fell_back", false)
-	tab.set("_m81_attempts", 0)
-	tab.set("_m81_watch_since", 0)
-	tab.set("_m81_upgrade_pending", true)
-	tab.call("_check_m81_watchdog", 1000)
-	tab.call("_check_m81_watchdog", 1799)
+	tab.set("_bigmap_fell_back", false)
+	tab.set("_bigmap_attempts", 0)
+	tab.set("_bigmap_watch_since", 0)
+	tab.set("_bigmap_upgrade_pending", true)
+	tab.call("_check_bigmap_watchdog", 1000)
+	tab.call("_check_bigmap_watchdog", 1799)
 	check(int(tsession.map_size) == 57, "upgrade waits for the session to settle")
-	tab.call("_check_m81_watchdog", 1800)
-	check(int(tsession.map_size) == 81, "upgrade sent size=81")
+	tab.call("_check_bigmap_watchdog", 1800)
+	check(int(tsession.map_size) == 121, "upgrade sent size=121")
 	var queue: Array = tsession.get("_send_queue")
-	check(str(queue[queue.size() - 1]) == "#ex-map size=81", "upgrade request queued")
+	check(str(queue[queue.size() - 1]) == "#ex-map size=121", "upgrade request queued")
 	# --- (2) 応答が無ければ送り直し、3 回で諦めて 7x7 へ ---
 	tab.set("_map_dim_now", 5)
 	for t in [1801, 3301, 3302, 4802]:
-		tab.call("_check_m81_watchdog", t)
-	check(int(tsession.map_size) == 81, "still retrying 81")
-	tab.call("_check_m81_watchdog", 4803)
-	tab.call("_check_m81_watchdog", 6303)
+		tab.call("_check_bigmap_watchdog", t)
+	check(int(tsession.map_size) == 121, "still retrying 121")
+	tab.call("_check_bigmap_watchdog", 4803)
+	tab.call("_check_bigmap_watchdog", 6303)
 	check(int(tsession.map_size) == 57, "gave up to 57 after retries")
-	check(bool(tab.get("_m81_fell_back")) == true, "fallback latched")
+	check(bool(tab.get("_bigmap_fell_back")) == true, "fallback latched")
 	queue = tsession.get("_send_queue")
 	check(str(queue[queue.size() - 1]) == "#ex-map size=57", "give-up sent size=57")
-	# --- (3) 諦めた後に手動で 9x9 を選び直したら試し直す ---
-	tsession.send_line("#ex-map size=81")
-	tab.call("_check_m81_watchdog", 7000)
-	check(bool(tab.get("_m81_fell_back")) == false, "manual re-pick re-arms the trial")
-	# --- (4) 9x9 が届いている間は諦めない ---
-	tab.set("_map_dim_now", 9)
-	tab.call("_check_m81_watchdog", 8000)
-	tab.call("_check_m81_watchdog", 8000 + 60000)
-	check(int(tsession.map_size) == 81, "no fallback while 9x9 alive")
+	# --- (3) 諦めた後に手動で 11x11 を選び直したら試し直す ---
+	tsession.send_line("#ex-map size=121")
+	tab.call("_check_bigmap_watchdog", 7000)
+	check(bool(tab.get("_bigmap_fell_back")) == false, "manual re-pick re-arms the trial")
+	# --- (4) 11x11 が届いている間は諦めない ---
+	tab.set("_map_dim_now", 11)
+	tab.call("_check_bigmap_watchdog", 8000)
+	tab.call("_check_bigmap_watchdog", 8000 + 60000)
+	check(int(tsession.map_size) == 121, "no fallback while 11x11 alive")
 	tsession.set("_state", "idle")
 
 	print("test_stage68: ", _checks, " checks, ", _failures, " failures")

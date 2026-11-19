@@ -129,7 +129,7 @@ func _static_checks() -> void:
 	var shift_alt_expect := {
 		"Digit5": "#ex-map size=40", "Numpad5": "#ex-map size=40",
 		"Digit7": "#ex-map size=57", "Numpad7": "#ex-map size=57",
-		"Digit9": "#ex-map size=81", "Numpad9": "#ex-map size=81",
+		"Digit9": "#ex-map size=121", "Numpad9": "#ex-map size=121",
 	}
 	for code in shift_alt_expect:
 		check(PhiKeys.key_send(code, true, false, true) == str(shift_alt_expect[code]), "key_send shiftAlt: " + code)

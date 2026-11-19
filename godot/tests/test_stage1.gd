@@ -182,7 +182,7 @@ func _test_config() -> void:
 	_check_eq(cfg.host, "127.0.0.1", "config default host")
 	_check_eq(cfg.port, 20017, "config default port")
 	_check_eq(cfg.skin, "Mine", "config default skin")
-	_check_eq(cfg.map_size, 81, "config default map size")
+	_check_eq(cfg.map_size, 121, "config default map size")
 	_check_eq(cfg.map_style, "solid", "config default map style")
 	_check_eq(cfg.window_width, 1280, "config default window width")
 	_check_eq(cfg.window_height, 1024, "config default window height")
@@ -248,7 +248,7 @@ func _test_config() -> void:
 	_check_eq(cfg3.host, "127.0.0.1", "config bad host")
 	_check_eq(cfg3.port, 20017, "config bad port")
 	_check_eq(cfg3.skin, "Mine", "config bad skin")
-	_check_eq(cfg3.map_size, 81, "config bad map size")
+	_check_eq(cfg3.map_size, 121, "config bad map size")
 	_check_eq(cfg3.map_style, "solid", "config bad map style")
 	_check_eq(cfg3.window_width, 1280, "config bad window width")
 	_check_eq(cfg3.window_height, 1024, "config bad window height")
@@ -273,7 +273,7 @@ func _test_config() -> void:
 
 	cfg2.reset()
 	_check_eq(cfg2.host, "127.0.0.1", "config reset host")
-	_check_eq(cfg2.map_size, 81, "config reset map size")
+	_check_eq(cfg2.map_size, 121, "config reset map size")
 	_check_eq(cfg2.scroll_stop, false, "config reset scroll stop")
 
 
@@ -606,7 +606,7 @@ func _test_actions() -> void:
 
 func _test_login_lines() -> void:
 	var lines := PhiSession.login_lines("guest")
-	_check(lines.has("#ex-map size=81"), "login default size")
+	_check(lines.has("#ex-map size=121"), "login default size")
 	_check(lines.has("#ex-map style=solid"), "login default style")
 	_check(lines.has("#open guest"), "login open")
 	var lines40 := PhiSession.login_lines("guest", 40, "turn")

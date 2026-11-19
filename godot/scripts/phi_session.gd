@@ -42,10 +42,10 @@ var host := ""
 var port := 0
 var char_id := ""
 ## ログイン時に送る地図の大きさ(40=5x5, 57=7x7)とスタイル。
-var map_size := 81
+var map_size := 121
 ## 接続先に最終的に頼みたい地図の大きさ。map_size は今この
-## 接続で要求している大きさで、9x9 希望でも接続時は 57 から
-## 始めて後で 81 へ昇格を試す (第68段改)。
+## 接続で要求している大きさで、11x11 希望でも接続時は 57 から
+## 始めて後で 121 へ昇格を試す (第68段改)。
 var desired_map_size := 0
 var map_style := "solid"
 ## ログイン時に送る `#ex-switch ex-disp-magic=` の値。
@@ -116,7 +116,7 @@ var _dst_out := PackedByteArray()
 var _skipped_lines: Array[PackedByteArray] = []
 
 
-static func login_lines(p_char_id: Variant, p_map_size: int = 81, p_map_style: String = "solid", p_disp_magic: bool = true) -> Array[String]:
+static func login_lines(p_char_id: Variant, p_map_size: int = 121, p_map_style: String = "solid", p_disp_magic: bool = true) -> Array[String]:
 	## Philly のログイン時の送信。値は Philly の既定値。
 	## 世界移動の後は `#open` を送らないので、その時は p_char_id=null で呼ぶ。
 	## 地図の大きさ(40=5x5, 57=7x7)とスタイルは設定から渡す。
@@ -139,7 +139,7 @@ static func login_lines(p_char_id: Variant, p_map_size: int = 81, p_map_style: S
 	return lines
 
 
-static func post_register_lines(p_map_size: int = 81, p_map_style: String = "solid", p_disp_magic: bool = true) -> Array[String]:
+static func post_register_lines(p_map_size: int = 121, p_map_style: String = "solid", p_disp_magic: bool = true) -> Array[String]:
 	## 新規キャラクター作成の成功後に送る、通常セッション用の残りの
 	## 設定。`login_lines()` の後半(地図と ex-switch 群)と同じ並びで、
 	## `#open` や間隔指定は作成時のものを送り済みなので含まない。
@@ -213,7 +213,7 @@ func send_line(line: String) -> void:
 		_parser.clear_users()
 	if line.begins_with("#ex-map size="):
 		# 要求した地図の大きさを覚える (メニュー・キー・手入力の
-		# どれで送っても)。9x9 未対応サーバへの落とし直しは
+		# どれで送っても)。11x11 未対応サーバへの落とし直しは
 		# この値を見て判断する。
 		var v := line.trim_prefix("#ex-map size=").strip_edges()
 		if v.is_valid_int():

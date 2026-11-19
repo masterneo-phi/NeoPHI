@@ -10,7 +10,7 @@ extends RefCounted
 ## [Connection] Host, Port … Philly の .phirc 相当。ID は保存しない
 ##   (ID は起動引数か既定の guest を使う)。
 ## [Skin] SkinName … Philly.ini 互換(起動時のみ有効なのと同じ扱い)。
-## [Map] MapSize (40=5x5, 57=7x7, 81=9x9), MapStyle (solid/turn)。
+## [Map] MapSize (40=5x5, 57=7x7, 121=11x11), MapStyle (solid/turn)。
 ## [Disp] WindowWidth, WindowHeight … 起動時の窓の大きさ。
 ## [Disp] SplitOffset … 地図とログの分割位置(地図側の幅ピクセル)。
 ##   0 以下なら未設定で、初回は地図 55%・ログ 45% にする。
@@ -44,7 +44,7 @@ const DEFAULT_PATH := "user://NeoPHI.ini"
 const DEFAULT_HOST := "127.0.0.1"
 const DEFAULT_PORT := 20017
 const DEFAULT_SKIN := "Mine"
-const DEFAULT_MAP_SIZE := 81
+const DEFAULT_MAP_SIZE := 121
 const DEFAULT_MAP_STYLE := "solid"
 const DEFAULT_WINDOW_WIDTH := 1280
 const DEFAULT_WINDOW_HEIGHT := 1024
@@ -250,7 +250,8 @@ func load_file(path: String = DEFAULT_PATH) -> bool:
 	var s := str(cfg.get_value("Skin", "SkinName", DEFAULT_SKIN)).strip_edges()
 	skin = s if not s.is_empty() else DEFAULT_SKIN
 	var ms := int(cfg.get_value("Map", "MapSize", DEFAULT_MAP_SIZE))
-	map_size = ms if ms == 40 or ms == 57 or ms == 81 else DEFAULT_MAP_SIZE
+	# 旧 81 (9x9) の設定は仕様削除に伴い既定の 121 (11x11) になる。
+	map_size = ms if ms == 40 or ms == 57 or ms == 121 else DEFAULT_MAP_SIZE
 	var mst := str(cfg.get_value("Map", "MapStyle", DEFAULT_MAP_STYLE)).strip_edges().to_lower()
 	map_style = mst if mst == "solid" or mst == "turn" else DEFAULT_MAP_STYLE
 	disp_magic = bool(cfg.get_value("Map", "DispMagicClientSide", true))

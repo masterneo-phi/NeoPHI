@@ -1,8 +1,8 @@
 extends SceneTree
-## 第60段: 9x9 の Eagle eye は 20x20 (ユーザーの仕様変更)。
-## パーサの上限を 15 から 20 へ広げ、20x20 の #ex-eagleeye を
+## 第60段: 11x11 の Eagle eye は 25x25 (中心が合う奇数サイズ)。
+## パーサの上限を 25 へ広げ、25x25 の #ex-eagleeye を
 ## 全マス取り込めること、従来の 15x15 がそのままなこと、
-## Eagle ビューが 20 マスで盤面を作ることを確かめる。
+## Eagle ビューが 25 マスで盤面を作ることを確かめる。
 
 var _checks := 0
 var _failures := 0
@@ -43,22 +43,22 @@ func _initialize() -> void:
 
 func _run() -> void:
 	var parser := PhiParser.new()
-	var ev20 := _feed_all(parser, _eagle_block(19, 20))
-	check(ev20.size() == 1 and ev20[0].get("type") == "eagleEye", "20x20 eagle event emitted")
+	var ev20 := _feed_all(parser, _eagle_block(24, 25))
+	check(ev20.size() == 1 and ev20[0].get("type") == "eagleEye", "25x25 eagle event emitted")
 	if ev20.size() == 1:
-		check(int(ev20[0]["width"]) == 20 and int(ev20[0]["height"]) == 20, "20x20 dims (got %sx%s)" % [ev20[0]["width"], ev20[0]["height"]])
-		check((ev20[0]["cells"] as Array).size() == 400, "400 cells")
-		# 右下のマス (19,19) のチップが届いている (打ち切りなし)。
-		check(int(ev20[0]["cells"][399]["chip"]) == 30 + 19, "far corner cell present")
+		check(int(ev20[0]["width"]) == 25 and int(ev20[0]["height"]) == 25, "25x25 dims (got %sx%s)" % [ev20[0]["width"], ev20[0]["height"]])
+		check((ev20[0]["cells"] as Array).size() == 625, "625 cells")
+		# 右下のマス (24,24) のチップが届いている (打ち切りなし)。
+		check(int(ev20[0]["cells"][624]["chip"]) == 30 + 24, "far corner cell present")
 	var parser2 := PhiParser.new()
 	var ev15 := _feed_all(parser2, _eagle_block(14, 15))
 	check(ev15.size() == 1 and int(ev15[0]["width"]) == 15 and int(ev15[0]["height"]) == 15, "15x15 unchanged")
-	# ビュー: 20 マスの盤面になる。
+	# ビュー: 25 マスの盤面になる。
 	var view := PhiEagleView.new()
 	root.add_child(view)
 	if ev20.size() == 1:
 		view.set_event(ev20[0], null, "", 1.0, {})
-		check(view.board_dim() == 20, "eagle view dim 20 (got %d)" % view.board_dim())
+		check(view.board_dim() == 25, "eagle view dim 25 (got %d)" % view.board_dim())
 	view.queue_free()
 
 	print("stage60: %d checks, %d failures" % [_checks, _failures])
