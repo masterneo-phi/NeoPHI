@@ -89,8 +89,8 @@ func clear_cache() -> void:
 
 static func is_lanu(file_name: String) -> bool:
 	## LANU 系のグラフィックスか (4bpp)。キャラグラとしては
-	## 通常どおり読む (Philly の既定グラも LANU 系)。ボタンと
-	## 一覧の候補からは外すために使う。
+	## 通常どおり読む (Philly の既定グラも LANU 系)。ボタンの
+	## 絵の候補からは外すために使う。
 	return file_name.get_file().to_lower().begins_with("lanu_")
 
 

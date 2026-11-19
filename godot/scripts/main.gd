@@ -1845,13 +1845,12 @@ func _show_chip_viewer() -> void:
 
 
 func _chara_names() -> Array[String]:
-	## キャラフォルダにある <名前>.bmp の名前の和集合 (LANU 除外)。
+	## キャラフォルダにある <名前>.bmp の名前の和集合。
+	## LANU 系も含む (キャラグラとしては通常どおり読めるため)。
 	var seen := {}
 	var out: Array[String] = []
 	for dir_path in _assets.chara_dirs:
 		for name in _dir_file_names(dir_path, ["bmp"]):
-			if GameAssets.is_lanu(name):
-				continue
 			var base := name.get_basename()
 			if not seen.has(base.to_lower()):
 				seen[base.to_lower()] = true
