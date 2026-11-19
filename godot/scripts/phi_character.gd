@@ -2364,6 +2364,10 @@ func _finish_register() -> void:
 	var id := _register.issued_id
 	var display_name := _register_display_name
 	var root := _register_root
+	# 発行 ID をセッションに残す。これをしないと char_id が
+	# "newuser" のままになり、再接続で #open newuser が送られて
+	# サーバが新規登録ダイアログを始めてしまう (2026-11-20 修正)。
+	session.char_id = id
 	_clear_register()
 	_hide_list_overlay()
 	if PhiCharacters.write_phirc(root, display_name, id, host, port):
@@ -2410,7 +2414,8 @@ func can_reconnect() -> bool:
 	## (ID はファイルに保存しない決まりなので、復元しただけの
 	## タブは対象外)。
 	return not is_session_open() and _register == null \
-		and not host.is_empty() and not session.char_id.is_empty()
+		and not host.is_empty() and not session.char_id.is_empty() \
+		and session.char_id != "newuser"
 
 
 func send_line(line: String) -> void:
