@@ -29,11 +29,22 @@ static func tagged_text(text: String) -> String:
 	return out
 
 
-static func to_bbcode(text: String, base_size: int) -> String:
+## Philly の特殊カラー (`/*color=+hp*/` など) の既定色。スキンの
+## Log.css に `.color__hp` 等の定義があればそちらが優先する
+## (呼び出し側が colors で渡す)。
+const DEFAULT_SPECIAL_COLORS := {
+	"+hp": "#008000", "-hp": "#ff0000",
+	"+mp": "#0000ff", "-mp": "#ff0000",
+}
+
+
+static func to_bbcode(text: String, base_size: int, colors: Dictionary = {}) -> String:
 	## プレビュー用に `/*...*/` タグを BBCode へ変換する。
 	## 対応するのは色・サイズ・スタイルで、フォント名や画像など
 	## 描けないものは落とす。閉じタグ `/*.*/` は開いているものを
 	## 全部閉じる (Philly の意味どおり)。
+	## colors は色名 → "#rrggbb" の対応表 (スキンの Log.css 由来)。
+	## 特殊カラーと、スキンが色名に独自の色を割り当てている場合に使う。
 	var out := ""
 	var stack: Array = []
 	var i := 0
@@ -53,7 +64,7 @@ static func to_bbcode(text: String, base_size: int) -> String:
 			if lower == "br":
 				out += "\n"
 				continue
-			out += _bbcode_for_tag(lower, base_size, stack)
+			out += _bbcode_for_tag(lower, base_size, stack, colors)
 			continue
 		var next := text.find("/*", i)
 		if next < 0:
@@ -79,13 +90,19 @@ static func _escape_bb(text: String) -> String:
 	return out
 
 
-static func _bbcode_for_tag(lower: String, base_size: int, stack: Array) -> String:
+static func _bbcode_for_tag(lower: String, base_size: int, stack: Array, colors: Dictionary = {}) -> String:
 	## タグ1つ分の BBCode を返す。stack へ閉じ側を積む。
 	for prefix in ["color=", "cl=", "c="]:
 		if lower.begins_with(prefix):
 			var value := lower.substr(prefix.length())
 			if value == "olieve":
 				value = "olive"
+			# スキンの色定義、無ければ特殊カラーの既定色で引く
+			# (`+hp` のような値は通常の色名の規則では通らない)。
+			var special := str(colors.get(value, DEFAULT_SPECIAL_COLORS.get(value, "")))
+			if not special.is_empty():
+				stack.append("[/color]")
+				return "[color=%s]" % special
 			var re := RegEx.new()
 			re.compile("^[a-z0-9#]+$")
 			if re.search(value) == null:

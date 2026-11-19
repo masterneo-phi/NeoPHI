@@ -218,6 +218,34 @@ static func parse_log_css(text: String) -> Dictionary:
 	return {"body": body, "classes": classes}
 
 
+static func tag_colors_from_css(css: Dictionary) -> Dictionary:
+	## Log.css のカラークラスから、タグの色名 → "#rrggbb" の対応表を作る。
+	## Philly では `/*color=+hp*/` が `.color__hp` クラスになる
+	## (`+` は `_` に置換、1文字色は末尾に `_` が付く)。
+	## `.c_` / `.cl_` より `.color_` を優先する。
+	var classes: Dictionary = css.get("classes", {})
+	var out := {}
+	for prefix in ["c_", "cl_", "color_"]:
+		for name in classes:
+			if not str(name).begins_with(prefix):
+				continue
+			var rest := str(name).substr(prefix.length())
+			var value := ""
+			if rest.begins_with("_"):
+				value = "+" + rest.substr(1)
+			elif rest.length() == 2 and rest.ends_with("_"):
+				value = rest.substr(0, 1)
+			else:
+				value = rest
+			if value.is_empty():
+				continue
+			var decls: Dictionary = classes[name]
+			var col: Variant = parse_css_color(str(decls.get("color", "")))
+			if col != null:
+				out[value] = "#" + (col as Color).to_html(false)
+	return out
+
+
 # -- Cursor/*.cur ----------------------------------------------------------
 
 static func _cur_u16(data: PackedByteArray, off: int) -> int:

@@ -109,6 +109,8 @@ var _system_color: Variant = null
 var _error_color: Variant = null
 ## ログ行頭の時刻の色 (スキンの Log.css の .class_time、無ければ teal)。
 var _time_color: Variant = null
+## タグの色名 → "#rrggbb" (スキンの Log.css のカラークラス由来)。
+var _tag_colors: Dictionary = {}
 var _is_active := false
 var _was_open := false
 ## MapView へ最後に伝えたアニメーション可否 (第65段)。
@@ -2018,6 +2020,7 @@ func _apply_log_css() -> void:
 	_error_color = SkinFiles.parse_css_color(str(ng.get("color", "")))
 	var time_cls: Dictionary = classes.get("class_time", {})
 	_time_color = SkinFiles.parse_css_color(str(time_cls.get("color", "")))
+	_tag_colors = SkinFiles.tag_colors_from_css(css)
 	# フロート表示の間は、スキンの地と色より窓の見た目を優先する。
 	if _float_mode:
 		_apply_float_log_look()
@@ -2741,7 +2744,7 @@ func _log_line_segments(entry: Dictionary) -> Array:
 			# 出す (看板や掲示板の読み返しが、エディタのプレビューと
 			# 同じ見た目になる)。記録用の display は従来どおり
 			# タグ無しの素の文字のまま。
-			shown_bb = bbcode_line(prefix) + tagged_bbcode_line(raw_line, log_view.get_theme_font_size("normal_font_size"))
+			shown_bb = bbcode_line(prefix) + tagged_bbcode_line(raw_line, log_view.get_theme_font_size("normal_font_size"), _tag_colors)
 		else:
 			shown_bb = bbcode_line(display)
 		return [{"bb": head + shown_bb}]
@@ -2777,7 +2780,7 @@ func _segment_bbcode(raw_seg: String, font_size: int) -> String:
 	## 同じ規則: タグがあれば効かせ、URL はリンクにする)。
 	var plain_seg := PhiTags.plain_text(raw_seg)
 	if raw_seg != plain_seg:
-		return tagged_bbcode_line(raw_seg, font_size)
+		return tagged_bbcode_line(raw_seg, font_size, _tag_colors)
 	return bbcode_line(plain_seg)
 
 
@@ -3249,23 +3252,24 @@ static func bbcode_line(text: String) -> String:
 	return out
 
 
-static func tagged_bbcode_line(raw: String, base_size: int) -> String:
+static func tagged_bbcode_line(raw: String, base_size: int, colors: Dictionary = {}) -> String:
 	## タグ入りの行の表示用 BBCode。タグは PhiTags で BBCode に
 	## 変え (看板エディタのプレビューと同じ変換)、URL は
 	## bbcode_line と同じ形のリンクにする。
+	## colors はスキンの Log.css 由来の色名対応表 (特殊カラー用)。
 	var text := PhiTags.tagged_text(raw)
 	var spans := url_spans(text)
 	if spans.is_empty():
-		return PhiTags.to_bbcode(text, base_size)
+		return PhiTags.to_bbcode(text, base_size, colors)
 	var out := ""
 	var pos := 0
 	for span in spans:
 		var start: int = span[0]
 		var url: String = span[1]
-		out += PhiTags.to_bbcode(text.substr(pos, start - pos), base_size)
+		out += PhiTags.to_bbcode(text.substr(pos, start - pos), base_size, colors)
 		out += "[url=" + url + "][color=#" + LOG_LINK_COLOR + "][u]" + escape_bbcode(url) + "[/u][/color][/url]"
 		pos = start + url.length()
-	out += PhiTags.to_bbcode(text.substr(pos), base_size)
+	out += PhiTags.to_bbcode(text.substr(pos), base_size, colors)
 	return out
 
 
