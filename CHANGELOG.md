@@ -524,6 +524,11 @@ PHI（Phantasmal Island）のための新しいクライアント「NeoPHI」と
     phi.class から phi.cls へ変更（.class は Mac で開きにくい
     ため）。phi.cls → Phi.cls → phi.class の順に探すので
     旧名もそのまま使える
+  - v1.9（2026-11-20）: FreeBSD 8.1（GCC 4.6）でビルドできる
+    よう互換修正（動作仕様は変更なし。実機でビルド・起動・
+    接続を確認済み）。configure.sh を C++ 版用に修正し、
+    従来の configure → makeopts → make の流れでビルド可能に
+    （makeopts で No Skill 版も選択可）
   - https://github.com/masterneo-phi/PHIDM_NEO/releases
 - 配布 zip（PHIDM_NEO.zip）: phi_dm 本体＋雛形ワールド＋ソース一式
 
