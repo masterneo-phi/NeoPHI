@@ -520,6 +520,10 @@ PHI（Phantasmal Island）のための新しいクライアント「NeoPHI」と
     マップセルの読み書き・乱数・アイテム出現・所持チェック・
     クリーチャー発生などが使え、ランダムダンジョン生成も可能。
     再読み込みは新マスター魔法「Load class」
+  - v1.8（2026-11-19）: プログラム実行スイッチのファイル名を
+    phi.class から phi.cls へ変更（.class は Mac で開きにくい
+    ため）。phi.cls → Phi.cls → phi.class の順に探すので
+    旧名もそのまま使える
   - https://github.com/masterneo-phi/PHIDM_NEO/releases
 - 配布 zip（PHIDM_NEO.zip）: phi_dm 本体＋雛形ワールド＋ソース一式
 
