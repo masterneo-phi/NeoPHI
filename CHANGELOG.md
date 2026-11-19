@@ -454,6 +454,16 @@ PHI（Phantasmal Island）のための新しいクライアント「NeoPHI」と
   「所持魔法 1〜7 の詠唱」を復活させた（詠唱は F1〜F7 と
   Alt+1〜7 の両方）。メニュー表示とマニュアルも合わせて更新
 - テスト: 全スイート 101 本合格
+- 超魔法メニューを拡張した（バージョン 0.5.9、DM 拡張）。
+  新しい「遠隔魔法」サブメニューに Remote lock / Remote
+  unlock / Remote boards / Remote erase / Thunder of Zeus
+  を追加。通常魔法には Master list / Master search /
+  Aegis of Athena / Deny PK / Permit PK / Open・Close box
+  of Pandora を、操作魔法には Save id / Load gate /
+  Close gate / Load ban / Load cmd / Load obj を、
+  世界停止魔法には Evil wind from Hyades を追加した
+  （新魔法の一部はサーバ PHIDM_NEO v1.4 が必要）
+- テスト: 全スイート 102 本合格
 
 ---
 
@@ -474,6 +484,10 @@ PHI（Phantasmal Island）のための新しいクライアント「NeoPHI」と
   - v1.3（2026-11-17）: 2x2 の大きな敵（`phi.ed` の `:O B`。
     4 マスの当たり・移動・出現、正面 2 マス攻撃、範囲魔法の
     二重適用防止、地図の大きさ印 `B`）
+  - v1.4（2026-11-19）: DM 拡張の新マスター魔法
+    （Remote lock / Remote unlock / Remote boards /
+    Remote erase / Thunder of Zeus / Master search /
+    Aegis of Athena）
   - https://github.com/masterneo-phi/PHIDM_NEO/releases
 - 配布 zip（PHIDM_NEO.zip）: phi_dm 本体＋雛形ワールド＋ソース一式
 

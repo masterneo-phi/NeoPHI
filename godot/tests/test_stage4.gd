@@ -70,7 +70,7 @@ func _test_master_magic() -> void:
 	var data := PhiMasterMagic.parse(PhiMasterMagic.DEFAULT_XML)
 	_check_eq(str(data.get("caption", "")), "超魔法", "mm caption")
 	var menus: Array = data.get("menus", [])
-	_check_eq(menus.size(), 5, "mm 5 menus")
+	_check_eq(menus.size(), 6, "mm 6 menus")
 	_check_eq(str(menus[0].get("caption", "")), "移動魔法", "mm first menu")
 	var items: Array = menus[0].get("items", [])
 	_check_eq(str(items[0].get("caption", "")), "jump", "mm jump item")
@@ -85,7 +85,7 @@ func _test_master_magic() -> void:
 	var malor_steps: Array = items[3].get("steps", [])
 	_check_eq(str(malor_steps[0].get("kind", "")), "string_dialog", "mm malor string_dialog")
 	_check(str(malor_steps[0].get("text", "")).contains("\n"), "mm malor newline")
-	var evil_items: Array = menus[4].get("items", [])
+	var evil_items: Array = menus[5].get("items", [])
 	var evil_steps: Array = evil_items[0].get("steps", [])
 	_check_eq(str(evil_steps[0].get("text", "")), "世界を停止させます。\nよろしいですか？", "mm ok_dialog newline")
 	_check_eq(PhiMasterMagic.substitute("jump %int", "3", ""), "jump 3", "mm substitute int")
@@ -388,7 +388,7 @@ func _test_clear_cache() -> void:
 
 
 func _test_version() -> void:
-	_check_eq(PhiVersion.VERSION, "0.5.8", "version number")
+	_check_eq(PhiVersion.VERSION, "0.5.9", "version number")
 	var action: Dictionary = PhiActions.get_action("VersionInfo")
 	_check_eq(str(action.get("caption", "")), "NeoPHI " + PhiVersion.VERSION, "version menu caption")
 	_check_eq(str(action.get("hint", "")), "バージョン情報を表示する", "version menu hint kept")
