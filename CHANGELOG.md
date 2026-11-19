@@ -478,6 +478,10 @@ PHI（Phantasmal Island）のための新しいクライアント「NeoPHI」と
   割り当てた色（white → #d0d0ff など）も定義どおりに
   表示するようになった
 - テスト: 全スイート 103 本合格
+- 超魔法「遠隔魔法」に Hammer of Ares を追加
+  （バージョン 0.5.12）。指定した相手のアイテムと魔法を
+  全て破壊するマスター魔法で、サーバ PHIDM_NEO v1.5 が必要
+- テスト: 全スイート 103 本合格
 
 ---
 
@@ -502,6 +506,10 @@ PHI（Phantasmal Island）のための新しいクライアント「NeoPHI」と
     （Remote lock / Remote unlock / Remote boards /
     Remote erase / Thunder of Zeus / Master search /
     Aegis of Athena）
+  - v1.5（2026-11-19）: 新マスター魔法 Hammer of Ares
+    （対象キャラクターのアイテムと魔法を全て破壊する。
+    複数ある場合は1つずつメッセージを表示しながら
+    約1秒間隔で順に破壊する）
   - https://github.com/masterneo-phi/PHIDM_NEO/releases
 - 配布 zip（PHIDM_NEO.zip）: phi_dm 本体＋雛形ワールド＋ソース一式
 
