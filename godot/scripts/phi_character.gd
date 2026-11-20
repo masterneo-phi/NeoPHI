@@ -205,6 +205,9 @@ var _mouse_cursor_now := ""
 var _mouse_turn_dir := ""
 
 var _held_moves: Array[Dictionary] = []
+## 最後に受けた地図の向き (0=北 2=東 4=南 6=西)。送った
+## 移動コマンドの絶対方向を求めるのに使う (第119段)。
+var _facing := 0
 var _held_since := 0
 var _last_repeat_send := 0
 ## 第77段: 新しい保持の最初のキーは、同時押し (斜め) の相方が
@@ -1972,6 +1975,49 @@ func _note_sent(text: String) -> void:
 	if first.is_empty():
 		return
 	_last_command = first.split(" ")[0]
+	var mv: Variant = _sent_move_dir(first)
+	if mv != null and map_view != null:
+		map_view.note_move(mv)
+
+
+func _sent_move_dir(first: String) -> Variant:
+	## 送った文が移動コマンドなら、その絶対方向 (画面の
+	## 北 = (0,-1)) を返す。回転だけなら Vector2i.ZERO
+	## (次の地図で滑らせない印)、無関係なら null (第119段)。
+	var parts := first.split(" ")
+	if parts.is_empty():
+		return null
+	var head := parts[0].to_lower()
+	if head == "turn":
+		return Vector2i.ZERO
+	if head != "go":
+		return null
+	var fv := Vector2i(0, -1)
+	match _facing:
+		2:
+			fv = Vector2i(1, 0)
+		4:
+			fv = Vector2i(0, 1)
+		6:
+			fv = Vector2i(-1, 0)
+	if parts.size() < 2:
+		return fv
+	match parts[1].to_lower():
+		"l":
+			return Vector2i(fv.y, -fv.x)
+		"r":
+			return Vector2i(-fv.y, fv.x)
+		"b":
+			return Vector2i(-fv.x, -fv.y)
+		"n":
+			return Vector2i(0, -1)
+		"e":
+			return Vector2i(1, 0)
+		"s":
+			return Vector2i(0, 1)
+		"w":
+			return Vector2i(-1, 0)
+	return null
 
 
 func _on_list_header_gui_input(event: InputEvent) -> void:
@@ -2574,6 +2620,8 @@ func _on_event(event: Dictionary) -> void:
 			_map_dim_now = int(event.get("size", 0))
 			if event.has("style"):
 				_map_style_now = str(event["style"])
+			_facing = int(event.get("dir", _facing))
+			map_view.self_name = _player_name
 			map_view.set_map(event, _assets, _mapset, _defines)
 			map_view.set_compass_direction(int(event.get("dir", 0)), north_fix_now())
 			map_view.set_compass_mode_style(effective_map_style())

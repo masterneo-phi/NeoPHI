@@ -236,6 +236,15 @@ var map_style := "solid"
 func set_map_style(p_style: String) -> void:
 	map_style = p_style
 var _prev_cells: Array = []
+## 自キャラの表示名 (PhiCharacter が渡す)。地図行の中から
+## 自分の行を見分けるのに使う。
+var self_name := ""
+## 直前に送った移動コマンドの方向 (第119段)。実サーバは
+## #ex-pos を送らないので、絶対座標が無い時は自分が出した
+## 移動コマンドでずれ方向を決める。(999,999) は「なし」、
+## Vector2i.ZERO は「回転など、移動しないフレームが来る」印。
+var _pending_move := Vector2i(999, 999)
+var _pending_move_at := -100000
 var _scroll_from := Vector2.ZERO  # ずれ (セル単位 = プレイヤーの移動方向)
 var _scroll_t := 1.0  # 0→1 で進む。1 で完了。
 const SCROLL_DURATION := 0.17
@@ -248,6 +257,14 @@ func set_session_live(v: bool) -> void:
 		return
 	_session_live = v
 	queue_redraw()
+
+
+func note_move(dir: Vector2i) -> void:
+	## 移動コマンドを送った時に PhiCharacter から呼ばれる。
+	## dir はプレイヤーの実移動 (画面の北 = (0,-1))。回転など
+	## 位置の変わらないコマンドでは Vector2i.ZERO を渡す。
+	_pending_move = dir
+	_pending_move_at = Time.get_ticks_msec()
 
 
 func _detect_scroll(new_event: Dictionary) -> void:
@@ -273,6 +290,16 @@ func _detect_scroll(new_event: Dictionary) -> void:
 	# (第118段)。動いていない・大きく跳んだ時は滑らか
 	# スクロールの対象にしない。
 	var candidates: Array = [Vector2i(0, -1), Vector2i(0, 1), Vector2i(-1, 0), Vector2i(1, 0)]
+	# 自分が出した移動コマンドが新しい時は、それをずれ方向の
+	# 候補にする (第119段)。一面同じ地形や霧の中ではチップ
+	# 比較だけでは向きが決まらず、横移動で上下に揺れていた。
+	if _pending_move != Vector2i(999, 999) \
+			and Time.get_ticks_msec() - _pending_move_at <= 2000:
+		var pm := _pending_move
+		_pending_move = Vector2i(999, 999)
+		if pm == Vector2i.ZERO:
+			return  # 回転など: 位置は変わらないので滑らせない
+		candidates = [pm]
 	if _event.has("pos") and new_event.has("pos"):
 		var op: Dictionary = _event["pos"]
 		var np: Dictionary = new_event["pos"]
@@ -524,8 +551,35 @@ func _update_zoom() -> void:
 		queue_redraw()
 
 
+func _mark_self(event: Dictionary, dim: int) -> void:
+	## 地図行の中の自キャラに "__self" 印を付ける。滑らか
+	## スクロール中に中央へ留めるのはこの行だけ (第120段)。
+	## 同じマスに乗った家具などのオブジェ行 (種別 B) まで
+	## 留めてしまい、家具が一瞬動いて見えていた。
+	var chars: Array = event.get("chars", [])
+	var pick: Dictionary = {}
+	if not self_name.is_empty():
+		for ch_var in chars:
+			var ch: Dictionary = ch_var
+			ch.erase("__self")
+			if PhiTags.strip_tags(str(ch.get("name", ""))).strip_edges() == self_name:
+				pick = ch
+	if pick.is_empty():
+		var cx := dim / 2
+		var cy := dim / 2
+		for ch_var in chars:
+			var ch: Dictionary = ch_var
+			ch.erase("__self")
+			if int(ch.get("x", -1)) == cx and int(ch.get("y", -1)) == cy \
+					and int(ch.get("layer", -1)) == 12:
+				pick = ch
+	if not pick.is_empty():
+		pick["__self"] = true
+
+
 func set_map(event: Dictionary, p_assets: GameAssets, p_mapset: String, defines: Dictionary = {}) -> void:
 	_detect_scroll(event)
+	_mark_self(event, grid_dim(int(event.get("size", 7))))
 	_event = event
 	_title_rect.visible = false
 	if compass != null:
@@ -1002,7 +1056,6 @@ func _draw() -> void:
 	if _any_sheet():
 		water = build_water_grid(cells, dim)
 	var half := CHIP_SIZE / 2
-	var self_cell := player_cell()
 
 	if scrolling:
 		# 前の地図を後ろに敷く (端のはみ出し側を覆う)。
@@ -1024,7 +1077,7 @@ func _draw() -> void:
 		for pair in arrange_row(row_chars):
 			var ch: Dictionary = pair[0]
 			var po := Vector2.ZERO
-			if scrolling and int(ch.get("x", -1)) == self_cell.x and int(ch.get("y", -1)) == self_cell.y:
+			if scrolling and bool(ch.get("__self", false)):
 				po = -so  # 自キャラは中央に留める
 			_draw_state_icon(ch, pair[1], z, true, po)
 			_draw_chara(ch, pair[1], z, null, Color.WHITE, po)
