@@ -165,6 +165,14 @@ func _hide_all_windows(node: Node) -> void:
 func _run() -> void:
 	_static_checks()
 	var main: Node = Main.new()
+	# 第116段: 他のテストが既定パスに残した TabSession.ini (ID 入り)
+	# を復元すると「接続」がダイアログでなく直接接続になるため、
+	# タブセッションと設定の両方を隔離する (AGENTS.md の決まり)。
+	main.set("_tab_session_path", "user://stage47_tabs.ini")
+	main.set("_config_path", "user://stage47_cfg.ini")
+	for p in ["user://stage47_tabs.ini", "user://stage47_cfg.ini"]:
+		if FileAccess.file_exists(p):
+			DirAccess.remove_absolute(ProjectSettings.globalize_path(p))
 	root.add_child(main)
 	await process_frame
 	await process_frame

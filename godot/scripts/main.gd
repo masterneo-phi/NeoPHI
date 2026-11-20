@@ -938,6 +938,18 @@ func _restore_tabs() -> PhiCharacter:
 			restored.host = str(entry["host"])
 			restored.port = int(entry["port"])
 			restored.restored_name = str(entry.get("name", ""))
+			# ID はタブセッションに保存してある (第116段)。手入力で
+			# つないだキャラは登録ファイルが無いので、これが無いと
+			# 復元タブは二度とつなげない。
+			restored.session.char_id = str(entry.get("id", ""))
+			# 名前が空で ID だけ残っているタブは、ID が一致する
+			# 登録済みキャラの表示名で題名を補う。
+			if restored.restored_name.is_empty() and not restored.session.char_id.is_empty():
+				for reg in _registered_characters():
+					if str(reg["host"]) == restored.host and int(reg["port"]) == restored.port \
+							and str(reg["id"]) == restored.session.char_id:
+						restored.restored_name = _display_name_body(str(reg["display_name"]))
+						break
 			# 名前が空で保存されていたタブは、接続先が一致する
 			# 登録済みキャラが1つだけなら、その名前と ID で
 			# 補う (タブの題名が接続先表示のままにならないように)。
@@ -946,9 +958,9 @@ func _restore_tabs() -> PhiCharacter:
 				if not host_entry.is_empty():
 					restored.restored_name = _display_name_body(str(host_entry["display_name"]))
 					restored.session.char_id = str(host_entry["id"])
-			# セッションには ID を保存しないので、登録済みキャラと
-			# 一致すれば ID を登録ファイルから引き直す (メモリ上
-			# のみ)。これで復元タブも「全キャラを接続」や再接続の
+			# セッションに ID が無い (古い形式で保存された) タブは、
+			# 登録済みキャラと一致すれば ID を登録ファイルから
+			# 引き直す。これで復元タブも「全キャラを接続」や再接続の
 			# 対象になる。
 			if restored.session.char_id.is_empty():
 				var resolved_id := _resolve_registered_id(restored.host, restored.port, restored.restored_name)
@@ -963,8 +975,8 @@ func _restore_tabs() -> PhiCharacter:
 
 
 func _save_tab_session() -> void:
-	## 開いているタブのホスト・ポート・キャラ名を保存する。
-	## ID は保存しない。
+	## 開いているタブのホスト・ポート・キャラ名・ID を保存する。
+	## パスワードは保存しない (ID は第116段から保存する)。
 	if _no_config:
 		return
 	var states: Array = []
@@ -2873,6 +2885,10 @@ func _show_connect_dialog(target: PhiCharacter) -> void:
 		if target_name.is_empty():
 			target_name = target.restored_name
 		var resolved := _resolve_registered_id(target.host, target.port, target_name)
+		if resolved.is_empty() and not target.session.char_id.is_empty():
+			# 手入力でつないだタブは登録ファイルから引けないので、
+			# タブセッションに残っている ID をそのまま入れる。
+			resolved = target.session.char_id
 		if not resolved.is_empty():
 			_connect_id_edit.text = resolved
 	_connect_dialog.popup_centered(Vector2i(380, 230))

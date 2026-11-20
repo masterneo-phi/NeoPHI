@@ -267,7 +267,20 @@ func _detect_scroll(new_event: Dictionary) -> void:
 	var new_cells: Array = new_event.get("cells", [])
 	if old_cells.size() != dim * dim or new_cells.size() != dim * dim:
 		return
-	for sv in [Vector2i(0, -1), Vector2i(0, 1), Vector2i(-1, 0), Vector2i(1, 0)]:
+	# サーバが絶対座標を付けている時は、ずれはプレイヤーの
+	# 実移動で決まる。一面同じ地形だとチップ比較だけでは
+	# 向きが決まらず、横移動でも上下に揺れて見えていた
+	# (第118段)。動いていない・大きく跳んだ時は滑らか
+	# スクロールの対象にしない。
+	var candidates: Array = [Vector2i(0, -1), Vector2i(0, 1), Vector2i(-1, 0), Vector2i(1, 0)]
+	if _event.has("pos") and new_event.has("pos"):
+		var op: Dictionary = _event["pos"]
+		var np: Dictionary = new_event["pos"]
+		var d := Vector2i(int(np.get("x", 0)) - int(op.get("x", 0)), int(np.get("y", 0)) - int(op.get("y", 0)))
+		if d == Vector2i.ZERO or absi(d.x) + absi(d.y) != 1:
+			return
+		candidates = [d]
+	for sv in candidates:
 		var s: Vector2i = sv
 		var bad := 0
 		for y in range(dim):

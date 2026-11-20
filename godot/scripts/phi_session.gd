@@ -280,6 +280,7 @@ func is_logout_pending() -> bool:
 
 ## ログアウト待ちを終えて、接続を閉じる。
 func _finish_logout() -> void:
+	_drain_and_process_final()
 	_logout_pending = false
 	_logout_close_seen = false
 	_stop_reader_draining_outbox()
@@ -332,6 +333,12 @@ func poll() -> void:
 			session_closed.emit()
 		return
 	if status != StreamPeerTCP.STATUS_CONNECTED:
+		# 閉じる前に、届いている行を全部処理する (第117段)。
+		# サーバは切断直前に別れの行 (「セーブ中...」「また会い
+		# ましょう」) や死亡メッセージを送ってから閉じるが、
+		# 状態変化の検出が先に立つと未処理のまま捨てられ、
+		# 正常終了が強制切断のように見えていた。
+		_drain_and_process_final()
 		_state = "closed"
 		_stop_reader()
 		if _logout_pending:
@@ -378,6 +385,24 @@ func poll() -> void:
 	elif _keepalive_sent and not _warned and quiet_sec >= WARN_AFTER:
 		_warned = true
 		session_error.emit("サーバから3分間応答がありません")
+
+
+func _drain_and_process_final() -> void:
+	## 切断を確定する前に、受信済みの行を残らず処理する。
+	## 読み取りスレッドが最後の塊を運んでくる猶予として、
+	## 空になるまで数回取り込む。世界移動の手順中は手順側が
+	## 読むので何もしない。
+	if _transfer_stage != "":
+		return
+	for i in 6:
+		_drain_available()
+		_process_pending_lines()
+		_inbox_mutex.lock()
+		var left := not _inbox_chunks.is_empty()
+		_inbox_mutex.unlock()
+		if _pending_lines.is_empty() and not left:
+			break
+		OS.delay_msec(1)
 
 
 func _drain_available() -> void:

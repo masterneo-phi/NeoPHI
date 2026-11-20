@@ -2,11 +2,14 @@ class_name PhiTabSession
 extends RefCounted
 ## タブセッションの保存・復元。Philly の `TabSession.ini` 相当。
 ##
-## 開いていたタブのホスト・ポート・キャラ名を保存する。
-## **ID は保存しない**。復元したタブは未接続で開き、接続の
-## 操作で ID を入れてつなぐ。
+## 開いていたタブのホスト・ポート・キャラ名・ID を保存する。
+## **パスワードは保存しない**。ID はタブ復元のために保存する
+## (手入力でつないだキャラは登録ファイルが無いので、ID まで
+## 保存しないと再起動後に二度とつなげなくなる。第116段で変更)。
+## 復元したタブは未接続で開き、接続の操作でつなぐ。
 ##
-## 形式: 1行に1タブ、`host<TAB>port<TAB>name`。名前は空でもよい。
+## 形式: 1行に1タブ、`host<TAB>port<TAB>name<TAB>id`。
+## id は任意 (古い3フィールド形式も読める)。名前は空でもよい。
 ## ホストが空のタブ(未接続の空タブ)は保存しない。
 
 const DEFAULT_PATH := "user://TabSession.ini"
@@ -30,7 +33,10 @@ static func parse(text: String) -> Array[Dictionary]:
 		var tab_name := ""
 		if parts.size() >= 3:
 			tab_name = parts[2].strip_edges()
-		out.append({"host": host, "port": port, "name": tab_name})
+		var char_id := ""
+		if parts.size() >= 4:
+			char_id = parts[3].strip_edges()
+		out.append({"host": host, "port": port, "name": tab_name, "id": char_id})
 	return out
 
 
@@ -46,7 +52,12 @@ static func serialize(tabs: Array) -> String:
 			continue
 		var tab_name := str(tab.get("name", ""))
 		tab_name = tab_name.replace("\t", " ").replace("\n", " ").replace("\r", " ").strip_edges()
-		lines.append("%s\t%d\t%s" % [host, port, tab_name])
+		var char_id := str(tab.get("id", ""))
+		char_id = char_id.replace("\t", " ").replace("\n", " ").replace("\r", " ").strip_edges()
+		if char_id.is_empty():
+			lines.append("%s\t%d\t%s" % [host, port, tab_name])
+		else:
+			lines.append("%s\t%d\t%s\t%s" % [host, port, tab_name, char_id])
 	if lines.is_empty():
 		return ""
 	return "\n".join(lines) + "\n"

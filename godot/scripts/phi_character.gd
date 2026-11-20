@@ -510,7 +510,7 @@ func session_state() -> Dictionary:
 	## 保存する名前は、ログイン名が無ければ復元名で代用する
 	## (接続に失敗したタブでも、キャラ名が消えないように)。
 	var saved_name := _player_name if not _player_name.is_empty() else restored_name
-	return {"host": host, "port": port, "name": saved_name}
+	return {"host": host, "port": port, "name": saved_name, "id": session.char_id}
 
 
 func is_session_open() -> bool:
@@ -2410,9 +2410,9 @@ func answer_transfer(yes: bool) -> void:
 
 func can_reconnect() -> bool:
 	## 全キャラ接続の対象か。前回の接続先と ID が残っていて、
-	## 接続中でも作成セッション中でもないタブだけが対象になる
-	## (ID はファイルに保存しない決まりなので、復元しただけの
-	## タブは対象外)。
+	## 接続中でも作成セッション中でもないタブだけが対象になる。
+	## ID はタブセッションに保存される (第116段) ので、復元した
+	## タブも ID が残っていれば対象になる。
 	return not is_session_open() and _register == null \
 		and not host.is_empty() and not session.char_id.is_empty() \
 		and session.char_id != "newuser"
