@@ -117,6 +117,15 @@ var input_float_rect := Rect2(0, 0, 0, 0)
 ## 8〜48)。設定画面で数値を指定する (ユーザーの指定)。
 var log_font_size := 0
 var input_font_size := 0
+## メニューバー・プルダウンメニュー・タブなどのフォントサイズ。
+## かつては地図の倍率 (窓の大きさ) に連動していたが、タブの
+## 切断・終了で極端に小さくなる事があったため連動を廃止し、
+## この固定値を使う (ユーザーの指定)。実効は 10〜48。
+var menu_font_size := 20
+## コマンドパレットのアイコンの大きさ (ピクセル)。0 は
+## アイコン本来の大きさ。それ以外はその大きさに拡大する
+## (ドット絵なので拡大は NEAREST)。実効は 0 または 12〜64。
+var toolbar_icon_size := 0
 var talk_button_pos := Vector2(-1, -1)
 ## 入力欄の高さ(ピクセル)。-1 は未設定で、その場合は既定の
 ## 3行ぶんにする。境目のドラッグで更新され、保存はメイン画面の
@@ -212,6 +221,8 @@ func reset() -> void:
 	map_align = 0
 	log_font_size = 0
 	input_font_size = 0
+	menu_font_size = 20
+	toolbar_icon_size = 0
 	log_float_rect = Rect2(0, 0, 0, 0)
 	input_float_rect = Rect2(0, 0, 0, 0)
 	talk_button_pos = Vector2(-1, -1)
@@ -297,6 +308,8 @@ func load_file(path: String = DEFAULT_PATH) -> bool:
 	map_align = clampi(int(cfg.get_value("Disp", "MapAlign", 0)), 0, 2)
 	log_font_size = clampi(int(cfg.get_value("Disp", "LogFontSize", 0)), 0, 48)
 	input_font_size = clampi(int(cfg.get_value("Disp", "InputFontSize", 0)), 0, 48)
+	menu_font_size = clampi(int(cfg.get_value("Disp", "MenuFontSize", 20)), 10, 48)
+	toolbar_icon_size = clampi(int(cfg.get_value("Disp", "ToolbarIconSize", 0)), 0, 64)
 	# フロート窓の位置と大きさ。幅と高さがそろって正なら採用する。
 	if cfg.has_section_key("Disp", "LogFloatW") and cfg.has_section_key("Disp", "LogFloatH"):
 		var lw := float(cfg.get_value("Disp", "LogFloatW", 0))
@@ -374,6 +387,8 @@ func save_file(path: String = DEFAULT_PATH) -> bool:
 	cfg.set_value("Disp", "MapAlign", map_align)
 	cfg.set_value("Disp", "LogFontSize", log_font_size)
 	cfg.set_value("Disp", "InputFontSize", input_font_size)
+	cfg.set_value("Disp", "MenuFontSize", menu_font_size)
+	cfg.set_value("Disp", "ToolbarIconSize", toolbar_icon_size)
 	cfg.set_value("Disp", "LogFloatX", log_float_rect.position.x)
 	cfg.set_value("Disp", "LogFloatY", log_float_rect.position.y)
 	cfg.set_value("Disp", "LogFloatW", log_float_rect.size.x)

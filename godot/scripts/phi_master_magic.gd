@@ -6,7 +6,8 @@ extends RefCounted
 ## "items": [{"caption": ..., "hint": ..., "steps": [...]}, ...]}, ...]}。
 ## 区切りは {"separator": true}。step は {"kind": "send" /
 ## "ok_dialog" / "int_dialog" / "string_dialog", "text": ...}。
-## `<send>` の `list` 属性も残す(今は実行時に使わない)。
+## `<send>` の `list` 属性も残す。`list="no"` の send では、サーバが
+## 返すリスト (魔法選択など) を表示しない (答えは後続の send で送る)。
 ## XML が無ければ Philly の既定内容を組み込む。
 
 ## 1つの項目で有効な `<send>` の数(Philly の仕様)。

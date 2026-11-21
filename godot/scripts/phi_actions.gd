@@ -67,6 +67,7 @@ const ACTIONS := {
 	"ChatMode": {"caption": "チャットモード", "hint": "チャットモードの ON/OFF を切り替える", "kind": "send", "send": "chat"},
 	"Address": {"caption": "アドレス登録", "hint": "登録アドレスを表示し、続けて新しいアドレスを入力する", "kind": "send", "send": "address"},
 	"MapSizeSetting": {"caption": "マップサイズ設定...", "hint": "地図の倍率を窓に合わせるか、固定倍率にするかを設定する", "kind": "map-size-dialog"},
+	"DisplaySizeSetting": {"caption": "フォント・アイコンのサイズ...", "hint": "メニュー・タブのフォントサイズと、コマンドパレットのアイコンサイズを設定する", "kind": "display-size-dialog"},
 	"WizardEye": {"caption": "Wizard eye", "hint": "世界にいる人を一覧する [Alt+W]", "kind": "send", "send": "cast\nwizard eye"},
 	"PartyEye": {"caption": "Party eye", "hint": "パーティーメンバーを一覧する [Alt+P]", "kind": "send", "send": "cast\nparty eye"},
 	"EagleEye": {"caption": "Eagle eye", "hint": "周囲の広い範囲のマップを見る [Alt+E]", "kind": "send", "send": "cast\neagle eye"},
@@ -142,7 +143,7 @@ const MENUS := [
 	{"name": "操作", "items": ["NewPrivWindow", "Loud", "TalkAdd", "SayAllTabs", "-", "SetCG", "ActionSay", "FakeAction", "-", "SendMail", "ReadMail", "DelMail", "-", "ChatMode", "Address", "ServerVersion"]},
 	{"name": "行動", "items": ["Equip", "Unequip", "-", "Talk", "Read", "Write", "Erase", "Board", "-", "Get", "Put", "Use", "Sort", "FloorItem", "-", "Spells", "Pay", "Hit", "Check", "Level", "Skills"]},
 	{"name": "魔法", "items": ["WizardEye", "PartyEye", "EagleEye", "Identify", "Search", "WizardLock", "Unlock", "Detect", "Create", "Analyze", "Forget", "Call", "Return", "-", "WizardLight", "EagleEyeText", "List", "WizList", "WizEye", "Destroy", "ChargeSpell", "Appear", "Disappear", "-", "Cast", "Cast1", "Cast2", "Cast3", "Cast4", "Cast5", "Cast6", "Cast7"]},
-	{"name": "表示", "items": ["M11x11", "M7x7", "M5x5", "MSolid", "MTurn", "MapSizeSetting", "MapAlignCenter", "MapAlignLeft", "MapAlignRight", "-", "UiStyleFloat", "LayoutToAllTabs", "-", "SSMap", "LogScrollStop", "SmoothScroll", "DispMagic", "LogImage", "PlayBGM", "PlaySE", "MasterMagicAlways", "-", "LogAutoSave", "LogSave", "LogSaveDir", "LogDeleteFilter", "ImageWindow"]},
+	{"name": "表示", "items": ["M11x11", "M7x7", "M5x5", "MSolid", "MTurn", "MapSizeSetting", "DisplaySizeSetting", "MapAlignCenter", "MapAlignLeft", "MapAlignRight", "-", "UiStyleFloat", "LayoutToAllTabs", "-", "SSMap", "LogScrollStop", "SmoothScroll", "DispMagic", "LogImage", "PlayBGM", "PlaySE", "MasterMagicAlways", "-", "LogAutoSave", "LogSave", "LogSaveDir", "LogDeleteFilter", "ImageWindow"]},
 	{"name": "ツール", "items": ["UnewPanel", "SoundTest", "ChipViewer", "CharaViewer", "ShortcutConfig", "OpenConfigFolder", "CheckUpdate", "VersionInfo"]},
 ]
 

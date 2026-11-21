@@ -123,5 +123,26 @@ func _run() -> void:
 	var loaded := PhiConfig.new()
 	loaded.load_file("user://stage100_cfg.ini")
 	check_eq(loaded.toolbar_cols, 5, "s100 cols roundtrip")
+	# (8) アイコンサイズの設定がボタンへ反映され、ini に残る。
+	# メニューフォントサイズも ini に残る。
+	config.toolbar_icon_size = 48
+	_tab.refresh_toolbar_icon_size()
+	var icon_checked := false
+	for b in _tab.get("_toolbar_buttons"):
+		var btn := b as Button
+		if btn.icon != null:
+			check_eq(btn.icon.get_width(), 48, "s100 icon size 48")
+			icon_checked = true
+			break
+	check(icon_checked, "s100 icon button exists")
+	config.toolbar_icon_size = 0
+	_tab.refresh_toolbar_icon_size()
+	config.menu_font_size = 30
+	config.toolbar_icon_size = 40
+	config.save_file("user://stage100_cfg.ini")
+	var loaded2 := PhiConfig.new()
+	loaded2.load_file("user://stage100_cfg.ini")
+	check_eq(loaded2.menu_font_size, 30, "s100 menu font roundtrip")
+	check_eq(loaded2.toolbar_icon_size, 40, "s100 icon size roundtrip")
 	print("test_stage100: ", _checks, " checks, ", _failures, " failures")
 	quit(1 if _failures > 0 else 0)

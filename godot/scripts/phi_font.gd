@@ -51,8 +51,9 @@ static func ui_size_for_zoom(zoom: int) -> int:
 	return maxi(6 * zoom - 2, 6)
 
 
-## メニューバー・プルダウンメニュー・ツールチップの文字サイズ。
-## ログと同じ大きさに統一した(2026-11-16、ユーザーの要望)。
+## 旧: メニューバー・プルダウンメニュー・ツールチップの文字サイズ。
+## メニュー等のフォントサイズは設定の固定値 (MenuFontSize) を使う
+## ようになり、倍率連動は廃止された。この関数は互換のため残す。
 static func chrome_size_for_zoom(zoom: int) -> int:
 	return ui_size_for_zoom(zoom)
 

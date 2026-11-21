@@ -6,6 +6,11 @@ extends SceneTree
 ##     ログアウトにする (サーバ側で「ログアウトした」になる)。
 ## (3) 固定魔法 (cast + 詠唱) では魔法選択リストを表示しない。
 ## (4) Talk アクション (hi) と H キーの割り当て。
+## (5) マスター魔法 (`<send list="no">`) では、cast へサーバが
+##     返す魔法選択リストを表示しない (一覧に無い魔法では
+##     選ぶ事もできず、選択ウインドウが残ってしまうため)。
+## (6) メニュー・タブのフォントサイズは設定の固定値で、地図の
+##     倍率 (窓の大きさ) に連動しない。
 
 var _checks := 0
 var _failures := 0
@@ -227,6 +232,52 @@ func _test_cast_list_suppressed() -> void:
 	srv.stop()
 
 
+func _test_master_magic_list_suppressed() -> void:
+	var srv := FakeServer.new()
+	check(srv.start(), "listen (master magic)")
+	var tab := await _connect_tab(srv)
+	srv.send_line("#name テスト")
+	await _wait_for(func() -> bool: return str(tab.get("_player_name")) == "テスト", [srv])
+	# 既定 XML の「Pass wall」(cast → 詠唱、ダイアログ無し) を使う。
+	var data := PhiMasterMagic.parse(PhiMasterMagic.DEFAULT_XML)
+	var node := {}
+	for menu_var in data.get("menus", []):
+		for item_var in (menu_var as Dictionary).get("items", []):
+			var item: Dictionary = item_var
+			if str(item.get("caption", "")) == "Pass wall":
+				node = item
+	check(not node.is_empty(), "Pass wall の項目がある")
+	var steps: Array = node.get("steps", [])
+	check(steps.size() == 2 and str((steps[0] as Dictionary).get("list", "")) == "no",
+		"cast の send に list=no が残る")
+	_main.call("_run_master_magic", tab, node)
+	var ok: bool = await _wait_for(func() -> bool: return srv.received.has("Pass wall"), [srv], 3.0)
+	check(ok, "マスター魔法の詠唱が送られる")
+	check(int(tab.get("_suppress_lists")) == 1, "list=no でリスト抑止が立つ")
+	# サーバが cast へ返す魔法選択リストは表示されない。
+	srv.send_line("#list")
+	srv.send_line("[1] Cure")
+	srv.send_line("#end-list")
+	await _wait_for(func() -> bool: return int(tab.get("_suppress_lists")) == 0, [srv], 3.0)
+	var panel: Control = tab.get("_list_panel")
+	check(not panel.visible, "マスター魔法の魔法選択リストは表示されない")
+	srv.stop()
+
+
+func _test_chrome_font_fixed() -> void:
+	var srv := FakeServer.new()
+	check(srv.start(), "listen (chrome)")
+	var tab := await _connect_tab(srv)
+	var config = _main.get("_config")
+	config.menu_font_size = 34
+	_main.call("_apply_chrome_size")
+	check(int(_main.get("_applied_chrome_size")) == 34, "メニューフォントは設定値になる")
+	config.menu_font_size = 20
+	_main.call("_apply_chrome_size")
+	check(int(_main.get("_applied_chrome_size")) == 20, "メニューフォントを設定値へ戻せる")
+	srv.stop()
+
+
 func _run() -> void:
 	_test_bubble_stack()
 	_test_fixed_spell_text()
@@ -239,5 +290,7 @@ func _run() -> void:
 	await _test_logout_fallback()
 	await _test_logout_before_login()
 	await _test_cast_list_suppressed()
+	await _test_master_magic_list_suppressed()
+	await _test_chrome_font_fixed()
 	print("test_stage36: %d checks, %d failures" % [_checks, _failures])
 	quit(1 if _failures > 0 else 0)

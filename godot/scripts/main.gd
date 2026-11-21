@@ -157,6 +157,9 @@ var _talk_add_tab: PhiCharacter = null
 var _map_size_dialog: ConfirmationDialog = null
 var _map_size_mode: OptionButton = null
 var _map_size_spin: SpinBox = null
+var _display_size_dialog: ConfirmationDialog = null
+var _display_menu_spin: SpinBox = null
+var _display_icon_spin: SpinBox = null
 var _alt_confirm_dialog: ConfirmationDialog = null
 var _alt_confirm_label: Label = null
 var _pending_alt_action := ""
@@ -716,16 +719,18 @@ func _show_import_notice(msg: String) -> void:
 
 
 func _apply_chrome_size() -> void:
-	## アクティブなタブの地図の倍率に比例して、全体の UI の文字を
-	## 大きくする。ログ・入力欄などは 6 * zoom、メニューバーと
-	## プルダウンメニュー・ツールチップ・タブ行は 7 * zoom(最低 16)。
-	## タブの中の文字は、各タブが自分の倍率で付ける。
+	## メニューバー・プルダウンメニュー・ツールチップ・タブ行の
+	## 文字は、設定の固定値 (MenuFontSize) で付ける。かつては
+	## アクティブなタブの地図の倍率に連動していたが、タブの
+	## 切断・終了で極端に小さくなる事があったため連動を廃止
+	## した (ユーザーの指定)。`size` (個室窓の文字) は従来どおり
+	## 倍率から決める。タブの中の文字は、各タブが付ける。
 	var tab := _active_tab()
 	if tab == null:
 		return
 	var zoom := tab.debug_map_zoom()
 	var size := PhiFont.ui_size_for_zoom(zoom)
-	var chrome_size := PhiFont.chrome_size_for_zoom(zoom)
+	var chrome_size := _config.menu_font_size
 	if size == _applied_font_size and chrome_size == _applied_chrome_size:
 		return
 	_applied_font_size = size
@@ -1968,6 +1973,8 @@ func _do_action(action_name: String) -> void:
 			_ask_text(action_name)
 		"map-size-dialog":
 			_show_map_size_dialog()
+		"display-size-dialog":
+			_show_display_size_dialog()
 		"priv-window":
 			_toggle_priv_window()
 		"loud-toggle":
@@ -3332,6 +3339,55 @@ func _on_map_size_confirmed() -> void:
 	_save_config()
 
 
+# -- フォント・アイコンのサイズ設定 ----------------------------------------------
+## メニュー・タブのフォントサイズ (窓・倍率に連動しない固定値) と、
+## コマンドパレットのアイコンサイズを設定する。
+
+func _show_display_size_dialog() -> void:
+	if _display_size_dialog == null:
+		_display_size_dialog = ConfirmationDialog.new()
+		_display_size_dialog.theme = _dialog_theme()
+		_display_size_dialog.transparent = true
+		_display_size_dialog.title = ""
+		_display_size_dialog.ok_button_text = "設定"
+		_display_size_dialog.cancel_button_text = "やめる"
+		var box := VBoxContainer.new()
+		_display_size_dialog.add_child(box)
+		box.add_child(_dlg_title("フォント・アイコンのサイズ"))
+		var menu_label := Label.new()
+		menu_label.text = "メニュー・タブのフォントサイズ (10〜48)"
+		box.add_child(menu_label)
+		_display_menu_spin = SpinBox.new()
+		_display_menu_spin.min_value = 10
+		_display_menu_spin.max_value = 48
+		_display_menu_spin.step = 1
+		box.add_child(_display_menu_spin)
+		var icon_label := Label.new()
+		icon_label.text = "コマンドパレットのアイコンサイズ (0 は元の大きさ、12〜64)"
+		box.add_child(icon_label)
+		_display_icon_spin = SpinBox.new()
+		_display_icon_spin.min_value = 0
+		_display_icon_spin.max_value = 64
+		_display_icon_spin.step = 1
+		box.add_child(_display_icon_spin)
+		_display_size_dialog.confirmed.connect(_on_display_size_confirmed)
+		_draggable_title(box, _display_size_dialog)
+		add_child(_display_size_dialog)
+	_display_menu_spin.value = _config.menu_font_size
+	_display_icon_spin.value = _config.toolbar_icon_size
+	_display_size_dialog.popup_centered(Vector2i(360, 210))
+
+
+func _on_display_size_confirmed() -> void:
+	_config.menu_font_size = int(_display_menu_spin.value)
+	_config.toolbar_icon_size = int(_display_icon_spin.value)
+	_apply_chrome_size()
+	for t in _tabs:
+		t.refresh_ui_font_size()
+		t.refresh_toolbar_icon_size()
+	_save_config()
+
+
 # -- 第4段: 超魔法メニュー ------------------------------------------------------
 
 func _build_master_magic_menu() -> void:
@@ -3454,6 +3510,12 @@ func _run_master_magic(tab: PhiCharacter, node: Dictionary) -> void:
 		match str(step.get("kind", "")):
 			"send":
 				var text := PhiMasterMagic.substitute(str(step.get("text", "")), int_value, string_value)
+				# list="no" の send (cast など) へサーバが返す
+				# リストは、後続の send が詠唱で答えるので
+				# 表示しない (魔法一覧に無いマスター魔法では
+				# 選ぶ事もできず、窓が残ってしまう)。
+				if str(step.get("list", "")) == "no":
+					tab.suppress_next_list()
 				tab.mark_list_answered()
 				tab.send_text(text)
 			"ok_dialog":

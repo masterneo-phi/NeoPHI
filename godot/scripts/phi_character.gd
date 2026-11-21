@@ -1075,6 +1075,28 @@ func _build_list_overlay() -> void:
 	buttons.add_child(_list_cancel_button)
 
 
+func _toolbar_icon_for(action_name: String) -> Variant:
+	## コマンドパレットのボタンの絵。設定でアイコンサイズが
+	## 指定されていれば、その大きさに拡大した絵を返す。
+	if _config != null and _config.toolbar_icon_size > 0:
+		return _assets.button_icon_sized(action_name, _config.toolbar_icon_size)
+	return _assets.button_icon(action_name)
+
+
+func refresh_toolbar_icon_size() -> void:
+	## コマンドパレットのアイコンサイズの変更を、全ボタンへ
+	## 反映して並べ直す。
+	for button in _toolbar_buttons:
+		var action_name := str(button.get_meta("action", ""))
+		if action_name.is_empty():
+			continue
+		var icon: Variant = _toolbar_icon_for(action_name)
+		if icon != null:
+			button.icon = icon
+	_layout_toolbar()
+	_fit_toolbar_panel()
+
+
 func _build_toolbar_overlay() -> void:
 	## ツールバー。地図の上に浮くパネルに、Philly のツールバーの
 	## 並びを、種類(区切りのグループ)ごとに1段ずつ並べる。
@@ -1121,7 +1143,7 @@ func _build_toolbar_overlay() -> void:
 			# 大声と、BGM 再生・ログ記録の ON/OFF スイッチは
 			# 押下状態がそのまま設定を表すトグルにする。
 			button.toggle_mode = true
-		var icon: Variant = _assets.button_icon(action_name)
+		var icon: Variant = _toolbar_icon_for(action_name)
 		if icon != null:
 			button.icon = icon
 		else:
@@ -2105,6 +2127,14 @@ func _apply_log_font_size(size: int) -> void:
 			_queue_log_rebuild()
 
 
+func _menu_font_size() -> int:
+	## メニュー等のフォントサイズ。設定の固定値で、地図の倍率
+	## (窓の大きさ) には連動しない (連動は廃止された)。
+	if _config != null:
+		return _config.menu_font_size
+	return 20
+
+
 func refresh_ui_font_size() -> void:
 	## 地図の倍率に比例して、このタブの UI の文字を大きくする。
 	## メニュー・ツールバーなどの全体の大きさはメイン画面が付ける。
@@ -2155,7 +2185,7 @@ func refresh_ui_font_size() -> void:
 	if input_box != null and not _float_mode:
 		input_box.custom_minimum_size = Vector2(0, _font.get_height(size) * 2 + 16)
 	_apply_input_height()
-	var chrome_size := PhiFont.chrome_size_for_zoom(map_view.zoom)
+	var chrome_size := _menu_font_size()
 	for popup in [_tag_popup, _copy_popup]:
 		if popup != null:
 			popup.add_theme_font_size_override("font_size", chrome_size)
@@ -4079,6 +4109,13 @@ func on_shortcut_key(no: int) -> void:
 func set_suppress_lists(count: int) -> void:
 	_suppress_lists = count
 
+
+func suppress_next_list() -> void:
+	## 次に届くリストを1つ表示しない。マスター魔法の
+	## `<send list="no">` のように、答え (詠唱) を後続の
+	## 送信で送る事が決まっているリスト用。
+	_suppress_lists += 1
+
 # -- 大声 --------------------------------------------------------------------
 
 ## 大声の確認ダイアログはメイン画面が持つ。タブは保留中の文を持ち、
@@ -4316,7 +4353,7 @@ func _build_tag_popup() -> void:
 	_add_tag_action(_tag_popup, "すべて選択", "select_all")
 	_tag_popup.add_separator()
 	_add_tag_action(_tag_popup, "履歴をクリア", "clear_history")
-	var chrome_size := PhiFont.chrome_size_for_zoom(map_view.zoom)
+	var chrome_size := _menu_font_size()
 	_tag_popup.add_theme_font_size_override("font_size", chrome_size)
 	_tag_popup.add_theme_font_size_override("font_separator_size", chrome_size)
 
@@ -4334,7 +4371,7 @@ func _add_tag_node(parent: PopupMenu, node: Dictionary) -> void:
 	_tag_next_id += 1
 	sub.id_pressed.connect(_on_tag_popup_pressed.bind(sub))
 	parent.add_child(sub)
-	var chrome_size := PhiFont.chrome_size_for_zoom(map_view.zoom)
+	var chrome_size := _menu_font_size()
 	sub.add_theme_font_size_override("font_size", chrome_size)
 	sub.add_theme_font_size_override("font_separator_size", chrome_size)
 	parent.add_submenu_item(caption, sub.name)
@@ -4408,7 +4445,7 @@ func _show_copy_popup() -> void:
 		_copy_popup.add_item("発言する", 6)
 		_copy_popup.id_pressed.connect(_on_copy_popup_pressed)
 		add_child(_copy_popup)
-		var chrome_size := PhiFont.chrome_size_for_zoom(map_view.zoom)
+		var chrome_size := _menu_font_size()
 		_copy_popup.add_theme_font_size_override("font_size", chrome_size)
 		_copy_popup.add_theme_font_size_override("font_separator_size", chrome_size)
 	var pos := Vector2i(get_global_mouse_position())
@@ -4692,7 +4729,7 @@ func _update_map_hover() -> void:
 	else:
 		map_view.set_guide_cell(Vector2i(-1, -1))
 	if _config.search_hint_name:
-		map_view.show_hover_hint(map_view.chara_name_at(local), local, PhiFont.chrome_size_for_zoom(map_view.zoom))
+		map_view.show_hover_hint(map_view.chara_name_at(local), local, _menu_font_size())
 	else:
 		map_view.show_hover_hint("", local, 0)
 
