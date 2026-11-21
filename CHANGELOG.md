@@ -546,6 +546,14 @@ PHI（Phantasmal Island）のための新しいクライアント「NeoPHI」と
   test_stage123 を含め 113 本中 112 本合格。
   test_stage42 の1件は本修正前から落ちる環境依存の
   既存失敗）
+- コマンドアイコンを補完（バージョン 0.5.19）。コマンド
+  パレットとメニューで仮アイコン（NoImage）になっていた
+  DM コマンド群 13 件（Level / SetCG / SendMail / ReadMail /
+  DelMail / ServerVersion / ActionSay / FakeAction /
+  WizList / WizEye / ChatMode / Address / MapSizeSetting）の
+  アイコンを新規作成し、全コマンドにアイコンが揃った
+- テスト: 全スイート 113 本中 112 本合格（test_stage42 の
+  1 件は従来からの環境依存の既存失敗）
 
 ---
 
