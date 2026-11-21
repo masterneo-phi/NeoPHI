@@ -124,7 +124,21 @@ func _run() -> void:
 	loaded.load_file("user://stage100_cfg.ini")
 	check_eq(loaded.toolbar_cols, 5, "s100 cols roundtrip")
 	# (8) アイコンサイズの設定がボタンへ反映され、ini に残る。
-	# メニューフォントサイズも ini に残る。
+	# メニューフォントサイズも ini に残る。アイコンはボタンの
+	# 大きさに伸縮するので、絵だけでなくボタンの最小サイズと
+	# パネルも大きくならなければならない (0.5.20 の実機報告)。
+	# (7) で列数を変えただけの状態ではレイアウトと設定が
+	# ずれていて大きさの比較ができないので、一度そろえる。
+	config.toolbar_cols = 0
+	_tab._layout_toolbar()
+	_tab._fit_toolbar_panel()
+	var panel_before := panel.size
+	var btn_before := 0.0
+	for b in _tab.get("_toolbar_buttons"):
+		var btn0 := b as Button
+		if btn0.icon != null:
+			btn_before = btn0.get_combined_minimum_size().x
+			break
 	config.toolbar_icon_size = 48
 	_tab.refresh_toolbar_icon_size()
 	var icon_checked := false
@@ -132,11 +146,18 @@ func _run() -> void:
 		var btn := b as Button
 		if btn.icon != null:
 			check_eq(btn.icon.get_width(), 48, "s100 icon size 48")
+			check(btn.get_combined_minimum_size().x >= 48.0, "s100 button grows with icon")
 			icon_checked = true
 			break
 	check(icon_checked, "s100 icon button exists")
+	check(panel.size.x > panel_before.x, "s100 panel grows with icon")
 	config.toolbar_icon_size = 0
 	_tab.refresh_toolbar_icon_size()
+	for b in _tab.get("_toolbar_buttons"):
+		var btn := b as Button
+		if btn.icon != null:
+			check_eq(btn.get_combined_minimum_size().x, btn_before, "s100 button size restored")
+			break
 	config.menu_font_size = 30
 	config.toolbar_icon_size = 40
 	config.save_file("user://stage100_cfg.ini")

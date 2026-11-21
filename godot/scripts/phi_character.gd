@@ -1085,7 +1085,14 @@ func _toolbar_icon_for(action_name: String) -> Variant:
 
 func refresh_toolbar_icon_size() -> void:
 	## コマンドパレットのアイコンサイズの変更を、全ボタンへ
-	## 反映して並べ直す。
+	## 反映して並べ直す。アイコンはボタンの大きさに合わせて
+	## 伸縮する (expand_icon) ので、絵の差し替えだけでは
+	## パレットは大きくならず、ボタンの最小サイズも一緒に
+	## 付け替える。refresh_ui_font_size は倍率由来の大きさが
+	## 同じだと早期に戻るため、ここで直接付ける。
+	var ui_size := _applied_size
+	if map_view != null:
+		ui_size = PhiFont.ui_size_for_zoom(map_view.zoom)
 	for button in _toolbar_buttons:
 		var action_name := str(button.get_meta("action", ""))
 		if action_name.is_empty():
@@ -1093,8 +1100,28 @@ func refresh_toolbar_icon_size() -> void:
 		var icon: Variant = _toolbar_icon_for(action_name)
 		if icon != null:
 			button.icon = icon
+		button.custom_minimum_size = _toolbar_button_min_size(button, ui_size)
 	_layout_toolbar()
 	_fit_toolbar_panel()
+
+
+func _toolbar_button_min_size(button: Button, ui_size: int) -> Vector2:
+	## ツールバーのボタンの最小サイズ。アイコンサイズの設定が
+	## あれば、アイコンがその大きさで描かれるよう、ボタンの
+	## 側を地の余白ぶん大きく取る。設定が無ければ従来どおり
+	## UI 文字サイズ基準 (アイコン付きは正方形で +20)。
+	if button.icon != null and _config != null and _config.toolbar_icon_size > 0:
+		var px := float(_config.toolbar_icon_size)
+		var box := button.get_theme_stylebox("normal")
+		var mx := 0.0
+		var my := 0.0
+		if box != null:
+			mx = box.get_margin(SIDE_LEFT) + box.get_margin(SIDE_RIGHT)
+			my = box.get_margin(SIDE_TOP) + box.get_margin(SIDE_BOTTOM)
+		return Vector2(px + mx, px + my)
+	if button.icon != null:
+		return Vector2(ui_size + 20, ui_size + 20)
+	return Vector2(0, ui_size + 12)
 
 
 func _build_toolbar_overlay() -> void:
@@ -2174,10 +2201,7 @@ func refresh_ui_font_size() -> void:
 		_toolbar_title.add_theme_font_size_override("font_size", size)
 	for button in _toolbar_buttons:
 		button.add_theme_font_size_override("font_size", size)
-		var min_size := Vector2(0, size + 12)
-		if button.icon != null:
-			min_size = Vector2(size + 20, size + 20)
-		button.custom_minimum_size = min_size
+		button.custom_minimum_size = _toolbar_button_min_size(button, size)
 	_fit_toolbar_panel()
 	# 入力欄の最小の高さは今の文字で2行ぶん。高さ自体は
 	# 保持した値(無ければ3行ぶん)に合わせる。フロート表示の
