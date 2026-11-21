@@ -72,6 +72,12 @@ var port := DEFAULT_PORT
 var skin := DEFAULT_SKIN
 var map_size := DEFAULT_MAP_SIZE
 var map_style := DEFAULT_MAP_STYLE
+## 地図の倍率の決め方。0 = 窓に合わせる (収まる整数倍率)、
+## 1 = 固定倍率 (map_zoom_fixed の倍率に固定し、窓が小さくても
+## 縮めない・大きくても広げない)。
+var map_zoom_mode := 0
+## 固定倍率モードの倍率 (1〜8 の整数倍。ドット絵が崩れない範囲)。
+var map_zoom_fixed := 3
 ## サーバーからの魔法表示を受け取るか(Philly DispMagicClientSide)。
 var disp_magic := true
 ## 移動時に地図をドット単位で滑らかにスクロールするか
@@ -191,6 +197,8 @@ func reset() -> void:
 	skin = DEFAULT_SKIN
 	map_size = DEFAULT_MAP_SIZE
 	map_style = DEFAULT_MAP_STYLE
+	map_zoom_mode = 0
+	map_zoom_fixed = 3
 	disp_magic = true
 	smooth_scroll = true
 	search_hint_name = true
@@ -254,6 +262,8 @@ func load_file(path: String = DEFAULT_PATH) -> bool:
 	map_size = ms if ms == 40 or ms == 57 or ms == 121 else DEFAULT_MAP_SIZE
 	var mst := str(cfg.get_value("Map", "MapStyle", DEFAULT_MAP_STYLE)).strip_edges().to_lower()
 	map_style = mst if mst == "solid" or mst == "turn" else DEFAULT_MAP_STYLE
+	map_zoom_mode = 1 if int(cfg.get_value("Map", "ZoomMode", 0)) == 1 else 0
+	map_zoom_fixed = clampi(int(cfg.get_value("Map", "ZoomFixed", 3)), 1, 8)
 	disp_magic = bool(cfg.get_value("Map", "DispMagicClientSide", true))
 	search_hint_name = bool(cfg.get_value("Map", "SearchHintName", true))
 	mouse_move_line = bool(cfg.get_value("Map", "MouseMoveLine", false))
@@ -349,6 +359,8 @@ func save_file(path: String = DEFAULT_PATH) -> bool:
 	cfg.set_value("Skin", "SkinName", skin)
 	cfg.set_value("Map", "MapSize", map_size)
 	cfg.set_value("Map", "MapStyle", map_style)
+	cfg.set_value("Map", "ZoomMode", map_zoom_mode)
+	cfg.set_value("Map", "ZoomFixed", map_zoom_fixed)
 	cfg.set_value("Map", "DispMagicClientSide", disp_magic)
 	cfg.set_value("Map", "SearchHintName", search_hint_name)
 	cfg.set_value("Map", "MouseMoveLine", mouse_move_line)

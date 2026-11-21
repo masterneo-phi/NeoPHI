@@ -12,6 +12,36 @@ extends RefCounted
 const WORK_STATUSES := [0x30, 0x31, 0x32, 0x34, 0x41, 0x42, 0x46, 0x61, 0x62, 0x63, 0x65, 0x67, 0x68, 0x75, 0x76, 0x92]
 
 
+## DM 演出拡張 (FX): 地図フレームの C 行末尾に付く cn マスク
+## (サーバの cn[] 添字 0〜23 の 24 ビット) の割り当て。
+## 状態異常 7 種 (毒・麻痺・パニック・混乱・バーサーク・沈黙・盲目)。
+const CN_AILMENTS := [11, 12, 13, 14, 15, 16, 17]
+## バフ系 (オーラの点灯条件にも使う)。
+const CN_BUFFS := [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 18, 22, 23]
+## fx_icons.bmp のオーラ用セル番号 (cn の範囲外)。
+const FX_AURA_CELL := 24
+
+
+static func fx_icons_for(cn: int) -> Array:
+	## マスクから表示するアイコンの cn 添字列 (異常を先、バフを後)。
+	var out: Array = []
+	for idx in CN_AILMENTS:
+		if cn & (1 << idx):
+			out.append(idx)
+	for idx in CN_BUFFS:
+		if cn & (1 << idx):
+			out.append(idx)
+	return out
+
+
+static func fx_has_buff(cn: int) -> bool:
+	## 表示対象のバフが 1 つでも有効か (共通オーラの点灯条件)。
+	for idx in CN_BUFFS:
+		if cn & (1 << idx):
+			return true
+	return false
+
+
 static func under_icon(status: int) -> Variant:
 	## キャラの下に描くアイコン。無ければ null。
 	## 0x20=詠唱準備、0x21=詠唱中、0x22=詠唱完了。

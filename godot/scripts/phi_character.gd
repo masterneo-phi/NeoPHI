@@ -141,6 +141,9 @@ var _image_refs: Array[Dictionary] = []
 ## 全タブで共有する (同じバナーをタブごとに取りに行かない)。
 static var _img_textures := {}
 static var _img_failed := {}
+## DM 演出拡張 (FX) のサーバ画像: 組み立て中の転送と、表示待ち。
+var _fx_img_asm := {}
+var _fx_img_wait := {}
 ## このタブが取得中の画像 (URL → HTTPRequest) と待ち行列。
 var _img_requests := {}
 var _img_queue: Array[String] = []
@@ -808,6 +811,7 @@ func _build_ui() -> void:
 	map_view = MapView.new()
 	map_view.set_session_live(false)  # 接続するまでアニメーションしない
 	apply_smooth_scroll()
+	apply_map_zoom()
 	apply_magic_effect()
 	map_view.label_font = _font
 	map_view.bold_font = _bold_font
@@ -2169,6 +2173,14 @@ func apply_smooth_scroll() -> void:
 		map_view.smooth_scroll = _config.smooth_scroll
 
 
+func apply_map_zoom() -> void:
+	## マップサイズ設定 (窓に合わせる / 固定倍率) の反映。
+	if map_view != null and _config != null:
+		map_view.zoom_mode = _config.map_zoom_mode
+		map_view.zoom_fixed = _config.map_zoom_fixed
+		map_view.request_zoom_growth()
+
+
 func apply_magic_effect() -> void:
 	## 魔法弾を飛ばすかは「魔法表示」の設定に連動する
 	## (ユーザーの指定)。ON で魔法弾、OFF では発動オーラだけ。
@@ -2598,6 +2610,8 @@ func _on_event(event: Dictionary) -> void:
 				status_panel.set_conditions_all(event)
 		"dispMagic":
 			map_view.spawn_disp_magic(event["data"])
+		"fx":
+			_handle_fx(event)
 		"bgm":
 			# BGM 通知(第5段)。同じ曲名なら何もしない(Philly と
 			# 同じく再生し直さない)。鳴らす判断はメイン画面。
@@ -2862,6 +2876,94 @@ func _append_log_image(url: String, want_w: int = 0, want_h: int = 0) -> void:
 	if disp.y > 320.0:
 		disp *= 320.0 / disp.y
 	log_view.add_image(tex, maxi(1, int(disp.x)), maxi(1, int(disp.y)))
+
+
+# -- DM 演出拡張 (FX) -------------------------------------------------
+
+func _handle_fx(ev: Dictionary) -> void:
+	## FX イベントの振り分け。文字・暗転・ワイプ・振動・発光は
+	## MapView の演出状態へ、画像系はここで捌く。
+	match str(ev.get("kind", "")):
+		"img":
+			_fx_request_image(ev)
+		"imgdata":
+			_fx_img_asm = {"name": str(ev.get("name", "")),
+				"total": int(ev.get("total", 0)),
+				"hash": str(ev.get("hash", "")), "chunks": {}}
+		"imgchunk":
+			if not _fx_img_asm.is_empty() \
+					and str(_fx_img_asm.get("name", "")) == str(ev.get("name", "")):
+				(_fx_img_asm["chunks"] as Dictionary)[int(ev.get("seq", 0))] \
+					= Marshalls.base64_to_raw(str(ev.get("data", "")))
+		"imgend":
+			_fx_finish_image(str(ev.get("name", "")))
+		_:
+			map_view.apply_fx(ev)
+
+
+func _fx_request_image(ev: Dictionary) -> void:
+	## 画像表示の指示。(name, hash) がキャッシュにあれば即表示、
+	## 無ければサーバへ要求し、届いた時点で表示する (dur は
+	## 表示開始から数える)。
+	var img_name := str(ev.get("name", ""))
+	var hash_str := str(ev.get("hash", ""))
+	if img_name.is_empty() or hash_str.is_empty():
+		return
+	var path := PhiFx.cache_path(img_name, hash_str)
+	if FileAccess.file_exists(path):
+		var bytes := FileAccess.get_file_as_bytes(path)
+		if PhiFx.hash_hex(bytes) == hash_str:
+			_fx_show_image(str(ev.get("where", "M")), img_name, bytes,
+				int(ev.get("dur", 0)))
+			return
+	if not _fx_img_wait.has(img_name):
+		_fx_img_wait[img_name] = {"where": str(ev.get("where", "M")),
+			"dur": int(ev.get("dur", 0))}
+		send_line("#ex-fx get " + img_name)
+
+
+func _fx_finish_image(img_name: String) -> void:
+	## 転送の完了。並べ直してハッシュを確かめ、キャッシュへ
+	## 保存してから表示待ちがあれば出す。
+	if _fx_img_asm.is_empty() or str(_fx_img_asm.get("name", "")) != img_name:
+		return
+	var chunks: Dictionary = _fx_img_asm["chunks"]
+	var bytes := PackedByteArray()
+	var seqs := chunks.keys()
+	seqs.sort()
+	for s in seqs:
+		bytes.append_array(chunks[s])
+	var total := int(_fx_img_asm.get("total", 0))
+	var hash_str := str(_fx_img_asm.get("hash", ""))
+	_fx_img_asm = {}
+	if bytes.size() != total or PhiFx.hash_hex(bytes) != hash_str:
+		_fx_img_wait.erase(img_name)
+		return
+	DirAccess.make_dir_recursive_absolute("user://fx_cache")
+	var f := FileAccess.open(PhiFx.cache_path(img_name, hash_str), FileAccess.WRITE)
+	if f != null:
+		f.store_buffer(bytes)
+		f.close()
+	if _fx_img_wait.has(img_name):
+		var wait: Dictionary = _fx_img_wait[img_name]
+		_fx_img_wait.erase(img_name)
+		_fx_show_image(str(wait.get("where", "M")), img_name, bytes,
+			int(wait.get("dur", 0)))
+
+
+func _fx_show_image(where: String, img_name: String, bytes: PackedByteArray, dur: int) -> void:
+	## BMP を復号して出す。透過はキャラグラと同じティール
+	## カラーキー。L はログ欄 (行内の画像表示の仕組みに流す)。
+	var img := BmpLoader.decode_bmp(bytes)
+	if img == null:
+		return
+	img = BmpLoader.colorkey(img)
+	var tex := ImageTexture.create_from_image(img)
+	if where == "L":
+		store_image_texture("fximg:" + img_name, tex)
+		_append_log_image("fximg:" + img_name)
+	else:
+		map_view.show_fx_image(tex, dur)
 
 
 static func store_image_texture(url: String, tex: Texture2D) -> void:

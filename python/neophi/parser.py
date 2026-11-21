@@ -317,6 +317,7 @@ class Chara:
     gigant: str = "#"
     layer: int = 0
     default: int = 0
+    cn: int = 0
     magnify: Magnify | None = None
 
     def to_json(self) -> dict:
@@ -331,6 +332,7 @@ class Chara:
             "gigant": self.gigant,
             "layer": self.layer,
             "default": self.default,
+            "cn": self.cn,
         }
         if self.magnify is not None:
             out["magnify"] = self.magnify.to_json()
@@ -853,6 +855,13 @@ class Parser:
         default = _hex_u32(raw[72:74])
         if char_id is None or status is None or default is None:
             return
+        # DM 演出拡張: 種別の後ろに空白 + cn マスク (6桁16進) が付く
+        # ことがある。無いサーバでは 0。
+        cn = 0
+        if len(raw) >= 81 and raw[74] == 0x20:
+            mask = raw[75:81]
+            if all(chr(b) in "0123456789abcdefABCDEF" for b in mask):
+                cn = int(mask.decode("ascii"), 16)
         name = decode(raw[19:50]).rstrip()
         gra = decode(raw[54:69]).rstrip()
         if self._chara_clear_pending:
@@ -867,7 +876,7 @@ class Parser:
             Chara(
                 id=char_id, x=int(x_ch), y=int(y_ch), dir=chr(raw[17]),
                 name=name, gra=gra, status=status, gigant=chr(raw[70]),
-                layer=layer, default=default, magnify=magnify,
+                layer=layer, default=default, magnify=magnify, cn=cn,
             )
         )
 

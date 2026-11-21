@@ -135,6 +135,7 @@ static func login_lines(p_char_id: Variant, p_map_size: int = 121, p_map_style: 
 		"#ex-switch ex-list-mode-end=true",
 		"#ex-switch ex-disp-magic=" + ("true" if p_disp_magic else "false"),
 		"#ex-switch ex-abspos=true",
+		"#ex-switch fx=1",
 	])
 	return lines
 
@@ -150,6 +151,7 @@ static func post_register_lines(p_map_size: int = 121, p_map_style: String = "so
 		"#ex-switch ex-list-mode-end=true",
 		"#ex-switch ex-disp-magic=" + ("true" if p_disp_magic else "false"),
 		"#ex-switch ex-abspos=true",
+		"#ex-switch fx=1",
 	]
 
 

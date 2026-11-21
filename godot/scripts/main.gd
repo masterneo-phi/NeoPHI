@@ -93,6 +93,8 @@ var _ask_dialog: ConfirmationDialog = null
 var _ask_title: Label = null
 var _ask_label: Label = null
 var _ask_edit: LineEdit = null
+var _ask_label2: Label = null
+var _ask_edit2: LineEdit = null
 var _ask_action := ""
 var _ask_numeric := false
 var _about_dialog: Window = null
@@ -152,6 +154,9 @@ var _sayall_edit: LineEdit = null
 var _talk_add_dialog: ConfirmationDialog = null
 var _talk_add_edit: LineEdit = null
 var _talk_add_tab: PhiCharacter = null
+var _map_size_dialog: ConfirmationDialog = null
+var _map_size_mode: OptionButton = null
+var _map_size_spin: SpinBox = null
 var _alt_confirm_dialog: ConfirmationDialog = null
 var _alt_confirm_label: Label = null
 var _pending_alt_action := ""
@@ -1925,6 +1930,9 @@ func _on_tab_users_changed(tab: PhiCharacter) -> void:
 func _on_tab_priv_received(plain: String, tab: PhiCharacter) -> void:
 	## priv を受けたら、アクティブなタブの時だけ窓に反映する。
 	## バックグラウンドのタブは未読マークだけ(タブ側で付ける)。
+	## アプリの窓が前面でない時は、タスクバー (Dock) の点滅で知らせる。
+	if not get_window().has_focus():
+		DisplayServer.window_request_attention()
 	if tab != _active_tab():
 		return
 	if _priv_window != null and _priv_window.visible:
@@ -1956,6 +1964,10 @@ func _do_action(action_name: String) -> void:
 			_remember_map_mode(action_name, tab)
 		"ask":
 			_ask_text(action_name)
+		"ask2":
+			_ask_text(action_name)
+		"map-size-dialog":
+			_show_map_size_dialog()
 		"priv-window":
 			_toggle_priv_window()
 		"loud-toggle":
@@ -2207,9 +2219,14 @@ func _ask_text(action_name: String) -> void:
 		box.add_child(_ask_label)
 		_ask_edit = LineEdit.new()
 		box.add_child(_ask_edit)
+		_ask_label2 = Label.new()
+		box.add_child(_ask_label2)
+		_ask_edit2 = LineEdit.new()
+		box.add_child(_ask_edit2)
 		_ask_dialog.add_child(box)
 		_ask_dialog.confirmed.connect(_on_ask_confirmed)
 		_ask_edit.text_submitted.connect(_on_ask_submitted)
+		_ask_edit2.text_submitted.connect(_on_ask2_submitted)
 		_ask_edit.text_changed.connect(_on_ask_text_changed)
 		_draggable_title(box, _ask_dialog)
 		add_child(_ask_dialog)
@@ -2218,11 +2235,26 @@ func _ask_text(action_name: String) -> void:
 	_ask_title.text = str(action["title"])
 	_ask_label.text = str(action["label"])
 	_ask_edit.text = ""
-	_ask_dialog.popup_centered(Vector2i(320, 120))
+	var is_ask2 := PhiActions.kind_of(action_name) == "ask2"
+	_ask_label2.visible = is_ask2
+	_ask_edit2.visible = is_ask2
+	if is_ask2:
+		_ask_label2.text = str(action.get("label2", ""))
+		_ask_edit2.text = ""
+	_ask_dialog.popup_centered(Vector2i(320, 170) if is_ask2 else Vector2i(320, 120))
 	_ask_edit.grab_focus()
 
 
 func _on_ask_submitted(_text: String) -> void:
+	# 2欄ダイアログでは、1欄目の Enter は2欄目へ移るだけにする。
+	if PhiActions.kind_of(_ask_action) == "ask2":
+		_ask_edit2.grab_focus()
+		return
+	_ask_dialog.hide()
+	_on_ask_confirmed()
+
+
+func _on_ask2_submitted(_text: String) -> void:
 	_ask_dialog.hide()
 	_on_ask_confirmed()
 
@@ -2245,6 +2277,14 @@ func _convert_edit_digits(edit: LineEdit) -> void:
 func _on_ask_confirmed() -> void:
 	var answer := _ask_edit.text.strip_edges()
 	if answer.is_empty():
+		return
+	if PhiActions.kind_of(_ask_action) == "ask2":
+		var answer2 := _ask_edit2.text.strip_edges()
+		if answer2.is_empty():
+			return
+		var tab2 := _active_tab()
+		if tab2 != null:
+			tab2.send_text(PhiActions.build_ask2_text(_ask_action, answer, answer2))
 		return
 	var action := PhiActions.get_action(_ask_action)
 	if bool(action.get("integer", false)):
@@ -3243,6 +3283,53 @@ func _on_talk_add_confirmed() -> void:
 	## 末尾の空白も言葉の一部としてありうるので、切り詰めない。
 	if _talk_add_tab != null and is_instance_valid(_talk_add_tab):
 		_talk_add_tab.set_talk_add(_talk_add_edit.text)
+
+
+# -- マップサイズ設定 -----------------------------------------------------------
+## 地図の倍率の決め方。窓に合わせる (収まる整数倍率に自動調整) か、
+## 固定倍率 (窓が小さくても縮めない・大きくても広げない) かを選ぶ。
+## 固定倍率は整数倍のみ (ドット絵が崩れないため)。
+
+func _show_map_size_dialog() -> void:
+	if _map_size_dialog == null:
+		_map_size_dialog = ConfirmationDialog.new()
+		_map_size_dialog.theme = _dialog_theme()
+		_map_size_dialog.transparent = true
+		_map_size_dialog.title = ""
+		_map_size_dialog.ok_button_text = "設定"
+		_map_size_dialog.cancel_button_text = "やめる"
+		var box := VBoxContainer.new()
+		_map_size_dialog.add_child(box)
+		box.add_child(_dlg_title("マップサイズ設定"))
+		var mode_label := Label.new()
+		mode_label.text = "地図の大きさの決め方"
+		box.add_child(mode_label)
+		_map_size_mode = OptionButton.new()
+		_map_size_mode.add_item("窓に合わせる", 0)
+		_map_size_mode.add_item("固定倍率", 1)
+		box.add_child(_map_size_mode)
+		var spin_label := Label.new()
+		spin_label.text = "固定倍率 (1〜8 の整数倍)"
+		box.add_child(spin_label)
+		_map_size_spin = SpinBox.new()
+		_map_size_spin.min_value = 1
+		_map_size_spin.max_value = 8
+		_map_size_spin.step = 1
+		box.add_child(_map_size_spin)
+		_map_size_dialog.confirmed.connect(_on_map_size_confirmed)
+		_draggable_title(box, _map_size_dialog)
+		add_child(_map_size_dialog)
+	_map_size_mode.selected = _config.map_zoom_mode
+	_map_size_spin.value = _config.map_zoom_fixed
+	_map_size_dialog.popup_centered(Vector2i(320, 190))
+
+
+func _on_map_size_confirmed() -> void:
+	_config.map_zoom_mode = _map_size_mode.selected
+	_config.map_zoom_fixed = int(_map_size_spin.value)
+	for t in _tabs:
+		t.apply_map_zoom()
+	_save_config()
 
 
 # -- 第4段: 超魔法メニュー ------------------------------------------------------

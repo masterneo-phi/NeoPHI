@@ -7,6 +7,8 @@ extends RefCounted
 ##   "send" … `send` の行(\n 区切り)をそのまま送る。
 ##   "ask" … 入力ダイアログで言葉を聞き、`template` の %s に入れて送る。
 ##     `integer` が true なら 0 以上の整数だけ受け付ける。
+##   "ask2" … 2欄の入力ダイアログで聞き、`template` の %s 2つに
+##     順に入れて送る (sendmail の宛先:内容)。`label` と `label2`。
 ##   "connect" / "disconnect" / "exit" / "reload-config" /
 ##   "force-disconnect" / "connect-all" / "disconnect-all" /
 ##   "force-disconnect-all" … 接続まわり(WPHI のファイルメニュー式)。
@@ -51,6 +53,20 @@ const ACTIONS := {
 	"Talk": {"caption": "話しかける [Alt+H]", "hint": "近くの NPC に『hi』と話しかける [Alt+H]", "kind": "send", "send": "hi"},
 	"Check": {"caption": "ステータスを見る [M,0]", "hint": "ステータスを見る [M、0]", "kind": "send", "send": "check\nlook"},
 	"Skills": {"caption": "スキルを見る", "hint": "スキルを見る", "kind": "send", "send": "skills"},
+	"Level": {"caption": "レベルを見る", "hint": "次のレベルまでの経験値を表示する", "kind": "send", "send": "level"},
+	# DM コマンド (次回バッチ)。サーバにあるが未搭載だったもの。
+	"SetCG": {"caption": "キャラグラ設定", "hint": "自分のキャラグラフィックを設定する (要レベル)", "kind": "ask", "template": "setcg %s", "title": "キャラグラ設定", "label": "キャラグラのファイル名を入力してください"},
+	"SendMail": {"caption": "メールを送る", "hint": "メールを送る (内容に空白は使えません)", "kind": "ask2", "template": "sendmail %s:%s", "title": "メール送信", "label": "宛先を入力してください", "label2": "内容を入力してください (空白は使えません)"},
+	"ReadMail": {"caption": "メールを読む", "hint": "届いているメールを読む", "kind": "send", "send": "readmail"},
+	"DelMail": {"caption": "メールを全て消す", "hint": "届いているメールをすべて削除する", "kind": "send", "send": "delmail"},
+	"ServerVersion": {"caption": "サーバーバージョン", "hint": "サーバーのバージョンを表示する", "kind": "send", "send": "version"},
+	"ActionSay": {"caption": "action 発言", "hint": "『名前 is 〜』の形式で発言する", "kind": "ask", "template": "action %s", "title": "action 発言", "label": "発言内容を入力してください"},
+	"FakeAction": {"caption": "fakeaction 発言", "hint": "DMメッセージとして発言する", "kind": "ask", "template": "fakeaction %s", "title": "fakeaction 発言", "label": "発言内容を入力してください"},
+	"WizList": {"caption": "wizlist", "hint": "世界にいる人を一覧する (MPを消費しない)", "kind": "send", "send": "wizlist"},
+	"WizEye": {"caption": "wizeye", "hint": "世界にいる人を一覧する (MPを消費しない)", "kind": "send", "send": "wizeye"},
+	"ChatMode": {"caption": "チャットモード", "hint": "チャットモードの ON/OFF を切り替える", "kind": "send", "send": "chat"},
+	"Address": {"caption": "アドレス登録", "hint": "登録アドレスを表示し、続けて新しいアドレスを入力する", "kind": "send", "send": "address"},
+	"MapSizeSetting": {"caption": "マップサイズ設定...", "hint": "地図の倍率を窓に合わせるか、固定倍率にするかを設定する", "kind": "map-size-dialog"},
 	"WizardEye": {"caption": "Wizard eye", "hint": "世界にいる人を一覧する [Alt+W]", "kind": "send", "send": "cast\nwizard eye"},
 	"PartyEye": {"caption": "Party eye", "hint": "パーティーメンバーを一覧する [Alt+P]", "kind": "send", "send": "cast\nparty eye"},
 	"EagleEye": {"caption": "Eagle eye", "hint": "周囲の広い範囲のマップを見る [Alt+E]", "kind": "send", "send": "cast\neagle eye"},
@@ -123,15 +139,15 @@ const ACTIONS := {
 ## メニューバー。"-" は区切り線。
 const MENUS := [
 	{"name": "ファイル", "items": ["Open", "Close", "ForceClose", "OpenAll", "CloseAll", "ForceCloseAll", "-", "ReadConfigFile", "InitializeConfig", "InitializeGraCache", "-", "Exit"]},
-	{"name": "操作", "items": ["NewPrivWindow", "Loud", "TalkAdd", "SayAllTabs"]},
-	{"name": "行動", "items": ["Equip", "Unequip", "-", "Talk", "Read", "Write", "Erase", "Board", "-", "Get", "Put", "Use", "Sort", "FloorItem", "-", "Spells", "Pay", "Hit", "Check", "Skills"]},
-	{"name": "魔法", "items": ["WizardEye", "PartyEye", "EagleEye", "Identify", "Search", "WizardLock", "Unlock", "Detect", "Create", "Analyze", "Forget", "Call", "Return", "-", "WizardLight", "EagleEyeText", "List", "Destroy", "ChargeSpell", "Appear", "Disappear", "-", "Cast", "Cast1", "Cast2", "Cast3", "Cast4", "Cast5", "Cast6", "Cast7"]},
-	{"name": "表示", "items": ["M11x11", "M7x7", "M5x5", "MSolid", "MTurn", "MapAlignCenter", "MapAlignLeft", "MapAlignRight", "-", "UiStyleFloat", "LayoutToAllTabs", "-", "SSMap", "LogScrollStop", "SmoothScroll", "DispMagic", "LogImage", "PlayBGM", "PlaySE", "MasterMagicAlways", "-", "LogAutoSave", "LogSave", "LogSaveDir", "LogDeleteFilter", "ImageWindow"]},
+	{"name": "操作", "items": ["NewPrivWindow", "Loud", "TalkAdd", "SayAllTabs", "-", "SetCG", "ActionSay", "FakeAction", "-", "SendMail", "ReadMail", "DelMail", "-", "ChatMode", "Address", "ServerVersion"]},
+	{"name": "行動", "items": ["Equip", "Unequip", "-", "Talk", "Read", "Write", "Erase", "Board", "-", "Get", "Put", "Use", "Sort", "FloorItem", "-", "Spells", "Pay", "Hit", "Check", "Level", "Skills"]},
+	{"name": "魔法", "items": ["WizardEye", "PartyEye", "EagleEye", "Identify", "Search", "WizardLock", "Unlock", "Detect", "Create", "Analyze", "Forget", "Call", "Return", "-", "WizardLight", "EagleEyeText", "List", "WizList", "WizEye", "Destroy", "ChargeSpell", "Appear", "Disappear", "-", "Cast", "Cast1", "Cast2", "Cast3", "Cast4", "Cast5", "Cast6", "Cast7"]},
+	{"name": "表示", "items": ["M11x11", "M7x7", "M5x5", "MSolid", "MTurn", "MapSizeSetting", "MapAlignCenter", "MapAlignLeft", "MapAlignRight", "-", "UiStyleFloat", "LayoutToAllTabs", "-", "SSMap", "LogScrollStop", "SmoothScroll", "DispMagic", "LogImage", "PlayBGM", "PlaySE", "MasterMagicAlways", "-", "LogAutoSave", "LogSave", "LogSaveDir", "LogDeleteFilter", "ImageWindow"]},
 	{"name": "ツール", "items": ["UnewPanel", "SoundTest", "ChipViewer", "CharaViewer", "ShortcutConfig", "OpenConfigFolder", "CheckUpdate", "VersionInfo"]},
 ]
 
 ## ツールバーに並べるアクション。"-" は区切り。
-const TOOLBAR := ["Open", "Close", "-", "Equip", "Unequip", "Read", "Write", "Erase", "Get", "Put", "Use", "-", "Spells", "Hit", "Check", "NewPrivWindow", "Loud", "-", "Cast", "M11x11", "M7x7", "M5x5", "MSolid", "MTurn", "-", "SSMap", "-", "PlayBGM", "LogAutoSave", "LayoutToAllTabs"]
+const TOOLBAR := ["Open", "Close", "-", "Equip", "Unequip", "Read", "Write", "Erase", "Get", "Put", "Use", "-", "Spells", "Hit", "Check", "NewPrivWindow", "Loud", "-", "Cast", "M11x11", "M7x7", "M5x5", "MSolid", "MTurn", "-", "SSMap", "-", "PlayBGM", "LogAutoSave", "LayoutToAllTabs", "-", "Level", "SetCG", "SendMail", "ReadMail", "DelMail", "ActionSay", "FakeAction"]
 
 
 ## メニュー項目の右端に表示するショートカット（アクセラレータ）。
@@ -261,13 +277,27 @@ static func build_ask_text(action_name: String, answer: String) -> String:
 	return str(get_action(action_name).get("template", "")).replace("%s", answer)
 
 
+static func build_ask2_text(action_name: String, answer1: String, answer2: String) -> String:
+	## "ask2" アクションの2つの入力を入れた送信文。違えば ""。
+	## template の %s は前から順に answer1、answer2 に置き換える。
+	if kind_of(action_name) != "ask2":
+		return ""
+	var text := str(get_action(action_name).get("template", ""))
+	for answer in [answer1, answer2]:
+		var at := text.find("%s")
+		if at < 0:
+			break
+		text = text.left(at) + answer + text.substr(at + 2)
+	return text
+
+
 static func enabled_when(action_name: String, connected: bool) -> bool:
 	## 接続状態に対する有効・無効(Philly のカテゴリに相当)。
 	## 接続は切断時のみ、切断と送信系は接続時のみ、その他は常に有効。
 	match kind_of(action_name):
 		"connect":
 			return not connected
-		"disconnect", "force-disconnect", "send", "ask", "priv-window", "loud-toggle", "say-all-tabs":
+		"disconnect", "force-disconnect", "send", "ask", "ask2", "priv-window", "loud-toggle", "say-all-tabs":
 			return connected
 		_:
 			return true

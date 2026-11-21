@@ -336,7 +336,8 @@
         "status": 64,
         "gigant": "#",
         "layer": 0,
-        "default": 64
+        "default": 64,
+        "cn": 0
        },
        {
         "id": 10,
@@ -348,7 +349,8 @@
         "status": 8,
         "gigant": "*",
         "layer": 1,
-        "default": 18
+        "default": 18,
+        "cn": 0
        },
        {
         "id": 255,
@@ -360,7 +362,8 @@
         "status": 0,
         "gigant": "#",
         "layer": 2,
-        "default": 5
+        "default": 5,
+        "cn": 0
        }
       ]
      }
@@ -586,7 +589,8 @@
         "status": 64,
         "gigant": "#",
         "layer": 0,
-        "default": 64
+        "default": 64,
+        "cn": 0
        },
        {
         "id": 10,
@@ -598,7 +602,8 @@
         "status": 8,
         "gigant": "*",
         "layer": 1,
-        "default": 18
+        "default": 18,
+        "cn": 0
        },
        {
         "id": 255,
@@ -610,7 +615,8 @@
         "status": 0,
         "gigant": "#",
         "layer": 2,
-        "default": 5
+        "default": 5,
+        "cn": 0
        }
       ]
      }
@@ -840,7 +846,8 @@
         "status": 0,
         "gigant": "*",
         "layer": 1,
-        "default": 130
+        "default": 130,
+        "cn": 0
        }
       ]
      }
@@ -1066,7 +1073,8 @@
         "status": 64,
         "gigant": "#",
         "layer": 0,
-        "default": 64
+        "default": 64,
+        "cn": 0
        },
        {
         "id": 42,
@@ -1078,7 +1086,8 @@
         "status": 0,
         "gigant": "*",
         "layer": 1,
-        "default": 130
+        "default": 130,
+        "cn": 0
        }
       ]
      }
@@ -1107,7 +1116,8 @@
         "status": 64,
         "gigant": "#",
         "layer": 0,
-        "default": 64
+        "default": 64,
+        "cn": 0
        },
        {
         "id": 42,
@@ -1119,7 +1129,8 @@
         "status": 0,
         "gigant": "*",
         "layer": 1,
-        "default": 130
+        "default": 130,
+        "cn": 0
        }
       ]
      }
@@ -1622,7 +1633,8 @@
          "w": 64,
          "h": 64,
          "z": 1
-        }
+        },
+        "cn": 0
        }
       ],
       "style": "turn",
@@ -1854,7 +1866,8 @@
          "w": 64,
          "h": 64,
          "z": 1
-        }
+        },
+        "cn": 0
        }
       ],
       "style": "turn"

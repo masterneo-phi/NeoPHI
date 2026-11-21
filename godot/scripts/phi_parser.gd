@@ -492,6 +492,14 @@ func _dispatch_command(text: String, raw: PackedByteArray) -> Array[Dictionary]:
 		if dm != null:
 			return [{"type": "dispMagic", "data": dm}]
 		return []
+	if text.begins_with("#fx "):
+		# DM 演出拡張 (FX)。未知の kind は無視する (前方互換)。
+		# FX 行はログに出さない。
+		var fx_ev: Variant = _parse_fx(text)
+		if fx_ev == null:
+			return []
+		var fx_out: Array[Dictionary] = [fx_ev]
+		return fx_out
 	if text.begins_with("#ch-srv "):
 		var parts := _split_ws(text)
 		if parts.size() >= 3:
@@ -504,6 +512,100 @@ func _dispatch_command(text: String, raw: PackedByteArray) -> Array[Dictionary]:
 	# BGM の解釈はセッションが bgm_event_for_line() で行う(第5段)。
 	# #ex-map size= などの既知の行も、未知の行も無視する
 	return []
+
+
+func _parse_fx(text: String) -> Variant:
+	## `#fx <kind> <args...>` (DM 演出拡張) をイベントにする。
+	## 読めない・未知の kind は null (無視される)。
+	var rest := text.substr(4)
+	var sp := rest.find(" ")
+	var kind := rest if sp < 0 else rest.substr(0, sp)
+	var args := "" if sp < 0 else rest.substr(sp + 1)
+	match kind:
+		"text":
+			var p := _split_ws_max(args, 3)
+			if p.size() < 4:
+				return null
+			var size_v: Variant = _py_int(p[1])
+			var dur_v: Variant = _py_int(p[2])
+			if size_v == null or dur_v == null:
+				return null
+			return {"type": "fx", "kind": "text", "pos": p[0],
+				"size": int(size_v), "dur": int(dur_v), "text": p[3]}
+		"textoff":
+			return {"type": "fx", "kind": "textoff", "pos": args.strip_edges()}
+		"dark":
+			var p := _split_ws(args)
+			if p.size() < 3:
+				return null
+			var lv: Variant = _py_int(p[0])
+			var du: Variant = _py_int(p[1])
+			var mo: Variant = _py_int(p[2])
+			if lv == null or du == null or mo == null:
+				return null
+			return {"type": "fx", "kind": "dark", "level": int(lv),
+				"dur": int(du), "mode": int(mo)}
+		"wipe":
+			var p := _split_ws(args)
+			if p.size() < 2:
+				return null
+			return {"type": "fx", "kind": "wipe", "pattern": p[0], "dir": p[1]}
+		"img":
+			var p := _split_ws(args)
+			if p.size() < 4:
+				return null
+			var du2: Variant = _py_int(p[3])
+			if du2 == null:
+				return null
+			return {"type": "fx", "kind": "img", "where": p[0], "name": p[1],
+				"hash": p[2], "dur": int(du2)}
+		"imgdata":
+			var p := _split_ws(args)
+			if p.size() < 3:
+				return null
+			var tot: Variant = _py_int(p[1])
+			if tot == null:
+				return null
+			return {"type": "fx", "kind": "imgdata", "name": p[0],
+				"total": int(tot), "hash": p[2]}
+		"imgchunk":
+			var p := _split_ws(args)
+			if p.size() < 3:
+				return null
+			var seq: Variant = _py_int(p[1])
+			if seq == null:
+				return null
+			return {"type": "fx", "kind": "imgchunk", "name": p[0],
+				"seq": int(seq), "data": p[2]}
+		"imgend":
+			return {"type": "fx", "kind": "imgend", "name": args.strip_edges()}
+		"shake":
+			var p := _split_ws(args)
+			if p.size() < 2:
+				return null
+			var amp: Variant = _py_int(p[0])
+			var du3: Variant = _py_int(p[1])
+			if amp == null or du3 == null:
+				return null
+			return {"type": "fx", "kind": "shake", "amp": int(amp), "dur": int(du3)}
+		"glow":
+			var du4: Variant = _py_int(args.strip_edges())
+			if du4 == null:
+				return null
+			return {"type": "fx", "kind": "glow", "dur": int(du4)}
+		"clear":
+			return {"type": "fx", "kind": "clear"}
+	return null
+
+
+static func _cn_mask(raw: PackedByteArray) -> Variant:
+	## ちょうど6文字の16進文字列を数値にする。それ以外は null。
+	if raw.size() != 6:
+		return null
+	for b in raw:
+		if not ((0x30 <= b and b <= 0x39) or (0x41 <= b and b <= 0x46) or (0x61 <= b and b <= 0x66)):
+			return null
+	return _hex_u32(raw)
 
 
 static func bgm_event_for_line(text: String) -> Dictionary:
@@ -733,6 +835,13 @@ func _parse_m57_o(raw: PackedByteArray) -> void:
 			break
 	if _map_chars.size() >= _MAX_MAP_CHARS:
 		return
+	# 行末 (種別の後ろの空白の後) の cn マスク (DM 演出拡張)。
+	# 無い行・読めない行では 0。
+	var cn := 0
+	if raw.size() >= 81 and raw[74] == 0x20:
+		var mask_v: Variant = _cn_mask(raw.slice(75, 81))
+		if mask_v != null:
+			cn = int(mask_v)
 	var chara := {
 		"id": char_id,
 		"x": x_ch - 0x30,
@@ -744,6 +853,7 @@ func _parse_m57_o(raw: PackedByteArray) -> void:
 		"gigant": PackedByteArray([raw[70]]).get_string_from_ascii(),
 		"layer": layer,
 		"default": default,
+		"cn": cn,
 	}
 	if magnify != null:
 		chara["magnify"] = magnify
@@ -802,6 +912,12 @@ func _parse_m121_o(raw: PackedByteArray) -> void:
 			break
 	if _map_chars.size() >= _MAX_MAP_CHARS:
 		return
+	# 行末 (種別の後ろの空白の後) の cn マスク (DM 演出拡張)。
+	var cn := 0
+	if raw.size() >= base + 62 and raw[base + 55] == 0x20:
+		var mask_v: Variant = _cn_mask(raw.slice(base + 56, base + 62))
+		if mask_v != null:
+			cn = int(mask_v)
 	var chara := {
 		"id": char_id,
 		"x": x,
@@ -813,6 +929,7 @@ func _parse_m121_o(raw: PackedByteArray) -> void:
 		"gigant": PackedByteArray([raw[base + 51]]).get_string_from_ascii(),
 		"layer": layer,
 		"default": default,
+		"cn": cn,
 	}
 	if magnify != null:
 		chara["magnify"] = magnify

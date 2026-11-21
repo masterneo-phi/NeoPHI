@@ -349,19 +349,19 @@ func _test_toolbar_structure() -> void:
 	_check(panel_box != null and panel_box.corner_radius_top_left == UiStyle.FLOAT_RADIUS, "layout toolbar panel rounded")
 	var buttons := _tab.get("_toolbar_buttons") as Array
 	# 第93段で BGM 再生・ログ記録のスイッチ2つが増えた。
-	_check_eq(buttons.size(), 25, "layout toolbar button count")
+	_check_eq(buttons.size(), 32, "layout toolbar button count")
 	var rows := panel.get_child(0) as VBoxContainer
 	_check(rows != null, "layout toolbar rows box")
 	if rows == null:
 		return
-	# 一番上は題名「Command Pallet」、その下にボタンの段が6つ
-	# (末尾は第93段のスイッチの段)。
-	_check_eq(rows.get_child_count(), 7, "layout toolbar row count with title")
+	# 一番上は題名「Command Pallet」、その下にボタンの段が7つ
+	# (末尾は第121段の DM コマンドの段)。
+	_check_eq(rows.get_child_count(), 8, "layout toolbar row count with title")
 	var title := rows.get_child(0) as Label
 	_check(title != null and title.text == "Command Pallet", "layout toolbar title text")
 	_check(title != null and title.get_theme_font_size("font_size") == PhiFont.ui_size_for_zoom(_tab.map_view.zoom), "layout toolbar title font size")
-	var want := [2, 8, 5, 6, 1, 3]
-	for i in 6:
+	var want := [2, 8, 5, 6, 1, 3, 7]
+	for i in 7:
 		_check_eq(rows.get_child(i + 1).get_child_count(), want[i], "layout toolbar row " + str(i) + " size")
 	# 大声ボタンはトグル。ボタンは UI 文字サイズに追従する。
 	var size := PhiFont.ui_size_for_zoom(_tab.map_view.zoom)

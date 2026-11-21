@@ -23,7 +23,7 @@ func check(cond: bool, label: String) -> void:
 
 
 const DISPATCH_KINDS := [
-	"send", "ask", "connect", "disconnect", "force-disconnect",
+	"send", "ask", "ask2", "map-size-dialog", "connect", "disconnect", "force-disconnect",
 	"connect-all", "disconnect-all", "force-disconnect-all",
 	"reload-config", "reset-config", "clear-cache", "exit",
 	"priv-window", "loud-toggle", "talk-add", "shortcut-config",

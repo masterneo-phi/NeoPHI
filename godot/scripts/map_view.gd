@@ -184,6 +184,12 @@ const Q_TABLE := [
 signal zoom_changed(new_zoom: int)
 
 var zoom := 4
+## 倍率の決め方 (設定の [Map] ZoomMode)。0 = 窓に合わせる
+## (収まる整数倍率に自動調整)、1 = 固定倍率 (zoom_fixed に固定し、
+## 窓が小さくても縮小しない・大きくても拡大しない)。
+var zoom_mode := 0
+## 固定倍率モードの倍率 (1〜8)。
+var zoom_fixed := 3
 ## 地図の横配置 (第101段)。0=中央、1=左寄せ、2=右寄せ。
 ## 縦は常時中央。描画と当たり判定で同じ係数を使う。
 var map_align := 0
@@ -356,6 +362,18 @@ var _disp_magics: Array = []
 var _recent_disp_hits: Array = []
 var _shake_active := false
 var _shake_started := 0.0
+
+# -- DM 演出拡張 (FX) の状態。地図フレームの差し替えでは消えない
+# よう、_event ではなく MapView 自身が持つ (ワイプ帰還の演出のため)。
+var _fx_icons_tex: Texture2D = null
+var _fx_texts := {}
+var _fx_dark := {}
+var _fx_wipe := {}
+var _fx_glow := {}
+var _fx_img := {}
+var _fx_shake_until := 0.0
+var _fx_shake_amp := 0.0
+var _glow_tex: Texture2D = null
 
 ## 地図がまだ届いていない間に地図欄へ出すタイトルロゴ。
 const LOGO_PATH := "res://assets/logo.png"
@@ -532,6 +550,17 @@ func _update_zoom() -> void:
 	var avail := size
 	if avail.x < 1.0 or avail.y < 1.0:
 		return
+	if zoom_mode == 1:
+		# 固定倍率: 窓の大きさに合わせず、指定の整数倍に固定する。
+		# 大きな窓に小さな地図 (中央に寄る)、小さな窓に大きな地図
+		# (はみ出す) のどちらでもこの倍率のまま描く。
+		var fixed := clampi(zoom_fixed, 1, 8)
+		if zoom != fixed:
+			zoom = fixed
+			zoom_changed.emit(zoom)
+			_sync_compass_size()
+			queue_redraw()
+		return
 	var zw := int(avail.x / (dim * CHIP_SIZE))
 	var zh := int(avail.y / (dim * CHIP_SIZE + MAP_TOP))
 	var fit := clampi(mini(zw, zh), 1, 8)
@@ -589,9 +618,11 @@ func set_map(event: Dictionary, p_assets: GameAssets, p_mapset: String, defines:
 	_anim_frame = int(_now() * 2.0) % 2
 	_defines = defines.duplicate()
 	_items_tex = null
+	_fx_icons_tex = null
 	_load_chip_texs()
 	if assets != null:
 		_items_tex = assets.items()
+		_fx_icons_tex = assets.skin_image("fx_icons")
 	var dim := grid_dim(int(event.get("size", 7)))
 	custom_minimum_size = Vector2(dim * CHIP_SIZE, dim * CHIP_SIZE + MAP_TOP)
 	if dim != _last_dim:
@@ -659,10 +690,12 @@ func _any_sheet() -> bool:
 ## 地図が届くまで白いまま残る(2026-11-15 の報告)。
 func reload_cached_textures() -> void:
 	_items_tex = null
+	_fx_icons_tex = null
 	_ghosts.clear()
 	_load_chip_texs()
 	if assets != null:
 		_items_tex = assets.items()
+		_fx_icons_tex = assets.skin_image("fx_icons")
 		for ch_name in _last_charas:
 			var ch: Dictionary = _last_charas[ch_name]
 			assets.chara(str(ch.get("name", "")), str(ch.get("gra", "")), int(ch.get("default", 0)))
@@ -781,8 +814,14 @@ func drawn_map_rect() -> Rect2:
 	var z := float(zoom)
 	var w := dim * CHIP_SIZE * z
 	var h := (dim * CHIP_SIZE + MAP_TOP) * z
-	var ox := floorf(maxf(0.0, (size.x - w) * _align_factor()))
-	var oy := floorf(maxf(0.0, (size.y - h) * 0.5))
+	# 固定倍率で地図が窓より大きい時は、中心 (自キャラ) が
+	# 見えるよう原点を負側にも許す。通常モードでは倍率が
+	# 収まるよう調整されるため従来どおり 0 で止める。
+	var ox := floorf((size.x - w) * _align_factor())
+	var oy := floorf((size.y - h) * 0.5)
+	if zoom_mode != 1:
+		ox = maxf(0.0, ox)
+		oy = maxf(0.0, oy)
 	return Rect2(ox, oy, w, h)
 
 
@@ -1037,8 +1076,15 @@ func _draw() -> void:
 	# 配置は整数ピクセルに丸める。小数位置だと線形補間でチップの
 	# 端が隣の絵と混ざり、セルの境に黒い線が出ることがある。
 	var shake := _shake_offset(z)
-	var ox := floorf(maxf(0.0, (size.x - dim * CHIP_SIZE * z) * _align_factor()) + shake.x)
-	var oy := floorf(maxf(0.0, (size.y - (dim * CHIP_SIZE + MAP_TOP) * z) * 0.5) + shake.y)
+	var raw_ox := (size.x - dim * CHIP_SIZE * z) * _align_factor()
+	var raw_oy := (size.y - (dim * CHIP_SIZE + MAP_TOP) * z) * 0.5
+	if zoom_mode != 1:
+		# 固定倍率の時は原点を負側にも許し、地図を中央に保つ
+		# (drawn_map_rect と一致させる)。
+		raw_ox = maxf(0.0, raw_ox)
+		raw_oy = maxf(0.0, raw_oy)
+	var ox := floorf(raw_ox + shake.x)
+	var oy := floorf(raw_oy + shake.y)
 	# 第64段: 滑らかスクロールのずれ (画面ピクセル)。イーズ
 	# アウトで 0 へ戻す。前の地図は「ずれ - 1マス」の位置に
 	# 描き、はみ出す端の行・列を覆う。自キャラだけは中央に
@@ -1080,8 +1126,10 @@ func _draw() -> void:
 			if scrolling and bool(ch.get("__self", false)):
 				po = -so  # 自キャラは中央に留める
 			_draw_state_icon(ch, pair[1], z, true, po)
+			_draw_fx_aura(ch, pair[1], z, po)
 			_draw_chara(ch, pair[1], z, null, Color.WHITE, po)
 			_draw_state_icon(ch, pair[1], z, false, po)
+			_draw_fx_icons(ch, pair[1], z, po)
 		# 4.5 残像(この行)。ずらさず、この行のキャラの上に重ねます。
 		_draw_ghosts(row, dim, z)
 	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
@@ -1110,6 +1158,9 @@ func _draw() -> void:
 			draw_line(from, to, Color(1, 1, 1, 0.55), 2.0)
 			draw_circle(to, 4.0, Color(1, 1, 1, 0.55))
 	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+	# 8. DM 演出拡張 (FX) のオーバーレイ (暗転→発光→画像→文字→
+	# ワイプの順。ワイプが最前面)。
+	_draw_fx_overlays()
 
 
 func _scroll_mask_rect(ox: float, oy: float, dim: int, z: float) -> Rect2:
@@ -1270,6 +1321,262 @@ func _draw_state_icon(ch: Dictionary, dx: int, z: float, under: bool, po := Vect
 		draw_rect(Rect2(ix + 6.0 * z, iy + 6.0 * z, 20.0 * z, 20.0 * z), Color(1, 1, 1, 0.25), false, maxf(1.0, z))
 
 
+# -- DM 演出拡張 (FX) -------------------------------------------------
+
+func apply_fx(ev: Dictionary) -> void:
+	## パーサからの FX イベントを演出状態へ反映する (画像系は
+	## PhiCharacter が捌くのでここには来ない)。
+	var now := _now()
+	match str(ev.get("kind", "")):
+		"text":
+			var dur := int(ev.get("dur", 0))
+			_fx_texts[str(ev.get("pos", "C"))] = {
+				"text": str(ev.get("text", "")),
+				"size": int(ev.get("size", 100)),
+				"started": now,
+				"until": (now + dur / 1000.0) if dur > 0 else 0.0,
+			}
+		"textoff":
+			var pos := str(ev.get("pos", "all"))
+			if pos == "all":
+				_fx_texts.clear()
+			else:
+				_fx_texts.erase(pos)
+		"dark":
+			var dur := int(ev.get("dur", 0))
+			if int(ev.get("level", 0)) <= 0 and dur == 0:
+				_fx_dark = {}
+			else:
+				_fx_dark = {
+					"level": int(ev.get("level", 0)),
+					"mode": int(ev.get("mode", 0)),
+					"started": now,
+					"until": (now + dur / 1000.0) if dur > 0 else 0.0,
+				}
+		"wipe":
+			_fx_wipe = {
+				"pattern": str(ev.get("pattern", "C")),
+				"dir": str(ev.get("dir", "on")),
+				"started": now,
+			}
+		"shake":
+			_fx_shake_amp = float(int(ev.get("amp", 0)))
+			_fx_shake_until = now + int(ev.get("dur", 0)) / 1000.0
+		"glow":
+			_fx_glow = {"started": now, "dur": int(ev.get("dur", 0)) / 1000.0}
+		"clear":
+			_fx_texts.clear()
+			_fx_dark = {}
+			_fx_img = {}
+	queue_redraw()
+
+
+func show_fx_image(tex: Texture2D, dur_ms: int) -> void:
+	## サーバ画像 (マップ表示) を出す。dur は表示開始から数える。
+	var now := _now()
+	_fx_img = {"tex": tex, "started": now,
+		"until": (now + dur_ms / 1000.0) if dur_ms > 0 else 0.0}
+	queue_redraw()
+
+
+func _fx_any_active() -> bool:
+	return not _fx_texts.is_empty() or not _fx_dark.is_empty() \
+		or not _fx_wipe.is_empty() or not _fx_glow.is_empty() \
+		or not _fx_img.is_empty() or _now() < _fx_shake_until
+
+
+func _fx_prune(now: float) -> void:
+	for pos in _fx_texts.keys():
+		var until := float(_fx_texts[pos].get("until", 0.0))
+		if until > 0.0 and now > until + 0.2:
+			_fx_texts.erase(pos)
+	if not _fx_dark.is_empty():
+		var duntil := float(_fx_dark.get("until", 0.0))
+		if duntil > 0.0 and now > duntil:
+			_fx_dark = {}
+	if not _fx_glow.is_empty():
+		if now - float(_fx_glow.get("started", 0.0)) >= float(_fx_glow.get("dur", 0.0)):
+			_fx_glow = {}
+	if not _fx_img.is_empty():
+		var iuntil := float(_fx_img.get("until", 0.0))
+		if iuntil > 0.0 and now > iuntil:
+			_fx_img = {}
+	if not _fx_wipe.is_empty() and str(_fx_wipe.get("dir", "on")) == "off":
+		if now - float(_fx_wipe.get("started", 0.0)) >= 1.0:
+			_fx_wipe = {}
+
+
+func _draw_fx_overlays() -> void:
+	var now := _now()
+	_fx_prune(now)
+	var full := Rect2(Vector2.ZERO, size)
+	# 暗転 (定常は短くフェードイン、明滅は周期1秒で往復)。
+	if not _fx_dark.is_empty():
+		var lv := float(int(_fx_dark.get("level", 0))) / 100.0
+		var a := lv
+		if int(_fx_dark.get("mode", 0)) == 1:
+			a = lv * (0.5 + 0.5 * sin((now - float(_fx_dark["started"])) * TAU))
+		else:
+			a *= clampf((now - float(_fx_dark["started"])) / 0.25, 0.0, 1.0)
+		draw_rect(full, Color(0, 0, 0, clampf(a, 0.0, 1.0)))
+	# 放射状発光 (ふわりと光って自動でフェードアウト)。
+	if not _fx_glow.is_empty():
+		var dur := maxf(0.01, float(_fx_glow.get("dur", 0.0)))
+		var t := (now - float(_fx_glow.get("started", 0.0))) / dur
+		if t < 1.0:
+			var mrect := drawn_map_rect()
+			var side := maxf(mrect.size.x, mrect.size.y) * 1.5
+			draw_texture_rect(_glow_texture(),
+				Rect2(mrect.get_center() - Vector2(side, side) * 0.5, Vector2(side, side)),
+				false, Color(1, 1, 1, sin(PI * t) * 0.85))
+	# サーバ画像 (マップ中央)。
+	if not _fx_img.is_empty():
+		var tex: Texture2D = _fx_img["tex"]
+		var mrect2 := drawn_map_rect()
+		draw_texture(tex, mrect2.get_center() - Vector2(tex.get_width(), tex.get_height()) * 0.5)
+	# マップ上文字。
+	_draw_fx_texts(now)
+	# ワイプ (最前面)。
+	if not _fx_wipe.is_empty():
+		_draw_fx_wipe(now)
+
+
+func _glow_texture() -> Texture2D:
+	## 放射グラデーション (白〜金系の中心から透明へ)。初回に生成。
+	if _glow_tex != null:
+		return _glow_tex
+	var side := 256
+	var img := Image.create(side, side, false, Image.FORMAT_RGBA8)
+	var center := Vector2(side, side) * 0.5
+	for y in side:
+		for x in side:
+			var d := Vector2(x, y).distance_to(center) / (side * 0.5)
+			var a := clampf(1.0 - d, 0.0, 1.0)
+			img.set_pixel(x, y, Color(1.0, 0.95, 0.8, a * a))
+	_glow_tex = ImageTexture.create_from_image(img)
+	return _glow_tex
+
+
+func _draw_fx_texts(now: float) -> void:
+	## 位置スロットごとの文字 (C/L/R/T/B)。サイズは画面固定で
+	## 基準 32px に対する %。フェードイン/アウトは各 0.2 秒。
+	if _fx_texts.is_empty() or label_font == null:
+		return
+	var mrect := drawn_map_rect()
+	for pos in _fx_texts.keys():
+		var entry: Dictionary = _fx_texts[pos]
+		var started := float(entry.get("started", 0.0))
+		var until := float(entry.get("until", 0.0))
+		var alpha := clampf((now - started) / 0.2, 0.0, 1.0)
+		if until > 0.0:
+			alpha = minf(alpha, clampf((until - now) / 0.2, 0.0, 1.0))
+		if alpha <= 0.0:
+			continue
+		var font_size := maxi(8, int(32.0 * int(entry.get("size", 100)) / 100.0))
+		var text := str(entry.get("text", ""))
+		var ascent := label_font.get_ascent(font_size)
+		var baseline := 0.0
+		var origin_x := mrect.position.x
+		var align := HORIZONTAL_ALIGNMENT_CENTER
+		match pos:
+			"C":
+				baseline = mrect.get_center().y + ascent * 0.5
+			"T":
+				baseline = mrect.position.y + 8.0 + ascent
+			"B":
+				baseline = mrect.end.y - 8.0
+			"L":
+				baseline = mrect.get_center().y + ascent * 0.5
+				origin_x = mrect.position.x + 8.0
+				align = HORIZONTAL_ALIGNMENT_LEFT
+			"R":
+				baseline = mrect.get_center().y + ascent * 0.5
+				align = HORIZONTAL_ALIGNMENT_RIGHT
+			_:
+				baseline = mrect.get_center().y + ascent * 0.5
+		var width := mrect.size.x - (16.0 if pos in ["L", "R"] else 0.0)
+		draw_string(label_font, Vector2(origin_x, baseline), text,
+			align, width, font_size, Color(1, 1, 1, alpha))
+
+
+func _draw_fx_wipe(now: float) -> void:
+	## ワイプ (1 秒固定)。on = 覆う方向、off = 逆再生で開く方向。
+	## on の完了状態は off が来るまで保持する。
+	var p := clampf((now - float(_fx_wipe.get("started", 0.0))) / 1.0, 0.0, 1.0)
+	var c := p if str(_fx_wipe.get("dir", "on")) == "on" else 1.0 - p
+	if c <= 0.0:
+		return
+	var black := Color(0, 0, 0, 1)
+	var center := size * 0.5
+	match str(_fx_wipe.get("pattern", "C")):
+		"L":
+			draw_rect(Rect2(0, 0, size.x * c, size.y), black)
+		"R":
+			draw_rect(Rect2(size.x * (1.0 - c), 0, size.x * c, size.y), black)
+		"O":
+			# 外周から: 中央の四角い穴が閉じていく。
+			var hole := (1.0 - c) * maxf(size.x, size.y) * 1.42
+			var hx := center.x - hole * 0.5
+			var hy := center.y - hole * 0.5
+			draw_rect(Rect2(0, 0, size.x, hy), black)
+			draw_rect(Rect2(0, hy + hole, size.x, size.y - hy - hole), black)
+			draw_rect(Rect2(0, hy, hx, hole), black)
+			draw_rect(Rect2(hx + hole, hy, size.x - hx - hole, hole), black)
+		"S":
+			# 渦巻き: 中心から回りながら広がる扇の掃引で近似する。
+			if c >= 0.999:
+				draw_rect(Rect2(Vector2.ZERO, size), black)
+			else:
+				var radius := center.length()
+				var sweep := c * TAU * 2.0
+				var steps := maxi(4, int(sweep / 0.1))
+				for i in steps:
+					var a0 := sweep * float(i) / float(steps)
+					var a1 := sweep * float(i + 1) / float(steps)
+					var pts := PackedVector2Array([center,
+						center + Vector2(cos(a0), sin(a0)) * radius,
+						center + Vector2(cos(a1), sin(a1)) * radius])
+					draw_colored_polygon(pts, black)
+		_:
+			# "C": 中央から円が広がる。
+			draw_circle(center, center.length() * c, black)
+
+
+func _draw_fx_aura(ch: Dictionary, dx: int, z: float, po := Vector2.ZERO) -> void:
+	## バフの共通オーラ (キャラの下に敷く)。バフが 1 つでも
+	## 有効なら点灯し、パルスする。
+	if _fx_icons_tex == null:
+		return
+	var cn := int(ch.get("cn", 0))
+	if not PhiCharaState.fx_has_buff(cn):
+		return
+	var pulse := 0.5 + 0.25 * sin(_now() * 3.0)
+	var ix := (int(ch.get("x", 0)) * CHIP_SIZE + dx - 4) * z + po.x
+	var iy := (int(ch.get("y", 0)) * CHIP_SIZE + 5 - 4) * z + po.y
+	draw_texture_rect_region(_fx_icons_tex,
+		Rect2(ix, iy, 40.0 * z, 40.0 * z),
+		Rect2(PhiCharaState.FX_AURA_CELL * 32, 0, 32, 32),
+		Color(1, 1, 1, pulse))
+
+
+func _draw_fx_icons(ch: Dictionary, dx: int, z: float, po := Vector2.ZERO) -> void:
+	## 状態異常・バフのアイコン (キャラの頭上に横並び、最大6個)。
+	if _fx_icons_tex == null:
+		return
+	var icons := PhiCharaState.fx_icons_for(int(ch.get("cn", 0)))
+	if icons.is_empty():
+		return
+	var n := mini(icons.size(), 6)
+	var cell_px := 16.0
+	var base_x := int(ch.get("x", 0)) * CHIP_SIZE + dx + CHIP_SIZE * 0.5 - n * cell_px * 0.5
+	var base_y := int(ch.get("y", 0)) * CHIP_SIZE + 5 - 18
+	for i in n:
+		draw_texture_rect_region(_fx_icons_tex,
+			Rect2((base_x + i * cell_px) * z + po.x, base_y * z + po.y,
+				cell_px * z, cell_px * z),
+			Rect2(int(icons[i]) * 32, 0, 32, 32))
+
+
 func _draw_labels(chars: Array, dim: int, z: float) -> void:
 	# キャラ名は太字で、背景に半透明のマスクを敷いて読めるようにする
 	# (ユーザーの指定)。
@@ -1349,7 +1656,7 @@ func _process(_delta: float) -> void:
 	if _scroll_t < 1.0:
 		_scroll_t = minf(1.0, _scroll_t + _delta / SCROLL_DURATION)
 		queue_redraw()
-	if _floats.is_empty() and _flashes.is_empty() and _swings.is_empty() and _slashes.is_empty() and _bolts.is_empty() and _impacts.is_empty() and _casts.is_empty() and _ghosts.is_empty() and _bubbles.is_empty() and _disp_magics.is_empty() and not _shake_active:
+	if _floats.is_empty() and _flashes.is_empty() and _swings.is_empty() and _slashes.is_empty() and _bolts.is_empty() and _impacts.is_empty() and _casts.is_empty() and _ghosts.is_empty() and _bubbles.is_empty() and _disp_magics.is_empty() and not _shake_active and not _fx_any_active():
 		return
 	_expire_effects()
 	queue_redraw()
@@ -1387,13 +1694,16 @@ func _expire_effects() -> void:
 
 
 func _shake_offset(z: float) -> Vector2:
-	if not _shake_active:
-		return Vector2.ZERO
-	var step := int((_now() - _shake_started) / SHAKE_STEP)
-	if step >= SHAKE_PATTERN.size():
-		return Vector2.ZERO
-	var p: Vector2 = SHAKE_PATTERN[step]
-	return p * z
+	var off := Vector2.ZERO
+	if _shake_active:
+		var step := int((_now() - _shake_started) / SHAKE_STEP)
+		if step < SHAKE_PATTERN.size():
+			off = SHAKE_PATTERN[step] * z
+	# FX の画面振動 (終了時刻まで、振幅はズーム 1.0 時の px)。
+	var now := _now()
+	if now < _fx_shake_until and _fx_shake_amp > 0.0:
+		off += Vector2(sin(now * 91.0), cos(now * 113.0)) * _fx_shake_amp * z
+	return off
 
 
 func _float_position(target: Variant) -> Variant:
