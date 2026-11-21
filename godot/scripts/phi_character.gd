@@ -260,6 +260,7 @@ var _talk_d := 56
 var _input_normal_box: StyleBox = null
 var _input_focus_box: StyleBox = null
 var _toolbar_panel: PanelContainer = null
+var _toolbar_grip: Control = null
 var _toolbar_title: Label = null
 var _toolbar_rows_box: VBoxContainer = null
 var _toolbar_buttons: Array[Button] = []
@@ -1184,8 +1185,55 @@ func _build_toolbar_overlay() -> void:
 	_layout_toolbar()
 	_toolbar_panel.gui_input.connect(_on_toolbar_panel_gui_input)
 	_toolbar_panel.resized.connect(_rehome_toolbar_auto)
+	# 右下の隅に、形変え専用の掴み所を置く。隅がボタンの
+	# 下に重なると、パネル側で付けた斜め矢印カーソルは
+	# ボタンのカーソルに隠れて出ないため、専用の部品に
+	# して常に矢印が出るようにする。
+	_toolbar_grip = Control.new()
+	_toolbar_grip.size = Vector2(TOOLBAR_RESIZE_GRIP, TOOLBAR_RESIZE_GRIP)
+	_toolbar_grip.mouse_filter = Control.MOUSE_FILTER_STOP
+	_toolbar_grip.mouse_default_cursor_shape = Control.CURSOR_BDIAGSIZE
+	_toolbar_grip.gui_input.connect(_on_toolbar_grip_gui_input)
+	map_view.add_child(_toolbar_grip)
+	_toolbar_panel.item_rect_changed.connect(_sync_toolbar_grip)
+	_toolbar_panel.visibility_changed.connect(_sync_toolbar_grip)
+	_sync_toolbar_grip()
 	_apply_toolbar_home()
 	refresh_toolbar_states()
+
+
+func _sync_toolbar_grip() -> void:
+	## 掴み所をパネルの右下の隅に合わせ続ける。
+	if _toolbar_grip == null or _toolbar_panel == null:
+		return
+	_toolbar_grip.position = _toolbar_panel.position \
+			+ _toolbar_panel.size - _toolbar_grip.size
+	_toolbar_grip.visible = _toolbar_panel.visible
+
+
+func _on_toolbar_grip_gui_input(event: InputEvent) -> void:
+	## 右下の掴み所の入力。ドラッグで幅を変えると列数が
+	## 変わって整列し直す (縦長・横長)。ダブルクリックで
+	## 既定の並びに戻す。動かしている間のマウス移動は
+	## handle_mouse_motion 側で受ける。
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
+		if event.pressed:
+			_mouse_held = false
+			if event.double_click:
+				if _config != null:
+					_config.toolbar_cols = 0
+				_layout_toolbar()
+				_fit_toolbar_panel()
+			else:
+				_toolbar_resizing = true
+				_toolbar_auto_home = false
+				_toolbar_resize_mouse_start = event.global_position
+				_toolbar_resize_start_width = _toolbar_panel.size.x
+			var vp := get_viewport()
+			if vp != null:
+				vp.set_input_as_handled()
+		else:
+			_end_toolbar_drag()
 
 
 # -- フロート窓 (第101段、0.5.0 の新スタイル) --------------------------------

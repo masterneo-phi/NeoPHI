@@ -202,5 +202,23 @@ func _run() -> void:
 	config.toolbar_icon_size = 0
 	config.toolbar_cols = 0
 	_tab.refresh_toolbar_icon_size()
+	# (10) 右下の掴み所は専用部品で、常に斜め矢印カーソルに
+	# なり、パネルの右下の隅に追従し、そこからも形変えと
+	# 既定への復帰ができる (0.5.22 の実機報告: 矢印が出ない)。
+	var grip_ctl := _tab.get("_toolbar_grip") as Control
+	check(grip_ctl != null, "s100 grip control exists")
+	check_eq(grip_ctl.mouse_default_cursor_shape, Control.CURSOR_BDIAGSIZE, "s100 grip cursor is resize arrow")
+	check_eq(grip_ctl.position + grip_ctl.size, panel.position + panel.size, "s100 grip at panel corner")
+	_tab._on_toolbar_grip_gui_input(_press(panel.size - Vector2(4, 4)))
+	check(bool(_tab.get("_toolbar_resizing")), "s100 grip control starts resize")
+	var pitch3: float = _tab._toolbar_button_pitch()
+	var motion10 := InputEventMouseMotion.new()
+	motion10.position = panel.global_position + panel.size - Vector2(4, 4) - Vector2(pitch3 * 2.0, 0)
+	_tab.handle_mouse_motion(motion10)
+	check(int(config.toolbar_cols) >= 1, "s100 grip control reshapes")
+	_tab._end_toolbar_drag()
+	check_eq(grip_ctl.position + grip_ctl.size, panel.position + panel.size, "s100 grip follows after resize")
+	_tab._on_toolbar_grip_gui_input(_press(panel.size - Vector2(4, 4), true))
+	check_eq(int(config.toolbar_cols), 0, "s100 grip double click resets")
 	print("test_stage100: ", _checks, " checks, ", _failures, " failures")
 	quit(1 if _failures > 0 else 0)
