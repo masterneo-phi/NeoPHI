@@ -1749,14 +1749,16 @@ func _new_toolbar_row() -> HBoxContainer:
 	return row
 
 
-func _layout_toolbar() -> void:
+func _layout_toolbar(cols_override := -1) -> void:
 	## ボタンの段を組み直す (第100段)。列数が未設定なら
 	## グループごとに1段 (従来)。列数が決まっていれば、
 	## グループを丸ごと入れられる段には詰めて並べ、入らない
 	## 大きなグループは途中で折って、その列数に収める。
-	## ボタン自体は使い回す。
+	## ボタン自体は使い回す。cols_override は設定を変えずに
+	## その場だけ列数を指定する (地図に収める調整用)。
 	if _toolbar_rows_box == null:
 		return
+	var cols := cols_override if cols_override >= 0 else _toolbar_effective_cols()
 	for group in _toolbar_groups:
 		for button in group:
 			var b := button as Control
@@ -1766,7 +1768,6 @@ func _layout_toolbar() -> void:
 		var child := _toolbar_rows_box.get_child(i)
 		_toolbar_rows_box.remove_child(child)
 		child.queue_free()
-	var cols := _toolbar_effective_cols()
 	if cols <= 0:
 		for group in _toolbar_groups:
 			var row := _new_toolbar_row()
@@ -1907,34 +1908,57 @@ func _toolbar_home_position() -> Vector2:
 func _fit_toolbar_panel() -> void:
 	## パネルの大きさを中身に合わせ、地図からはみ出していたら
 	## 中に戻す。地図の大きさがまだ決まっていない時は戻さない。
+	## 既定の並び (列数未設定) で地図より横に広いときは、
+	## 収まる列数へその場だけ組み直す (アイコンを大きくすると
+	## 既定の並びのままでは地図からはみ出して、動かすことも
+	## 形を変えることもできなくなる)。列数を明示している
+	## ときは利用者の指定を優先し、組み直しはしない (その
+	## 場合もドラッグでずらして端は掴める)。設定自体は
+	## どちらも変えない。
 	if _toolbar_panel == null or map_view == null:
 		return
 	_toolbar_panel.size = _toolbar_panel.get_combined_minimum_size()
+	if map_view.size.x > 0.0 and _toolbar_panel.size.x > map_view.size.x \
+			and _toolbar_effective_cols() <= 0:
+		var cols := _toolbar_cols_for_width(map_view.size.x)
+		if cols >= 1:
+			_layout_toolbar(cols)
+			_toolbar_panel.size = _toolbar_panel.get_combined_minimum_size()
 	_clamp_toolbar_panel()
 
 
+func _toolbar_pos_range() -> Rect2:
+	## パネルを置ける範囲。パネルが地図より大きい軸では、
+	## 地図を覆う範囲だけずらせる (負の位置) ようにして、
+	## どの端でも掴めるようにする。小さい軸は従来どおり
+	## 地図の中に収まる範囲。
+	var diff := map_view.size - _toolbar_panel.size
+	return Rect2(Vector2(minf(0.0, diff.x), minf(0.0, diff.y)),
+			Vector2(maxf(0.0, diff.x), maxf(0.0, diff.y)))
+
+
 func _clamp_toolbar_panel() -> void:
-	## パネルが地図の外に出ていたら中へ戻す。パネルが地図より
-	## 大きい軸では全体は収まらないので、左上(基準点)だけが
-	## 地図の中に残るよう寄せるに留める(過渡的に小さな地図で
-	## 保持した位置まで動かしてしまわないため)。
+	## パネルが置ける範囲から出ていたら中へ戻す。
 	if _toolbar_panel == null or map_view == null:
 		return
 	if map_view.size.x <= 0.0 or map_view.size.y <= 0.0:
 		return
+	var r := _toolbar_pos_range()
 	var pos := _toolbar_panel.position
-	var lim_x := maxf(0.0, map_view.size.x - _toolbar_panel.size.x) if _toolbar_panel.size.x <= map_view.size.x else map_view.size.x
-	var lim_y := maxf(0.0, map_view.size.y - _toolbar_panel.size.y) if _toolbar_panel.size.y <= map_view.size.y else map_view.size.y
-	_toolbar_panel.position = Vector2(clampf(pos.x, 0.0, lim_x), clampf(pos.y, 0.0, lim_y))
+	_toolbar_panel.position = Vector2(
+			clampf(pos.x, r.position.x, r.size.x),
+			clampf(pos.y, r.position.y, r.size.y))
 
 
 func _move_toolbar_panel(target_global: Vector2) -> void:
-	## パネルを地図ビューの中に収まる位置へ動かす(リストと同じ)。
+	## パネルをドラッグ先へ動かす。置ける範囲で止める。
 	if _toolbar_panel == null or map_view == null:
 		return
 	var local: Vector2 = map_view.get_global_transform().affine_inverse() * target_global
-	var max_pos := Vector2(maxf(0.0, map_view.size.x - _toolbar_panel.size.x), maxf(0.0, map_view.size.y - _toolbar_panel.size.y))
-	_toolbar_panel.position = Vector2(clampf(local.x, 0.0, max_pos.x), clampf(local.y, 0.0, max_pos.y))
+	var r := _toolbar_pos_range()
+	_toolbar_panel.position = Vector2(
+			clampf(local.x, r.position.x, r.size.x),
+			clampf(local.y, r.position.y, r.size.y))
 
 
 func _on_toolbar_panel_gui_input(event: InputEvent) -> void:

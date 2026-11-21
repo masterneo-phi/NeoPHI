@@ -378,7 +378,10 @@ func _test_toolbar_structure() -> void:
 func _test_toolbar_drag() -> void:
 	# パネルの地のドラッグで位置が変わり、離すと設定に残る。
 	var panel := _tab.get("_toolbar_panel") as PanelContainer
-	_check_eq(panel.position, Vector2(8, 8), "layout toolbar starts top left")
+	# 初期位置はホーム (地図の右上、余白8)。この環境では
+	# 文字ボタンで横幅が地図を超えるため、収まる列数へ
+	# 組み直された上でホームに置かれる。
+	_check_eq(panel.position, Vector2(maxf(8.0, _tab.map_view.size.x - panel.size.x - 8.0), 8), "layout toolbar starts at home")
 	# スキンの無い環境では文字ボタンでパネルが地図より広くなる
 	# ため、アイコン付きボタンの寸法(34px四方)に寄せてから
 	# ドラッグする(リストのドラッグ確認と同じ流儀)。

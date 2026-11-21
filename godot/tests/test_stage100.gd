@@ -165,5 +165,42 @@ func _run() -> void:
 	loaded2.load_file("user://stage100_cfg.ini")
 	check_eq(loaded2.menu_font_size, 30, "s100 menu font roundtrip")
 	check_eq(loaded2.toolbar_icon_size, 40, "s100 icon size roundtrip")
+	# (9) アイコンを最大にすると既定の並びでは地図より広く
+	# なるが、収まる列数へ組み直されて地図の幅に収まり、
+	# 移動も形変え (縦長横長) もできる (0.5.21 の実機報告)。
+	var map_view := _tab.get("map_view") as Control
+	config.toolbar_cols = 0
+	config.toolbar_icon_size = 64
+	_tab.refresh_toolbar_icon_size()
+	check(panel.size.x <= map_view.size.x, "s100 big icon panel fits map width")
+	var pos_before := panel.position
+	_tab._on_toolbar_panel_gui_input(_press(Vector2(6, 6)))
+	check(bool(_tab.get("_toolbar_dragging")), "s100 big icon move starts")
+	var dx := -24.0 if pos_before.x >= 24.0 else 24.0
+	var motion9 := InputEventMouseMotion.new()
+	motion9.position = panel.global_position + Vector2(6, 6) + Vector2(dx, 0)
+	_tab.handle_mouse_motion(motion9)
+	check(panel.position.x != pos_before.x, "s100 big icon panel moves")
+	_tab._end_toolbar_drag()
+	_tab._on_toolbar_panel_gui_input(_press(panel.size - Vector2(4, 4)))
+	check(bool(_tab.get("_toolbar_resizing")), "s100 big icon grip starts")
+	var pitch2: float = _tab._toolbar_button_pitch()
+	var motion9b := InputEventMouseMotion.new()
+	motion9b.position = panel.global_position + panel.size - Vector2(4, 4) - Vector2(pitch2 * 2.0, 0)
+	_tab.handle_mouse_motion(motion9b)
+	check(int(config.toolbar_cols) >= 1, "s100 big icon grip reshapes")
+	_tab._end_toolbar_drag()
+	# 地図より縦に長い状態では、上へドラッグして下端
+	# (グリップ) を見せられる。
+	var y_before := panel.position.y
+	_tab._on_toolbar_panel_gui_input(_press(Vector2(6, 6)))
+	var motion9c := InputEventMouseMotion.new()
+	motion9c.position = panel.global_position + Vector2(6, 6) + Vector2(0, -200)
+	_tab.handle_mouse_motion(motion9c)
+	check(panel.position.y < y_before, "s100 tall panel slides up")
+	_tab._end_toolbar_drag()
+	config.toolbar_icon_size = 0
+	config.toolbar_cols = 0
+	_tab.refresh_toolbar_icon_size()
 	print("test_stage100: ", _checks, " checks, ", _failures, " failures")
 	quit(1 if _failures > 0 else 0)
