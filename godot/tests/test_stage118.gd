@@ -54,9 +54,13 @@ func _initialize() -> void:
 	v._event = _ev(7, 5, {"x": 10, "y": 10})
 	v._detect_scroll(_ev(7, 5, {"x": 40, "y": 10}))
 	check(v._scroll_t == 1.0 and v._prev_cells.is_empty(), "teleport, no scroll")
-	# 絶対座標が無い旧サーバでは従来のチップ比較に落ちる
+	# 絶対座標も移動の印も無い時、地形が完全に同じフレーム
+	# では滑らせない (第123段: 以前はチップ比較に落ちて
+	# (0,-1) に一致し、向き変更のたびに地図が揺れていた。
+	# 一面同じ地形での実移動は、移動コマンドの印 (第119段)
+	# が方向を決める)。
 	v._event = _ev(7, 5, null)
 	v._detect_scroll(_ev(7, 5, null))
-	check(v._scroll_t == 0.0, "no pos falls back to chip matching")
+	check(v._scroll_t == 1.0 and v._prev_cells.is_empty(), "no pos, identical frame does not scroll")
 	print("stage118: ", _checks, " checks, ", _failures, " failures")
 	quit(1 if _failures > 0 else 0)

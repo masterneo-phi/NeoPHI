@@ -4028,7 +4028,10 @@ func _send_held_step() -> void:
 	var commands: Array[String] = []
 	for step in steps:
 		commands.append(PhiKeys.move_command(str(step[0]), str(step[1]), north_fix_now()))
-	session.send_text("\n".join(commands))
+	# 自前の send_text を通して _note_sent に移動の印を残す
+	# (session へ直接送ると印が付かず、向き変更のたびに地図が
+	# 滑って揺れていた。第123段)。
+	send_text("\n".join(commands))
 	_arm_bump_watch()
 
 
@@ -4595,7 +4598,9 @@ func _mouse_send_step() -> void:
 	var commands := PhiMouse.move_commands(_mouse_hold_cursor, north_fix_now(), _mouse_mods())
 	if commands.is_empty():
 		return
-	session.send_text("\n".join(commands))
+	# キー経路と同じく、印を残すため自前の send_text を通す
+	# (第123段)。
+	send_text("\n".join(commands))
 	_arm_bump_watch()
 
 
@@ -4670,7 +4675,9 @@ func handle_mouse_motion(ev: InputEventMouseMotion) -> void:
 		_mouse_turn_dir = ""
 	elif turn_cmd != _mouse_turn_dir:
 		_mouse_turn_dir = turn_cmd
-		session.send_line(turn_cmd)
+		# 向き変更の印 (滑らせない) を残すため自前の send_line
+		# を通す (第123段)。
+		send_line(turn_cmd)
 	_update_map_hover()
 
 

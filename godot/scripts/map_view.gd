@@ -296,6 +296,10 @@ func _detect_scroll(new_event: Dictionary) -> void:
 	# (第118段)。動いていない・大きく跳んだ時は滑らか
 	# スクロールの対象にしない。
 	var candidates: Array = [Vector2i(0, -1), Vector2i(0, 1), Vector2i(-1, 0), Vector2i(1, 0)]
+	# ずれ方向が移動コマンドの印か絶対座標で決まったかどうか。
+	# 決まっていない時のチップ比較は、地形が変わっていない
+	# フレームを誤って拾わないよう下で別に扱う (第123段)。
+	var decided := false
 	# 自分が出した移動コマンドが新しい時は、それをずれ方向の
 	# 候補にする (第119段)。一面同じ地形や霧の中ではチップ
 	# 比較だけでは向きが決まらず、横移動で上下に揺れていた。
@@ -306,6 +310,7 @@ func _detect_scroll(new_event: Dictionary) -> void:
 		if pm == Vector2i.ZERO:
 			return  # 回転など: 位置は変わらないので滑らせない
 		candidates = [pm]
+		decided = true
 	if _event.has("pos") and new_event.has("pos"):
 		var op: Dictionary = _event["pos"]
 		var np: Dictionary = new_event["pos"]
@@ -313,6 +318,20 @@ func _detect_scroll(new_event: Dictionary) -> void:
 		if d == Vector2i.ZERO or absi(d.x) + absi(d.y) != 1:
 			return
 		candidates = [d]
+		decided = true
+	if not decided:
+		# 向き変更や他人の移動では地形は1マスも変わらない。
+		# そのフレームをずらし比較に掛けると (0,-1) に必ず
+		# 一致してしまい、向きを変えるたびに地図全体が滑って
+		# 揺れていた (第123段、実機報告)。地形が完全に同じ
+		# なら、滑らせる移動は無かったということにする。
+		var same := true
+		for i in range(dim * dim):
+			if int(new_cells[i].get("chip", 0)) != int(old_cells[i].get("chip", 0)):
+				same = false
+				break
+		if same:
+			return
 	for sv in candidates:
 		var s: Vector2i = sv
 		var bad := 0
