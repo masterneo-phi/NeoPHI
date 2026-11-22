@@ -38,7 +38,9 @@ signal register_completed(display_name: String)
 ## 第2段: 移動の繰り返し(Philly classMoveCommand)。
 const REPEAT_START_MS := 200
 const REPEAT_FALLBACK_MS := 500
-const REPEAT_MIN_INTERVAL_MS := 120
+## リピートの最小間隔は第128段で設定値化した
+## (PhiConfig.move_repeat_ms、[Disp] MoveRepeatMs、既定 60ms。
+## かつてはここで 120ms 固定だった)。
 ## 第77段: 同時押し (斜め) が合体するのを待つ時間。これより速く
 ## 2つ目の方向キーが来れば、1つ目の単独の1歩は出ずに斜めになる。
 const CHORD_GRACE_MS := 60
@@ -241,6 +243,9 @@ static var _check_icon_on: Texture2D = null
 static var _talk_icon: Texture2D = null
 static var _check_icon_off: Texture2D = null
 var _list_panel: PanelContainer = null
+## リストに付けた文字サイズ (全体のフォント設定由来)。
+## パネルの行の高さ計算にも使う。
+var _list_font_size := 0
 var _list_box: ItemList = null
 var _list_header: Label = null
 var _list_cancel_button: Button = null
@@ -287,6 +292,9 @@ var _log_float_title: Label = null
 var _input_float_title: Label = null
 var _log_band_button: Button = null
 var _input_band_button: Button = null
+## ログ窓の帯の「最下部へ」ボタン (フォントサイズ変更の隣、
+## りんぐ要望 2026-11-22)。押すとログを一番下までスクロールする。
+var _log_bottom_button: Button = null
 var _font_window: Window = null
 var _font_win_title: Label = null
 var _font_spin: SpinBox = null
@@ -302,6 +310,9 @@ var _float_resize_mouse_start := Vector2.ZERO
 var _float_resize_start_size := Vector2.ZERO
 var _applied_log_font := -1
 var _applied_input_font := -1
+## リストとステータスパネルに付けた、全体のフォント設定
+## (MenuFontSize) 由来の文字サイズ。変わった時だけ付け直す。
+var _applied_menu_size := -1
 var _dock_log_min := Vector2.ZERO
 var _dock_input_min := Vector2.ZERO
 ## フロート窓の枠色。ログは金、入力は赤 (ユーザーの指定)。
@@ -1045,6 +1056,8 @@ func _build_list_overlay() -> void:
 	_round_panel(_list_panel)
 	_list_panel.visible = false
 	_list_panel.position = Vector2(8, 8)
+	if _config != null and _config.list_pos.x >= 0.0 and _config.list_pos.y >= 0.0:
+		_list_panel.position = _config.list_pos
 	map_view.add_child(_list_panel)
 	var box := VBoxContainer.new()
 	box.add_theme_constant_override("separation", 4)
@@ -1331,6 +1344,18 @@ func _build_float_panels() -> void:
 	map_view.add_child(_input_float)
 	_log_band_button.pressed.connect(func() -> void: _show_font_window(true))
 	_input_band_button.pressed.connect(func() -> void: _show_font_window(false))
+	# ログ窓の帯に、フォントサイズ変更の隣へ「最下部へ」ボタンを
+	# 置く (りんぐ要望、2026-11-22)。押すとログを一番下まで
+	# スクロールする。スクロール停止の設定でも、その場だけは
+	# 最下部へ動く (バーの値を直接合わせるため)。
+	var log_band_row := _log_float_band.get_child(0) as HBoxContainer
+	_log_bottom_button = Button.new()
+	_log_bottom_button.text = "最下部へ"
+	_log_bottom_button.tooltip_text = "ログを一番下までスクロール"
+	_log_bottom_button.focus_mode = Control.FOCUS_NONE
+	_log_bottom_button.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	_log_bottom_button.pressed.connect(_pin_log_bottom)
+	log_band_row.add_child(_log_bottom_button)
 	_log_float.gui_input.connect(_on_float_gui_input.bind(_log_float))
 	_input_float.gui_input.connect(_on_float_gui_input.bind(_input_float))
 	_log_float_band.gui_input.connect(_on_float_band_gui_input.bind(_log_float))
@@ -1366,6 +1391,7 @@ func apply_ui_style() -> void:
 	_applied_size = -1
 	_applied_log_font = -1
 	_applied_input_font = -1
+	_applied_menu_size = -1
 	if want_float:
 		_dock_log_min = log_view.custom_minimum_size
 		_dock_input_min = input_box.custom_minimum_size
@@ -1520,6 +1546,8 @@ func _apply_float_fonts() -> void:
 			_log_float_title.add_theme_font_size_override("font_size", ls)
 		if _log_band_button != null:
 			_log_band_button.add_theme_font_size_override("font_size", ls)
+		if _log_bottom_button != null:
+			_log_bottom_button.add_theme_font_size_override("font_size", ls)
 	var isz := _float_window_font(_config.input_font_size if _config != null else 0, _input_float)
 	if isz != _applied_input_font:
 		_applied_input_font = isz
@@ -2063,6 +2091,7 @@ func _end_toolbar_drag() -> void:
 func _apply_list_font_size(size: int) -> void:
 	## リストの文字・見出し・ボタンに、同じ UI 文字サイズを付ける。
 	## ボタンは押しやすい高さも付ける。
+	_list_font_size = size
 	if _list_box != null:
 		_list_box.add_theme_font_size_override("font_size", size)
 	if _list_header != null:
@@ -2157,7 +2186,17 @@ func _on_list_header_gui_input(event: InputEvent) -> void:
 			if vp != null:
 				vp.set_input_as_handled()
 		else:
-			_list_dragging = false
+			_end_list_drag()
+
+
+func _end_list_drag() -> void:
+	## ドラッグの終わりに、位置を設定へ覚える(保存はメイン画面が
+	## 終了時などに行う。ツールバーと同じ扱い)。
+	if not _list_dragging:
+		return
+	_list_dragging = false
+	if _list_panel != null and _config != null:
+		_config.list_pos = _list_panel.position
 
 
 func _move_list_panel(target_global: Vector2) -> void:
@@ -2239,8 +2278,18 @@ func refresh_ui_font_size() -> void:
 	## メニュー・ツールバーなどの全体の大きさはメイン画面が付ける。
 	## フロート表示の間は、ログと入力欄の文字は窓の大きさで
 	## 決まる (第101段) ので、倍率連動からは外す。
+	## リストとステータスパネルは倍率連動ではなく、全体の
+	## フォント設定 (MenuFontSize) に追従させる (りんぐ報告、
+	## 2026-11-22。倍率由来の小さい文字のまま残っていた)。
 	if map_view == null:
 		return
+	var menu_size := _menu_font_size()
+	if menu_size != _applied_menu_size:
+		_applied_menu_size = menu_size
+		if status_panel != null:
+			status_panel.set_ui_sizes(menu_size, menu_size)
+		if _list_box != null:
+			_apply_list_font_size(menu_size)
 	var size := PhiFont.ui_size_for_zoom(map_view.zoom)
 	if size == _applied_size:
 		if _float_mode:
@@ -2262,10 +2311,6 @@ func refresh_ui_font_size() -> void:
 		_log_top_spacer.custom_minimum_size = Vector2(0, world_header.get_combined_minimum_size().y)
 		if _log_top_spacer is Label:
 			(_log_top_spacer as Label).add_theme_font_size_override("font_size", size)
-	if status_panel != null:
-		status_panel.set_ui_sizes(PhiFont.gauge_size_for_zoom(map_view.zoom), PhiFont.status_size_for_zoom(map_view.zoom))
-	if _list_box != null:
-		_apply_list_font_size(size)
 	# ツールバーのボタンも UI 文字サイズに追従させる
 	# (アイコン付きは正方形。少し大きくしたいという要望で
 	# 文字サイズ+20 にした)。
@@ -3665,7 +3710,7 @@ func _show_list_overlay() -> void:
 	if not _list_lines.is_empty():
 		_list_box.select(0)
 	_list_header.text = list_title_for_command(_last_command)
-	var size := maxi(_applied_size, 15)
+	var size := maxi(_list_font_size if _list_font_size > 0 else _applied_size, 15)
 	var row_h := maxi(_font.get_height(size) + 6, 24)
 	var rows := mini(_list_lines.size(), 9)
 	var panel_w := clampf(map_view.size.x - 16.0, 200.0, 560.0)
@@ -3886,6 +3931,16 @@ func _send_list_answer(answer: String) -> void:
 	_play_se("decide.wav")
 	session.send_line(answer)
 	_hide_list_overlay()
+
+
+func _list_digit_goes_to_input(code: String) -> bool:
+	## リスト表示中でも、入力欄にフォーカスがある時の数字キーは
+	## リストの即時選択に使わず、入力欄の文字にする (handle_key の
+	## リスト先行処理から呼ばれる)。0 も含める (105 番などを打つ
+	## 途中で、0 がキャンセル扱いにならないように)。
+	if input_box == null or not input_box.has_focus():
+		return false
+	return _list_digit_of(code) >= 0 or code == "Digit0" or code == "Numpad0"
 
 
 func handle_list_key(code: String, shift: bool, ctrl: bool, alt: bool) -> bool:
@@ -4161,6 +4216,21 @@ func _send_held_step() -> void:
 	_arm_bump_watch()
 
 
+static func repeat_due(now: int, last_send: int, interval_ms: int) -> bool:
+	## 押し続けリピートで次の一歩を送ってよいか (間隔判定)。
+	## 第128段で間隔を設定値化したため、判定を設定の参照と
+	## 分けて静的に切り出した (テスト用)。
+	return last_send <= 0 or now - last_send >= interval_ms
+
+
+func _repeat_min_interval_ms() -> int:
+	## 押し続けリピートの最小間隔 (ms)。設定値を使い、
+	## 設定が無い時は既定値にする。
+	if _config != null:
+		return _config.move_repeat_ms
+	return PhiConfig.DEFAULT_MOVE_REPEAT_MS
+
+
 func _repeat_send_if_ready() -> void:
 	if _held_moves.is_empty():
 		return
@@ -4169,7 +4239,7 @@ func _repeat_send_if_ready() -> void:
 	var now := Time.get_ticks_msec()
 	if now - _held_since < REPEAT_START_MS:
 		return
-	if _last_repeat_send > 0 and now - _last_repeat_send < REPEAT_MIN_INTERVAL_MS:
+	if not repeat_due(now, _last_repeat_send, _repeat_min_interval_ms()):
 		return
 	_send_held_step()
 	_last_repeat_send = now
@@ -4673,7 +4743,7 @@ func handle_mouse_button(ev: InputEventMouseButton) -> void:
 			_start_mouse_hold(ev)
 		else:
 			_mouse_held = false
-			_list_dragging = false
+			_end_list_drag()
 			_end_toolbar_drag()
 			_end_float_drag()
 			_finish_talk_press()
@@ -4749,7 +4819,7 @@ func _mouse_repeat_send_if_ready() -> void:
 	var now := Time.get_ticks_msec()
 	if now - _mouse_hold_since < REPEAT_START_MS:
 		return
-	if _mouse_last_repeat > 0 and now - _mouse_last_repeat < REPEAT_MIN_INTERVAL_MS:
+	if not repeat_due(now, _mouse_last_repeat, _repeat_min_interval_ms()):
 		return
 	# 押している間にマウスが動いたら、方向を追いかける。
 	var cursor := _mouse_cursor_at(_mouse_last_pos)
@@ -4905,7 +4975,13 @@ func handle_key(key_event: InputEventKey) -> bool:
 	# フォーカスを外さなくてもテンキーでそのまま選べる
 	# (Philly のリストモードはモーダル)。リストが扱わないキーは
 	# この後の入力欄の処理に流れる。
-	if _list_active and handle_list_key(code, shift, ctrl, alt):
+	# ただし数字キーだけは、入力欄にフォーカスがある時は入力欄へ
+	# 譲る (りんぐ報告、2026-11-22)。番号を入力欄に打って答える
+	# 使い方 (例: 345 番) で、最初の1桁を押した瞬間にその行が
+	# 選ばれてしまうのを防ぐ。複数桁を打って Enter で確定すれば、
+	# 送信された文がそのままリストへの答えになる。フォーカスが
+	# 無い時の数字キーの即選択は従来どおり (Philly のリストモード)。
+	if _list_active and not _list_digit_goes_to_input(code) and handle_list_key(code, shift, ctrl, alt):
 		return true
 	# (6)追加発言の呼び出しと、(7)入力欄フォーカス時は TextEdit 任せ。
 	# ↓ の呼び出しは TextEdit のキャレット移動より先に見る。

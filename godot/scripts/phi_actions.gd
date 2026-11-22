@@ -67,7 +67,7 @@ const ACTIONS := {
 	"ChatMode": {"caption": "チャットモード", "hint": "チャットモードの ON/OFF を切り替える", "kind": "send", "send": "chat"},
 	"Address": {"caption": "アドレス登録", "hint": "登録アドレスを表示し、続けて新しいアドレスを入力する", "kind": "send", "send": "address"},
 	"MapSizeSetting": {"caption": "マップサイズ設定...", "hint": "地図の倍率を窓に合わせるか、固定倍率にするかを設定する", "kind": "map-size-dialog"},
-	"DisplaySizeSetting": {"caption": "フォント・アイコンのサイズ...", "hint": "メニュー・タブのフォントサイズと、コマンドパレットのアイコンサイズを設定する", "kind": "display-size-dialog"},
+	"DisplaySizeSetting": {"caption": "フォント・アイコンのサイズ...", "hint": "メニュー・タブのフォントサイズと、コマンドパレットのアイコンサイズ、移動の繰り返し間隔を設定する", "kind": "display-size-dialog"},
 	"WizardEye": {"caption": "Wizard eye", "hint": "世界にいる人を一覧する [Alt+W]", "kind": "send", "send": "cast\nwizard eye"},
 	"PartyEye": {"caption": "Party eye", "hint": "パーティーメンバーを一覧する [Alt+P]", "kind": "send", "send": "cast\nparty eye"},
 	"EagleEye": {"caption": "Eagle eye", "hint": "周囲の広い範囲のマップを見る [Alt+E]", "kind": "send", "send": "cast\neagle eye"},

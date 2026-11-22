@@ -1,8 +1,9 @@
 extends SceneTree
 ## 第77段のテスト: (1) 同時押し (斜め) の合体待ち。最初の方向キーを
 ## 少し保留し、相方が来たら斜めとして送る (従来は単独の1歩が
-## 先に出て ↑→ が ↑↑→ になっていた)。(2) リスト表示中は入力欄に
-## フォーカスがあってもテンキーで直接選べる。
+## 先に出て ↑→ が ↑↑→ になっていた)。(2) リスト表示中のテンキー:
+## 入力欄にフォーカスがある時は入力欄へ譲り、無い時は直接選べる
+## (v0.5.25 の仕様。旧仕様「フォーカスがあっても直接選べる」は廃止)。
 ##
 ## 使い方: godot --headless --path . -s tests/test_stage77.gd
 ## 終了コード 0 = 全一致、1 = 不一致あり。
@@ -111,7 +112,12 @@ func _test_list_focus() -> void:
 	tab.set("_list_active", true)
 	tab._show_list_overlay()
 	_queue().clear()
-	# (7) フォーカスが入力欄にあっても、テンキーで直接選べる。
+	# (7) フォーカスが入力欄にある時のテンキーは入力欄へ譲る
+	# (数字を打って Enter で答える操作の妨げにしないため)。
+	_check(not tab.handle_key(_key(KEY_KP_3)), "s77 kp3 goes to input when focused")
+	_check_eq(_queue(), [], "s77 kp3 sends nothing when focused")
+	# (7b) フォーカスが入力欄に無ければ、テンキーで直接選べる。
+	root.gui_release_focus()
 	_check(tab.handle_key(_key(KEY_KP_3)), "s77 kp3 handled in list")
 	_check_eq(_queue(), ["3"], "s77 kp3 sends row 3")
 	_check_eq(tab.input_box.text, "", "s77 kp3 not typed")

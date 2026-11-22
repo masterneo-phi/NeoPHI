@@ -20,6 +20,11 @@ extends RefCounted
 ## [Disp] TalkButtonX, TalkButtonY … Talk ボタンの位置
 ##   (地図の中の座標)。どちらか欠けるか負なら未設定で、
 ##   既定の左下に置く。ドラッグで動かせる。
+## [Disp] ListX, ListY … #list パネルの位置 (地図の中の座標)。
+##   どちらか欠けるか負なら未設定で、既定の左上 (8, 8) に置く。
+##   見出しのドラッグで動かせる。大きさは行数で決まるので保存しない。
+## [Disp] MoveRepeatMs … 移動キー (とマウス長押し) の押し続け
+##   リピートの最小間隔 (ms)。小さいほど速く歩ける (第128段)。
 ## [Disp] InputHeight … 入力欄の高さ(ピクセル)。負なら未設定で、
 ##   既定の3行ぶんにする。ログとの境目のドラッグで変わる。
 ## [Log] ScrollStop … ログの自動スクロールを止めるか。
@@ -63,6 +68,16 @@ const MIN_SPLIT_RATIO := 0.15
 const MAX_SPLIT_RATIO := 0.85
 ## ログの最小幅。境目を動かしてもこれより狭くしない。
 const MIN_LOG_WIDTH := 280
+## 移動リピート間隔の既定と範囲 (第128段)。既定 60ms で
+## 秒間約16マスが天井になる。下限 30ms の理由: 60fps の
+## 1フレーム (約16.7ms) の2倍弱で、これより細かい指定は
+## フレーム駆動の送信では守れないし、1歩ごとにサーバとの
+## 往復がある以上、実効速度も頭打ちになる。上限は保険
+## タイマーの間隔 (500ms) に合わせる (それ以上は保険側の
+## 間隔で送られてしまい、指定の意味が無くなる)。
+const DEFAULT_MOVE_REPEAT_MS := 60
+const MIN_MOVE_REPEAT_MS := 30
+const MAX_MOVE_REPEAT_MS := 500
 ## 旧設定の移行で窓幅から差し引く右列の幅の目安。
 ## ズーム3時の列幅 144＋区切り 4。これで旧設定の地図幅が保たれる。
 const MIGRATION_COLUMN_ALLOWANCE := 148
@@ -127,6 +142,15 @@ var menu_font_size := 20
 ## (ドット絵なので拡大は NEAREST)。実効は 0 または 12〜64。
 var toolbar_icon_size := 0
 var talk_button_pos := Vector2(-1, -1)
+## #list パネルの位置(地図の中の座標)。(-1, -1) は未設定で、
+## その場合は地図の左上 (8, 8) に置く。見出しのドラッグで
+## 更新され、保存はメイン画面のタイミング(終了時など)。
+## 大きさはリストの行数で決まるので持たない。
+var list_pos := Vector2(-1, -1)
+## 移動キー (とマウス長押し) の押し続けリピートの最小間隔
+## (ms、第128段)。地図が届くたびに次の一歩を送る方式の
+## 間引きに使う。かつては 120ms 固定だった。
+var move_repeat_ms := DEFAULT_MOVE_REPEAT_MS
 ## 入力欄の高さ(ピクセル)。-1 は未設定で、その場合は既定の
 ## 3行ぶんにする。境目のドラッグで更新され、保存はメイン画面の
 ## タイミング(終了時など)。
@@ -226,6 +250,8 @@ func reset() -> void:
 	log_float_rect = Rect2(0, 0, 0, 0)
 	input_float_rect = Rect2(0, 0, 0, 0)
 	talk_button_pos = Vector2(-1, -1)
+	list_pos = Vector2(-1, -1)
+	move_repeat_ms = DEFAULT_MOVE_REPEAT_MS
 	input_height = -1
 	scroll_stop = false
 	log_auto_save = false
@@ -327,6 +353,13 @@ func load_file(path: String = DEFAULT_PATH) -> bool:
 		var by := float(cfg.get_value("Disp", "TalkButtonY", -1))
 		if bx >= 0.0 and by >= 0.0:
 			talk_button_pos = Vector2(bx, by)
+	# リストパネルの位置。両方そろって 0 以上なら採用する。
+	if cfg.has_section_key("Disp", "ListX") and cfg.has_section_key("Disp", "ListY"):
+		var lx := float(cfg.get_value("Disp", "ListX", -1))
+		var ly := float(cfg.get_value("Disp", "ListY", -1))
+		if lx >= 0.0 and ly >= 0.0:
+			list_pos = Vector2(lx, ly)
+	move_repeat_ms = clampi(int(cfg.get_value("Disp", "MoveRepeatMs", DEFAULT_MOVE_REPEAT_MS)), MIN_MOVE_REPEAT_MS, MAX_MOVE_REPEAT_MS)
 	var ih := int(cfg.get_value("Disp", "InputHeight", -1))
 	input_height = ih if ih >= 0 else -1
 	smooth_scroll = bool(cfg.get_value("Disp", "SmoothMapScroll", true))
@@ -400,6 +433,9 @@ func save_file(path: String = DEFAULT_PATH) -> bool:
 	cfg.set_value("Disp", "SmoothMapScroll", smooth_scroll)
 	cfg.set_value("Disp", "TalkButtonX", talk_button_pos.x)
 	cfg.set_value("Disp", "TalkButtonY", talk_button_pos.y)
+	cfg.set_value("Disp", "ListX", list_pos.x)
+	cfg.set_value("Disp", "ListY", list_pos.y)
+	cfg.set_value("Disp", "MoveRepeatMs", move_repeat_ms)
 	cfg.set_value("Disp", "InputHeight", input_height)
 	cfg.set_value("Log", "ScrollStop", scroll_stop)
 	cfg.set_value("Log", "LogAutoSave", log_auto_save)

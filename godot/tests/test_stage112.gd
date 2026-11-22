@@ -4,6 +4,9 @@ extends SceneTree
 ## handle_key とフロートスタイルで固定する)。選択前の
 ## フォーカス状態を変えて Numpad2 を押し、閉じた直後と
 ## 次フレームのフォーカス所有者を見る。
+## ただし入力欄フォーカス中のケースだけは v0.5.25 の仕様変更で
+## 前提が変わった: テンキーは入力欄へ譲るため選択は起きず、
+## リストは開いたまま・フォーカスも入力欄のままになる。
 ##
 ## 使い方: godot --headless --path . -s tests/test_stage112.gd
 
@@ -69,11 +72,13 @@ func _run_case(pre: String) -> void:
 func _check_case(pre: String) -> void:
 	var after := _owner_name()
 	print("case ", pre, ": after=", after, " input_focused=", _tab.input_box.has_focus())
-	_check(not _tab.get("_list_active"), "s112 list closed (" + pre + ")")
 	if pre == "input":
+		# 入力欄へ譲る仕様 (v0.5.25): リストは閉じず、フォーカスも不動。
+		_check(_tab.get("_list_active"), "s112 list stays open (input)")
 		_check(_tab.input_box.has_focus(), "s112 input focus kept (input)")
-	else:
-		_check(not _tab.input_box.has_focus(), "s112 focus must not move to input (" + pre + ")")
+		return
+	_check(not _tab.get("_list_active"), "s112 list closed (" + pre + ")")
+	_check(not _tab.input_box.has_focus(), "s112 focus must not move to input (" + pre + ")")
 
 
 func _initialize() -> void:

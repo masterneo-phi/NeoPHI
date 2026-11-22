@@ -160,6 +160,7 @@ var _map_size_spin: SpinBox = null
 var _display_size_dialog: ConfirmationDialog = null
 var _display_menu_spin: SpinBox = null
 var _display_icon_spin: SpinBox = null
+var _display_repeat_spin: SpinBox = null
 var _alt_confirm_dialog: ConfirmationDialog = null
 var _alt_confirm_label: Label = null
 var _pending_alt_action := ""
@@ -3341,7 +3342,8 @@ func _on_map_size_confirmed() -> void:
 
 # -- フォント・アイコンのサイズ設定 ----------------------------------------------
 ## メニュー・タブのフォントサイズ (窓・倍率に連動しない固定値) と、
-## コマンドパレットのアイコンサイズを設定する。
+## コマンドパレットのアイコンサイズを設定する。第128段で
+## 移動キーの繰り返し間隔もここに足した。
 
 func _show_display_size_dialog() -> void:
 	if _display_size_dialog == null:
@@ -3370,17 +3372,27 @@ func _show_display_size_dialog() -> void:
 		_display_icon_spin.max_value = 64
 		_display_icon_spin.step = 1
 		box.add_child(_display_icon_spin)
+		var repeat_label := Label.new()
+		repeat_label.text = "移動キーの繰り返し間隔 (%d〜%dms、小さいほど速い)" % [PhiConfig.MIN_MOVE_REPEAT_MS, PhiConfig.MAX_MOVE_REPEAT_MS]
+		box.add_child(repeat_label)
+		_display_repeat_spin = SpinBox.new()
+		_display_repeat_spin.min_value = PhiConfig.MIN_MOVE_REPEAT_MS
+		_display_repeat_spin.max_value = PhiConfig.MAX_MOVE_REPEAT_MS
+		_display_repeat_spin.step = 1
+		box.add_child(_display_repeat_spin)
 		_display_size_dialog.confirmed.connect(_on_display_size_confirmed)
 		_draggable_title(box, _display_size_dialog)
 		add_child(_display_size_dialog)
 	_display_menu_spin.value = _config.menu_font_size
 	_display_icon_spin.value = _config.toolbar_icon_size
-	_display_size_dialog.popup_centered(Vector2i(360, 210))
+	_display_repeat_spin.value = _config.move_repeat_ms
+	_display_size_dialog.popup_centered(Vector2i(360, 280))
 
 
 func _on_display_size_confirmed() -> void:
 	_config.menu_font_size = int(_display_menu_spin.value)
 	_config.toolbar_icon_size = int(_display_icon_spin.value)
+	_config.move_repeat_ms = int(_display_repeat_spin.value)
 	_apply_chrome_size()
 	for t in _tabs:
 		t.refresh_ui_font_size()

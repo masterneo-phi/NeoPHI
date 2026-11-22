@@ -71,9 +71,10 @@ var label_font: Font = null
 var bold_font: Font = null
 var hpmp_tex: Texture2D = null
 
-## ゲージの数字の文字サイズ。PhiFont.gauge_size_for_zoom で決める。
+## ゲージの数字の文字サイズ。全体のフォント設定 (MenuFontSize)
+## で決める (付け替えは PhiCharacter.refresh_ui_font_size)。
 var gauge_font_size := 14
-## ステータス行の文字サイズ。PhiFont.status_size_for_zoom で決める。
+## ステータス行の文字サイズ。ゲージと同じく MenuFontSize 由来。
 var status_font_size := 14
 
 var _hp := -1

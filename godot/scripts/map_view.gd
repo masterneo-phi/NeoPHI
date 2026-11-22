@@ -281,6 +281,27 @@ var _scroll_t := 1.0  # 0→1 で進む。1 で完了。
 var _scroll_from_h := 0
 var _scroll_to_h := 0
 const SCROLL_DURATION := 0.17
+## 補間時間の下限 (第128段)。到着間隔がこれより短い時は
+## ここで止める (60fps の1フレーム約16.7ms の2倍弱。
+## これ未満は補間というより即時切替で、間隔のばらつきが
+## そのまま表示の震えになる)。
+const MIN_SCROLL_DURATION := 0.03
+## 現在のスクロールに使う補間時間。到着間隔で適応する
+## (第128段)。初期値は従来どおり。
+var _scroll_duration := SCROLL_DURATION
+## 直近のスクロール開始時刻 (秒、_now() 基準)。-1 はまだ無い。
+var _last_scroll_start := -1.0
+
+
+static func scroll_duration_for_interval(interval_sec: float) -> float:
+	## 地図の到着間隔から補間時間を決める (第128段)。
+	## 間隔が不明 (0以下) か遅い時は従来の SCROLL_DURATION、
+	## 速い時は間隔に合わせて縮める (下限 MIN_SCROLL_DURATION)。
+	## 間隔ちょうどにすれば、次の地図が届く頃に補間が
+	## 終わるので、速く歩いても表示が遅れ続けない。
+	if interval_sec <= 0.0:
+		return SCROLL_DURATION
+	return clampf(minf(SCROLL_DURATION, interval_sec), MIN_SCROLL_DURATION, SCROLL_DURATION)
 
 
 func set_session_live(v: bool) -> void:
@@ -380,7 +401,20 @@ func _detect_scroll(new_event: Dictionary) -> void:
 			_prev_cells = old_cells
 			_scroll_from = Vector2(s)
 			_scroll_t = 0.0
+			_note_scroll_start()
 			return
+
+
+func _note_scroll_start(now_s: float = -1.0) -> void:
+	## スクロールが始まったことを記録し、補間時間を直前の
+	## 到着間隔に追従させる (第128段)。間隔が空いたら従来の
+	## SCROLL_DURATION に戻る。now_s はテスト用 (負なら実時刻)。
+	var t := now_s if now_s >= 0.0 else _now()
+	if _last_scroll_start >= 0.0:
+		_scroll_duration = scroll_duration_for_interval(t - _last_scroll_start)
+	else:
+		_scroll_duration = SCROLL_DURATION
+	_last_scroll_start = t
 ## チップシートは属性の下位2ビット (#mapset-define の番号) ごとに
 ## 4枚。slot 0 は現在のマップセット、1〜3 は define があればその
 ## 名前、無ければ既定シート (Python 版と同じ解決)。
@@ -1942,9 +1976,41 @@ func _glow_texture() -> Texture2D:
 	return _glow_tex
 
 
+const FX_TEXT_BASE_PX := 32.0
+const FX_TEXT_MIN_PX := 8
+
+
+static func fx_text_font_size(font: Font, text: String, size_pct: int,
+		avail_width: float) -> int:
+	## FX 文字の実フォントサイズ。名目は基準 32px に対する % で
+	## 決まるが、文字列幅が avail_width (マップ描画幅) を超える
+	## 場合は、全文が収まるよう比例で縮小する (shrink-to-fit)。
+	## 収まっている場合は名目サイズそのままで、従来の見た目を
+	## 変えない。下限は従来の名目側クランプと同じ 8px: 実在の
+	## 章タイトル (64px 時で最大約 672px) でも 7x7 (224px) で
+	## 約 21px に収まるため通常は当たらず、当たるような極端な
+	## 長文ではそれ未満は判読不能なので切り捨てを許す。
+	var nominal := maxi(FX_TEXT_MIN_PX,
+		int(FX_TEXT_BASE_PX * size_pct / 100.0))
+	if font == null or text.is_empty() or avail_width <= 0.0:
+		return nominal
+	var w := font.get_string_size(text,
+		HORIZONTAL_ALIGNMENT_LEFT, -1, nominal).x
+	if w <= avail_width:
+		return nominal
+	var fitted := maxi(FX_TEXT_MIN_PX, int(nominal * avail_width / w))
+	# ヒンティング等で比例計算より僅かに広くなる場合の詰め。
+	while fitted > FX_TEXT_MIN_PX and font.get_string_size(text,
+			HORIZONTAL_ALIGNMENT_LEFT, -1, fitted).x > avail_width:
+		fitted -= 1
+	return fitted
+
+
 func _draw_fx_texts(now: float) -> void:
 	## 位置スロットごとの文字 (C/L/R/T/B)。サイズは画面固定で
-	## 基準 32px に対する %。フェードイン/アウトは各 0.2 秒。
+	## 基準 32px に対する %。マップ幅に収まらない長文は全文が
+	## 読めるよう縮小する (fx_text_font_size)。フェードイン/
+	## アウトは各 0.2 秒。
 	if _fx_texts.is_empty() or label_font == null:
 		return
 	var mrect := drawn_map_rect()
@@ -1957,8 +2023,10 @@ func _draw_fx_texts(now: float) -> void:
 			alpha = minf(alpha, clampf((until - now) / 0.2, 0.0, 1.0))
 		if alpha <= 0.0:
 			continue
-		var font_size := maxi(8, int(32.0 * int(entry.get("size", 100)) / 100.0))
 		var text := str(entry.get("text", ""))
+		var width := mrect.size.x - (16.0 if pos in ["L", "R"] else 0.0)
+		var font_size := fx_text_font_size(label_font, text,
+			int(entry.get("size", 100)), width)
 		var ascent := label_font.get_ascent(font_size)
 		var baseline := 0.0
 		var origin_x := mrect.position.x
@@ -1979,7 +2047,6 @@ func _draw_fx_texts(now: float) -> void:
 				align = HORIZONTAL_ALIGNMENT_RIGHT
 			_:
 				baseline = mrect.get_center().y + ascent * 0.5
-		var width := mrect.size.x - (16.0 if pos in ["L", "R"] else 0.0)
 		draw_string(label_font, Vector2(origin_x, baseline), text,
 			align, width, font_size, Color(1, 1, 1, alpha))
 
@@ -2139,9 +2206,10 @@ func _process(_delta: float) -> void:
 		if frame != _anim_frame:
 			_anim_frame = frame
 			queue_redraw()
-	# 滑らかスクロールを進める (第64段)。
+	# 滑らかスクロールを進める (第64段)。補間時間は到着
+	# 間隔に適応した _scroll_duration を使う (第128段)。
 	if _scroll_t < 1.0:
-		_scroll_t = minf(1.0, _scroll_t + _delta / SCROLL_DURATION)
+		_scroll_t = minf(1.0, _scroll_t + _delta / _scroll_duration)
 		queue_redraw()
 	if _floats.is_empty() and _flashes.is_empty() and _swings.is_empty() and _slashes.is_empty() and _bolts.is_empty() and _impacts.is_empty() and _casts.is_empty() and _ghosts.is_empty() and _bubbles.is_empty() and _disp_magics.is_empty() and not _shake_active and not _fx_any_active():
 		return
