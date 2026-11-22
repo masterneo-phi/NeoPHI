@@ -119,7 +119,6 @@ func _test_list_digit_focus() -> void:
 	# 複数桁を打って Enter で確定すると、その文がリストへの答えになる。
 	tab.input_box.text = "345"
 	tab.set("_history_boundary", 0)
-	tab.set("_input_snapshot", "345")
 	check(tab.handle_key(_key_event(KEY_ENTER)), "s125 enter submits")
 	check_eq(_queue(tab), ["345"], "s125 typed number sent as answer")
 	check(not tab.list_active(), "s125 list closed after typed answer")

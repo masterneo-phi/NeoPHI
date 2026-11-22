@@ -49,6 +49,8 @@ func _run() -> void:
 	check(tab.input_box.has_focus(), "s89 focus kept after first send")
 	# 連続発言: そのまま次の文を打って送れる。
 	tab.input_box.text = "こんにちは\nつづきです"
+	tab.input_box.set_caret_line(1)
+	tab.input_box.set_caret_column(5)
 	tab.submit_input()
 	check(_queue().size() == 2, "s89 second speech queued")
 	check(tab.input_box.has_focus(), "s89 focus kept after second send")

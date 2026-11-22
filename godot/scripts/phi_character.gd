@@ -327,9 +327,8 @@ const FLOAT_RESIZE_GRIP := 18.0
 var _toolbar_auto_home := false
 var _last_command := ""
 var _history_boundary := 0
-var _input_snapshot := ""
-## 直前に送った文 (入力欄に打ったままの形)。下書きが空の
-## Enter で、その文が履歴にそのまま残っていれば再発言する。
+## 直前に送った行 (入力欄に打ったままの形、1行だけ)。
+## 最終行が空の Enter で、その行を再発言する。
 var _last_sent_text := ""
 ## 追加発言(TalkAdd)。実行中だけの保持で、保存はしない。
 var _talk_add := ""
@@ -594,7 +593,6 @@ func _fill_draft_with_talk_add() -> void:
 		input_box.text += "\n"
 		_history_boundary = input_box.text.length()
 	input_box.text += _talk_add
-	_sync_input_snapshot()
 	var last := maxi(input_box.get_line_count() - 1, 0)
 	input_box.set_caret_line(last, true, true, 0, false)
 	input_box.set_caret_column(input_box.get_line(last).length())
@@ -617,7 +615,6 @@ func _try_talk_add_recall(code: String, shift: bool, ctrl: bool, alt: bool, meta
 		return false
 	input_box.text = text.substr(0, last_start) + _talk_add
 	_history_boundary = PhiInputHistory.clamp_boundary(input_box.text, _history_boundary)
-	_sync_input_snapshot()
 	var last := maxi(input_box.get_line_count() - 1, 0)
 	input_box.set_caret_line(last, true, true, 0, false)
 	input_box.set_caret_column(input_box.get_line(last).length())
@@ -893,7 +890,6 @@ func _build_ui() -> void:
 	input_box = TextEdit.new()
 	input_box.placeholder_text = "入力欄 (Enter で送信、Shift+Enter で改行、Esc で移動キーへ、Tab で入力欄へ)"
 	input_box.wrap_mode = TextEdit.LINE_WRAPPING_BOUNDARY
-	input_box.text_changed.connect(_on_input_text_changed)
 	input_box.gui_input.connect(_on_input_gui_input)
 	input_split.add_child(input_box)
 	# 入力欄の枠は角丸にする(地はテーマのものを複製して使う。
@@ -4321,9 +4317,10 @@ func set_loud(on: bool) -> void:
 func confirm_loud() -> void:
 	_note_sent("*" + _loud_pending)
 	session.send_text("*" + _loud_pending)
+	var sent_line := _loud_pending
 	_loud_pending = ""
 	set_loud(false)
-	_advance_history()
+	_advance_history(sent_line)
 
 
 func cancel_loud() -> void:
@@ -4335,62 +4332,42 @@ func confirm_loud_all() -> void:
 	_loud_all = true
 	_note_sent("*" + _loud_pending)
 	session.send_text("*" + _loud_pending)
+	var sent_line := _loud_pending
 	_loud_pending = ""
-	_advance_history()
+	_advance_history(sent_line)
 
 
 # -- 入力欄の送信と履歴 ------------------------------------------------------
 
-func _on_input_text_changed() -> void:
-	## 履歴部分が書き換えられたら、その行が下書きに戻るよう
-	## 境界を戻す。編集位置は前回の文との最初の相違で知る。
-	## 下書きだけの編集なら境界は長さへのクランプのみ。
-	## (text_changed は API 経由の編集では来ないことがあるため、
-	## 送信時にも同じ照合を行う)
-	_history_boundary = PhiInputHistory.retreat_boundary(_input_snapshot, input_box.text, _history_boundary)
-	_input_snapshot = input_box.text
-
-
-func _sync_input_snapshot() -> void:
-	## プログラム側で入力欄の文を変えたあと、照合の基準を合わせる。
-	_input_snapshot = input_box.text
-
-
 func submit_input(party: bool = false) -> void:
-	## 下書き部分だけを送り、送った文は履歴として残す。
+	## Enter を押した行 (キャレットのある行) だけを発言として
+	## 送る。履歴の行でも下書きの行でも、その行だけが対象で、
+	## 他の行は送られない (2026-11-23 ユーザー決定。以前は
+	## 境界から末尾までの下書き全体を送っていた)。
 	## 大声の確認が必要なら、送らずにダイアログを頼む。
-	## 送信の前に、履歴部分の書き換えを境界へ反映する
-	## (text_changed が来ない編集経路でも効くように)。
-	_history_boundary = PhiInputHistory.retreat_boundary(_input_snapshot, input_box.text, _history_boundary)
-	_sync_input_snapshot()
 	_history_boundary = PhiInputHistory.clamp_boundary(input_box.text, _history_boundary)
-	var draft := PhiInputHistory.draft_of(input_box.text, _history_boundary)
-	if draft.is_empty():
-		# 下書きが空でも、直前に送った文が入力欄にそのまま
-		# 残っていれば、その文をもう一度送る (再発言)。
-		# 送った文を書き換えた場合は境界が戻って下書きに
-		# なるので、ここには来ない。
-		draft = _resendable_text()
-		if draft.is_empty():
+	var caret_line := input_box.get_caret_line()
+	var line := PhiInputHistory.line_at(input_box.text, caret_line)
+	if line.is_empty():
+		# 空の行では送らない。ただし最終行 (新しい下書きの行)
+		# が空の Enter は、直前に送った行の再発言にする。
+		# 途中の空行はそのまま何もしない。
+		if caret_line < input_box.get_line_count() - 1:
+			return
+		line = _resendable_text()
+		if line.is_empty():
 			return
 	# 送信してもフォーカスは入力欄に残す (第89段、Philly と
 	# 同じ)。連続して発言できるのが本来の姿で、移動モードへ
 	# 戻るのは Esc / Tab / 地図クリックの役割。
 	mark_list_answered()
-	# 空行は `/**/` にする(最終行の空行は除く)。
-	# Philly の EditSendNullLine にあたる。下書きだけに適用する。
-	var lines := draft.split("\n")
-	for i in range(lines.size()):
-		if lines[i].is_empty() and i < lines.size() - 1:
-			lines[i] = "/**/"
-	var text := "\n".join(lines)
 	if _loud and not _loud_all:
-		_loud_pending = text
+		_loud_pending = line
 		_loud_pending_party = party
-		loud_confirm_requested.emit(text, party)
+		loud_confirm_requested.emit(line, party)
 		return
-	_send_speech_text(text, party)
-	_advance_history()
+	_send_speech_text(line, party)
+	_advance_history(line)
 
 
 func _send_speech_text(text: String, party: bool) -> void:
@@ -4410,34 +4387,22 @@ func _send_speech_text(text: String, party: bool) -> void:
 
 
 func _resendable_text() -> String:
-	## 再発言できる文。直前に送った文が、入力欄の履歴部分に
-	## そのまま残っている時だけ、その文を返す。履歴を消したり
-	## 書き換えたりした場合は再発言しない。
-	if _last_sent_text.is_empty():
-		return ""
-	var history := input_box.text.left(_history_boundary)
-	# 送信後に advance が末尾へ足した改行を1つ除いて比べる。
-	if history.ends_with("\n"):
-		history = history.left(history.length() - 1)
-	if history == _last_sent_text or history.ends_with("\n" + _last_sent_text):
-		return _last_sent_text
-	return ""
+	## 再発言できる文。直前に送った行をそのまま返す (行単位)。
+	## 履歴を消した時は _last_sent_text も消えるので、再発言しない。
+	return _last_sent_text
 
 
-func _advance_history() -> void:
-	## 送った文を履歴に入れ、境界を末尾まで進める。
+func _advance_history(sent_line: String = "") -> void:
+	## 送信後の後始末。送った行を再発言の対象として覚え、
+	## 境界を末尾まで進める (入力欄の全文が履歴になる)。
 	## キャレットを末尾に置き、表示も末尾までスクロールする。
 	## 追加発言があれば、新しい下書きとして先に入れておく
 	## (Philly の送信後の AddLine(TalkAdd))。
-	# 再発言の時は下書きが空のまま呼ばれるので、直前の文を
-	# 上書きしない (空でない時だけ覚え直す)。
-	var sent := PhiInputHistory.draft_of(input_box.text, _history_boundary)
-	if not sent.is_empty():
-		_last_sent_text = sent
+	if not sent_line.is_empty():
+		_last_sent_text = sent_line
 	var result := PhiInputHistory.advance(input_box.text, _history_boundary)
 	input_box.text = str(result["text"])
 	_history_boundary = int(result["boundary"])
-	_sync_input_snapshot()
 	var last := maxi(input_box.get_line_count() - 1, 0)
 	input_box.set_caret_line(last, true, true, 0, false)
 	input_box.set_caret_column(input_box.get_line(last).length())
@@ -4445,11 +4410,11 @@ func _advance_history() -> void:
 
 
 func clear_input_history() -> void:
-	## 履歴部分だけを消し、下書きは残す。
+	## 履歴部分だけを消し、下書きは残す。再発言の対象も消す。
+	_last_sent_text = ""
 	var result := PhiInputHistory.clear_history(input_box.text, _history_boundary)
 	input_box.text = str(result["text"])
 	_history_boundary = int(result["boundary"])
-	_sync_input_snapshot()
 	var last := maxi(input_box.get_line_count() - 1, 0)
 	input_box.set_caret_line(last, true, true, 0, false)
 	input_box.set_caret_column(input_box.get_line(last).length())
@@ -4652,7 +4617,6 @@ func set_input_draft(text: String) -> void:
 	## (ログ編集の「発言欄にコピー」用)。
 	input_box.text = text
 	_history_boundary = PhiInputHistory.clamp_boundary(input_box.text, 0)
-	_sync_input_snapshot()
 	var last := maxi(input_box.get_line_count() - 1, 0)
 	input_box.set_caret_line(last, true, true, 0, false)
 	input_box.set_caret_column(input_box.get_line(last).length())

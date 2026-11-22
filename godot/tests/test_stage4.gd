@@ -156,14 +156,17 @@ func _test_input_history() -> void:
 	var cleared := PhiInputHistory.clear_history("hello\nworld", 6)
 	_check_eq(str(cleared["text"]), "world", "history clear keeps draft")
 	_check_eq(int(cleared["boundary"]), 0, "history clear boundary")
-	# 送信済みの行を書き換えると、その行が下書きに戻る。
-	_check_eq(PhiInputHistory.retreat_boundary("bgm NEO_town\n", "bgm NEO_rest1\n", 13), 0, "history retreat edited sent line")
-	_check_eq(PhiInputHistory.retreat_boundary("one\ntwo\n", "one\n2\n", 8), 4, "history retreat second line")
-	_check_eq(PhiInputHistory.retreat_boundary("one\ntwo\n", "one\nto\n", 8), 4, "history retreat deletion in history")
-	# 下書きだけの編集では境界は動かない。
-	_check_eq(PhiInputHistory.retreat_boundary("one\ntw", "one\ntwo", 4), 4, "history no retreat in draft")
-	_check_eq(PhiInputHistory.retreat_boundary("one\ntwo\n", "one\ntwo\n", 8), 8, "history no change")
-	_check_eq(PhiInputHistory.retreat_boundary("one\ntwo\n", "one\ntwo", 8), 7, "history shrink clamps")
+	# 送信は行単位 (2026-11-23 ユーザー決定)。Enter を押した行
+	# だけが送られ、境界の後退 (旧仕様) は無い。行の取り出しは
+	# line_at が担う。
+	_check_eq(PhiInputHistory.line_at("one\ntwo\nthree", 0), "one", "history line first")
+	_check_eq(PhiInputHistory.line_at("one\ntwo\nthree", 1), "two", "history line middle")
+	_check_eq(PhiInputHistory.line_at("one\ntwo\nthree", 2), "three", "history line last")
+	_check_eq(PhiInputHistory.line_at("one\ntwo\n", 2), "", "history line trailing empty")
+	_check_eq(PhiInputHistory.line_at("one\ntwo", 99), "two", "history line clamp high")
+	_check_eq(PhiInputHistory.line_at("one\ntwo", -1), "one", "history line clamp low")
+	_check_eq(PhiInputHistory.line_at("", 0), "", "history line empty text")
+	_check_eq(PhiInputHistory.line_at("solo", 0), "solo", "history line single")
 	# 200行で古い方から切り捨てる。
 	var long_text := ""
 	for i in range(250):
@@ -388,7 +391,7 @@ func _test_clear_cache() -> void:
 
 
 func _test_version() -> void:
-	_check_eq(PhiVersion.VERSION, "0.5.25", "version number")
+	_check_eq(PhiVersion.VERSION, "0.5.26", "version number")
 	var action: Dictionary = PhiActions.get_action("VersionInfo")
 	_check_eq(str(action.get("caption", "")), "NeoPHI " + PhiVersion.VERSION, "version menu caption")
 	_check_eq(str(action.get("hint", "")), "バージョン情報を表示する", "version menu hint kept")
