@@ -19,6 +19,17 @@ const _MAX_MAP_CHARS := 1000
 const _I64_MIN := -9223372036854775808
 const _I64_MAX := 9223372036854775807
 
+## マップの高さ (起伏) の印 (1段 = 8px)。'1'=+1段 '2'=+2段
+## '3'=+3段 '9'=-1段 (窪地)。届き方は経路で異なる: 従来 #map
+## (5x5) ではセル対の2バイト目、#m57/#m121 では `#ex-switch
+## height=1` 申告時に M 行の直後へ来る専用の H 行の文字。
+const HEIGHT_MARKERS := {0x31: 1, 0x32: 2, 0x33: 3, 0x39: -1}
+
+
+static func height_for_marker(byte: int) -> int:
+	## 高さの印 → 段数。印でなければ 0 ('0' も通常 = 0)。
+	return int(HEIGHT_MARKERS.get(byte, 0))
+
 
 static func _is_digit(ch: int) -> bool:
 	return 0x30 <= ch and ch <= 0x39
@@ -298,6 +309,12 @@ func feed(raw: PackedByteArray) -> Array[Dictionary]:
 			return []
 		if _starts_with_bytes(raw, "#m121 M"):
 			_parse_m121_m(raw)
+			return []
+		if _starts_with_bytes(raw, "#m57 H"):
+			_parse_mx_h(raw, 7, 7)
+			return []
+		if _starts_with_bytes(raw, "#m121 H"):
+			_parse_mx_h(raw, 11, 8)
 			return []
 		if _starts_with_bytes(raw, "#map M"):
 			_parse_map_m(raw)
@@ -726,8 +743,28 @@ func _parse_mx_m(raw: PackedByteArray, size: int, chip_bytes: int, chip_offset: 
 		return
 	var cells: Array[Dictionary] = []
 	for i in range(0, chip_bytes, 2):
-		cells.append({"chip": raw[chip_offset + i], "attr": raw[chip_offset + i + 1]})
+		var cell := {"chip": raw[chip_offset + i], "attr": raw[chip_offset + i + 1]}
+		cells.append(cell)
 	_map_cells = cells
+
+
+func _parse_mx_h(raw: PackedByteArray, size: int, offset: int) -> void:
+	## `#m57 H` / `#m121 H` (高さ行)。ログイン時に
+	## `#ex-switch height=1` を申告したときだけ、M 行の直後に
+	## セル数ぶんの文字が届く ('0'=通常、'1'..'3'=丘、'9'=窪地、
+	## 見えないセルは '0')。並びは M 行と同一順で、保留中の
+	## セルへ段数を書き込む。M 行が無い・大きさが違う場合は捨てる。
+	if _map_cells == null or _map_size != size:
+		return
+	var cells: Array = _map_cells
+	var count := mini(size * size, cells.size())
+	count = mini(count, raw.size() - offset)
+	if count <= 0:
+		return
+	for i in range(count):
+		var h := height_for_marker(raw[offset + i])
+		if h != 0:
+			(cells[i] as Dictionary)["height"] = h
 
 
 func _parse_map_m(raw: PackedByteArray) -> void:
@@ -752,7 +789,14 @@ func _parse_map_m(raw: PackedByteArray) -> void:
 			attr |= 0x60
 		if chip_idx + 51 < raw.size() and raw[chip_idx + 51] == 0x2D: # -
 			attr |= 0x08
-		cells.append({"chip": chip, "attr": attr})
+		var cell := {"chip": chip, "attr": attr}
+		# 対の2文字目が高さ印なら段数を保持する。表示チップは
+		# 従来どおり1文字目 (chip) から解決される。
+		if chip_idx + 1 < raw.size():
+			var hh := height_for_marker(raw[chip_idx + 1])
+			if hh != 0:
+				cell["height"] = hh
+		cells.append(cell)
 	_map_cells = cells
 
 

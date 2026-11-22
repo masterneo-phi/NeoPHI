@@ -96,6 +96,29 @@ const FALLBACK_CHIP_COLORS := {
 }
 const FALLBACK_CHIP_DEFAULT := Color(0.251, 0.251, 0.251)
 
+## マップの高さ (起伏) の自動生成。パーサがセルに付けた段数
+## (-1〜+3) から、既存チップ無改変で色調・縁の影・段面の帯を
+## 合成する。パラメータは検証済みサンプル (gfx_lab の
+## render_auto_relief.py / render_auto_relief_move2.py) と一致させる。
+## 1段の高さ (px)。
+const RELIEF_STEP := 8
+## 段ごとの上面の色調倍率 (サンプルの TONE。+3 は +2 からの延長)。
+const RELIEF_TONES := {-1: 0.80, 1: 1.07, 2: 1.15, 3: 1.22}
+## 段面の帯の土色 (サンプルの EARTH)。
+const RELIEF_EARTH_R := 98.0
+const RELIEF_EARTH_G := 74.0
+const RELIEF_EARTH_B := 48.0
+## 段差を登るときのホップの浮き (px)。段差1段あたりのピーク量と
+## その上限 (複数段を一度に登っても浮きすぎない)。
+const RELIEF_HOP_PX_PER_STEP := 5.0
+const RELIEF_HOP_MAX_PX := 10.0
+## 段差を降りるときの落下曲線の指数。前半は高さを保ち気味に、
+## 後半で速く落ちる (q = p^RELIEF_DROP_EXP)。
+const RELIEF_DROP_EXP := 2.0
+## キャラの足元 (スプライト下端) の、セル上端からのずれ (px)。
+## 基準 y = row*32 + 5、スプライト高 32 なので下端は +37。
+const CHARA_FOOT := 37
+
 ## 浮き数字の色(種類ごと)。Python 版 gui.py の _FLOAT_COLORS と同じ。
 const FLOAT_COLORS := {
 	"dealt": Color(1.0, 0.824, 0.247),
@@ -253,6 +276,10 @@ var _pending_move := Vector2i(999, 999)
 var _pending_move_at := -100000
 var _scroll_from := Vector2.ZERO  # ずれ (セル単位 = プレイヤーの移動方向)
 var _scroll_t := 1.0  # 0→1 で進む。1 で完了。
+## スクロール前後の中心セルの段数。自キャラの高さずれを
+## スクロールの進みに合わせて補間するために覚える。
+var _scroll_from_h := 0
+var _scroll_to_h := 0
 const SCROLL_DURATION := 0.17
 
 
@@ -359,6 +386,14 @@ func _detect_scroll(new_event: Dictionary) -> void:
 ## 名前、無ければ既定シート (Python 版と同じ解決)。
 var _chip_texs: Array = [null, null, null, null]
 var _defines: Dictionary = {}
+## 起伏の自動生成のキャッシュ。シートを取り直すたびに捨てる。
+## _sheet_images: シートの instance id → Image (RGBA8)。
+## _toned_cache: [sheet_id, index, 段数] → 32x48 のバイト列。
+## _relief_cache: セルの合成キー → Texture2D。
+var _sheet_images: Dictionary = {}
+var _toned_cache: Dictionary = {}
+var _toned_tex_cache: Dictionary = {}
+var _relief_cache: Dictionary = {}
 var _items_tex: Texture2D = null
 
 ## 浮き数字などの基準点。名前 → 地図の絵の中の座標(中心x、頭の上y)。
@@ -628,6 +663,12 @@ func _mark_self(event: Dictionary, dim: int) -> void:
 func set_map(event: Dictionary, p_assets: GameAssets, p_mapset: String, defines: Dictionary = {}) -> void:
 	_detect_scroll(event)
 	_mark_self(event, grid_dim(int(event.get("size", 7))))
+	# 中心セルの段数の遷移を覚える (自キャラの高さ補間用)。
+	_scroll_from_h = _scroll_to_h
+	var ndim := grid_dim(int(event.get("size", 7)))
+	var ncells: Array = event.get("cells", [])
+	if not ncells.is_empty():
+		_scroll_to_h = height_at(ncells, ndim, ndim / 2, ndim / 2)
 	_event = event
 	_title_rect.visible = false
 	if compass != null:
@@ -655,6 +696,7 @@ func set_map(event: Dictionary, p_assets: GameAssets, p_mapset: String, defines:
 	_anchors = {}
 	_center_anchor = null
 	var head_top := (CHIP_SIZE - CHARA_H) / 2 - CHARA_Y_ABOVE_FLOOR + MAP_TOP
+	var ev_cells: Array = event.get("cells", [])
 	for ch in event.get("chars", []):
 		var cd: Dictionary = ch
 		var nm := PhiTags.strip_tags(str(cd.get("name", ""))).strip_edges()
@@ -665,7 +707,8 @@ func set_map(event: Dictionary, p_assets: GameAssets, p_mapset: String, defines:
 			continue
 		if nm.is_empty():
 			continue
-		var anchor := Vector2(cx * CHIP_SIZE + CHIP_SIZE / 2, cy * CHIP_SIZE + head_top)
+		var anchor := Vector2(cx * CHIP_SIZE + CHIP_SIZE / 2,
+			cy * CHIP_SIZE + head_top + relief_offset_y(ev_cells, dim, cx, cy))
 		_anchors[nm] = anchor
 		if cx == dim / 2 and cy == dim / 2:
 			_center_anchor = anchor
@@ -679,6 +722,10 @@ func set_map(event: Dictionary, p_assets: GameAssets, p_mapset: String, defines:
 ## そのセルの描画は色塗りの代用に落ちる。
 func _load_chip_texs() -> void:
 	_chip_texs = [null, null, null, null]
+	_sheet_images.clear()
+	_toned_cache.clear()
+	_toned_tex_cache.clear()
+	_relief_cache.clear()
 	if assets == null:
 		return
 	_chip_texs[0] = assets.chip(mapset)
@@ -697,6 +744,248 @@ func _any_sheet() -> bool:
 		if tex != null:
 			return true
 	return false
+
+
+# -- 起伏の自動生成 ---------------------------------------------------
+
+func _sheet_image(sheet: Texture2D) -> Variant:
+	## シートの画素 (RGBA8)。色調変換の素。無ければ null。
+	var id := sheet.get_instance_id()
+	if _sheet_images.has(id):
+		return _sheet_images[id]
+	var img := sheet.get_image()
+	if img == null:
+		return null
+	if img.get_format() != Image.FORMAT_RGBA8:
+		img.convert(Image.FORMAT_RGBA8)
+	_sheet_images[id] = img
+	return img
+
+
+func _toned_chip_data(sheet: Texture2D, index: int, h: int) -> PackedByteArray:
+	## シートのチップ index を段数 h で色調変換した 32x48 RGBA。
+	## h = 0 は無変換 (サンプルの toned(0) と同じ)。
+	var key := str(sheet.get_instance_id()) + ":" + str(index) + ":" + str(h)
+	var cached: Variant = _toned_cache.get(key)
+	if cached != null:
+		return cached
+	var out := PackedByteArray()
+	out.resize(CHIP_SIZE * CHIP_HEIGHT * 4)
+	var img: Variant = _sheet_image(sheet)
+	if img != null:
+		var rect := chip_src_rect(index)
+		if rect.size.x > 0:
+			var region: Image = (img as Image).get_region(rect)
+			if region.get_format() != Image.FORMAT_RGBA8:
+				region.convert(Image.FORMAT_RGBA8)
+			var src := region.get_data()
+			out = src
+			if h != 0 and src.size() == out.size():
+				out = src.duplicate()
+				for i in range(0, out.size(), 4):
+					if out[i + 3] == 0:
+						continue
+					var rgb := relief_tone_rgb(float(out[i]), float(out[i + 1]), float(out[i + 2]), h)
+					out[i] = clampi(int(round(rgb[0])), 0, 255)
+					out[i + 1] = clampi(int(round(rgb[1])), 0, 255)
+					out[i + 2] = clampi(int(round(rgb[2])), 0, 255)
+	_toned_cache[key] = out
+	return out
+
+
+func _toned_chip_texture(sheet: Texture2D, index: int, h: int) -> Texture2D:
+	## 色調変換済みチップのテクスチャ (水縁・看板の流用)。
+	var key := "t:" + str(sheet.get_instance_id()) + ":" + str(index) + ":" + str(h)
+	var cached: Variant = _toned_tex_cache.get(key)
+	if cached != null:
+		return cached
+	var img := Image.create_from_data(CHIP_SIZE, CHIP_HEIGHT, false,
+		Image.FORMAT_RGBA8, _toned_chip_data(sheet, index, h))
+	var tex := ImageTexture.create_from_image(img)
+	_toned_tex_cache[key] = tex
+	return tex
+
+
+static func _alpha_over(dst: PackedByteArray, src: PackedByteArray) -> void:
+	## src を dst の上にアルファ合成する (同サイズ前提)。
+	for i in range(0, mini(dst.size(), src.size()), 4):
+		var sa := int(src[i + 3])
+		if sa == 0:
+			continue
+		if sa == 255:
+			dst[i] = src[i]
+			dst[i + 1] = src[i + 1]
+			dst[i + 2] = src[i + 2]
+			dst[i + 3] = 255
+			continue
+		var da := int(dst[i + 3])
+		var inv := 255 - sa
+		var oa := sa + (da * inv) / 255
+		if oa == 0:
+			dst[i + 3] = 0
+			continue
+		dst[i] = clampi((int(src[i]) * sa + (int(dst[i]) * da * inv) / 255) / oa, 0, 255)
+		dst[i + 1] = clampi((int(src[i + 1]) * sa + (int(dst[i + 1]) * da * inv) / 255) / oa, 0, 255)
+		dst[i + 2] = clampi((int(src[i + 2]) * sa + (int(dst[i + 2]) * da * inv) / 255) / oa, 0, 255)
+		dst[i + 3] = oa
+
+
+static func _px_mul(data: PackedByteArray, x: int, y: int, f: float) -> void:
+	var i := (y * CHIP_SIZE + x) * 4
+	if data[i + 3] == 0:
+		return
+	data[i] = clampi(int(round(float(data[i]) * f)), 0, 255)
+	data[i + 1] = clampi(int(round(float(data[i + 1]) * f)), 0, 255)
+	data[i + 2] = clampi(int(round(float(data[i + 2]) * f)), 0, 255)
+
+
+static func relief_apply_overlays(data: PackedByteArray, base: PackedByteArray,
+		north: PackedByteArray, heights: Array, spans: Array) -> void:
+	## サンプルの cell_image と同じ順序で影・段面の帯を data に
+	## 上書きする。heights = [自, 北, 南, 西, 東] の段数、base は
+	## 色調変換だけの自セル (帯の土色の素)、north は北隣の色調
+	## 変換済み (唇の素、無ければ空)、spans は列ごとの帯形状。
+	var h: int = heights[0]
+	var hn: int = heights[1]
+	var hs: int = heights[2]
+	var hw: int = heights[3]
+	var he: int = heights[4]
+	var face := hn > h
+	# 窪みの底はさらに暗く
+	if h == -1 and hn == -1 and hs == -1 and hw == -1 and he == -1:
+		for y in range(CHIP_HEIGHT):
+			for x in range(CHIP_SIZE):
+				_px_mul(data, x, y, 0.93)
+	# 側面の陰影 (段面セルでは端のテーパーに任せる)
+	if not face:
+		if hw < h or (h == -1 and hw > h):
+			var f0w := 0.70 if h == -1 else 0.82
+			for x in range(12):
+				var fw := f0w + (1.0 - f0w) * (float(x) / 11.0)
+				for y in range(CHIP_HEIGHT):
+					_px_mul(data, x, y, fw)
+		if he < h or (h == -1 and he > h):
+			var f0e := 0.70 if h == -1 else 0.82
+			for x in range(12):
+				var fe := f0e + (1.0 - f0e) * (float(x) / 11.0)
+				for y in range(CHIP_HEIGHT):
+					_px_mul(data, CHIP_SIZE - 1 - x, y, fe)
+	# 北縁の柔らかい影
+	if hn < h:
+		for i in range(11):
+			var f := 0.66 + 0.34 * pow(float(i) / 10.0, 1.2)
+			for x in range(CHIP_SIZE):
+				_px_mul(data, x, 16 + i, f)
+	# 窪みの南内縁の光
+	if h == -1 and hs > h:
+		var light := [1.04, 1.07, 1.10, 1.14, 1.17, 1.20]
+		for i in range(light.size()):
+			for x in range(CHIP_SIZE):
+				_px_mul(data, x, 26 + i, light[i])
+	# 段面の帯 (北が高い時、このセルの上部に出る)
+	if face and not north.is_empty():
+		var shadow_a := [52, 32, 16]
+		for x in range(CHIP_SIZE):
+			var span: Array = spans[x]
+			if span.is_empty():
+				continue
+			var fb: int = span[0]
+			var lip: int = span[1]
+			for y in range(fb + 1):
+				var di := (y * CHIP_SIZE + x) * 4
+				var ni := ((32 + y) * CHIP_SIZE + x) * 4
+				if y < lip:
+					# 唇: 上段トーンの草
+					data[di] = north[ni]
+					data[di + 1] = north[ni + 1]
+					data[di + 2] = north[ni + 2]
+					data[di + 3] = north[ni + 3]
+				elif y == lip:
+					# 唇の下の影
+					data[di] = clampi(int(round(float(north[ni]) * 0.5)), 0, 255)
+					data[di + 1] = clampi(int(round(float(north[ni + 1]) * 0.5)), 0, 255)
+					data[di + 2] = clampi(int(round(float(north[ni + 2]) * 0.5)), 0, 255)
+					data[di + 3] = north[ni + 3]
+				else:
+					# 土に寄せた暗帯
+					var t := float(y - lip - 1) / float(maxi(1, fb - lip - 1))
+					var si := ((16 + (y - lip)) * CHIP_SIZE + x) * 4
+					var f := 0.92 - 0.20 * t
+					var n := relief_noise(x, y)
+					data[di] = clampi(int(round((float(base[si]) * 0.5 + RELIEF_EARTH_R * 0.5) * f)) + n, 0, 255)
+					data[di + 1] = clampi(int(round((float(base[si + 1]) * 0.5 + RELIEF_EARTH_G * 0.5) * f)) + n, 0, 255)
+					data[di + 2] = clampi(int(round((float(base[si + 2]) * 0.5 + RELIEF_EARTH_B * 0.5) * f)) + n, 0, 255)
+					data[di + 3] = 255
+			# 足元の落ち影
+			for d in range(3):
+				var y := fb + 1 + d
+				if y >= CHIP_HEIGHT:
+					continue
+				var a: int = int(shadow_a[d])
+				var inv := 255 - a
+				var di := (y * CHIP_SIZE + x) * 4
+				data[di] = (int(data[di]) * inv) / 255
+				data[di + 1] = (int(data[di + 1]) * inv) / 255
+				data[di + 2] = (int(data[di + 2]) * inv) / 255
+				data[di + 3] = maxi(int(data[di + 3]), a + (int(data[di + 3]) * inv) / 255)
+
+
+func relief_cell_texture(cells: Array, dim: int, col: int, row: int) -> Variant:
+	## 起伏合成済みのセル画像 (32x48) のテクスチャ。シートが無い
+	## 場合は null (呼び出し側は従来描画に落とす)。
+	var idx := row * dim + col
+	if idx < 0 or idx >= cells.size():
+		return null
+	var cell: Dictionary = cells[idx]
+	var sheet := _sheet_for(cell)
+	if sheet == null:
+		return null
+	var h := height_at(cells, dim, col, row)
+	var hn := height_at(cells, dim, col, row - 1)
+	var hs := height_at(cells, dim, col, row + 1)
+	var hw := height_at(cells, dim, col - 1, row)
+	var he := height_at(cells, dim, col + 1, row)
+	var indices := chip_indices(int(cell.get("chip", 0)))
+	var north_cell: Dictionary = cells[clampi(row - 1, 0, dim - 1) * dim + col]
+	var north_sheet := _sheet_for(north_cell)
+	var north_indices := chip_indices(int(north_cell.get("chip", 0)))
+	var key := str([sheet.get_instance_id(), indices, h, hn, hs, hw, he,
+		north_sheet.get_instance_id() if north_sheet != null else 0, north_indices,
+		relief_is_face(cells, dim, col - 1, row), relief_is_face(cells, dim, col + 1, row)])
+	var cached: Variant = _relief_cache.get(key)
+	if cached != null:
+		return cached
+	var data := PackedByteArray()
+	data.resize(CHIP_SIZE * CHIP_HEIGHT * 4)
+	for index in indices:
+		_alpha_over(data, _toned_chip_data(sheet, index, h))
+	var base := data.duplicate()
+	var north := PackedByteArray()
+	if north_sheet != null:
+		north.resize(CHIP_SIZE * CHIP_HEIGHT * 4)
+		for index in north_indices:
+			_alpha_over(north, _toned_chip_data(north_sheet, index, hn))
+	var spans: Array = []
+	for x in range(CHIP_SIZE):
+		spans.append(relief_face_span(cells, dim, col, row, x) if hn > h else [])
+	relief_apply_overlays(data, base, north, [h, hn, hs, hw, he], spans)
+	var img := Image.create_from_data(CHIP_SIZE, CHIP_HEIGHT, false, Image.FORMAT_RGBA8, data)
+	var tex := ImageTexture.create_from_image(img)
+	_relief_cache[key] = tex
+	return tex
+
+
+func _draw_cell_image(tex: Texture2D, col: int, row: int, z: float, dy_px: int = 0) -> void:
+	## 32x48 のセル画像を _draw_chip と同じ位置に描く。
+	var dx := col * CHIP_SIZE * z
+	var dy := (row * CHIP_SIZE - (CHIP_HEIGHT - CHIP_SIZE) + MAP_TOP + dy_px) * z
+	draw_texture_rect_region(tex, Rect2(dx, dy, CHIP_SIZE * z, CHIP_HEIGHT * z),
+		Rect2(0, 0, CHIP_SIZE, CHIP_HEIGHT))
+
+
+## テスト用: 起伏キャッシュの大きさ。
+func debug_relief_cache_size() -> int:
+	return _relief_cache.size()
 
 
 ## グラキャッシュ初期化の後、持っている絵を読み直す。
@@ -948,6 +1237,137 @@ static func arrange_row(chars: Array) -> Array:
 	return out
 
 
+static func cell_height(cell: Dictionary) -> int:
+	## セルの段数 (-1〜+3)。印の無いセルは 0。
+	return int(cell.get("height", 0))
+
+
+static func height_at(cells: Array, dim: int, col: int, row: int) -> int:
+	## セル (col,row) の段数。範囲外は端のセルの高さで延長する
+	## (サンプルの height_at と同じ。画面端で段差が誤爆しない)。
+	var c := clampi(col, 0, dim - 1)
+	var r := clampi(row, 0, dim - 1)
+	var idx := r * dim + c
+	if idx < 0 or idx >= cells.size():
+		return 0
+	return cell_height(cells[idx])
+
+
+static func relief_offset_y(cells: Array, dim: int, col: int, row: int) -> int:
+	## そのセルの高さぶんの描画 y ずれ (px)。高いほど上へ。
+	return -RELIEF_STEP * height_at(cells, dim, col, row)
+
+
+static func relief_scroll_dy(from_h: int, to_h: int, p: float) -> float:
+	## スクロール中に段差を渡る自キャラの高さずれ (px)。p は
+	## 地図のイーズ済み進み具合 (0〜1)。端点では両端の段高に
+	## ちょうど一致する。
+	## 登り: 線形補間に放物線の浮き (ホップ) を加える。浮きは
+	## 中盤 (p=0.5) で最大、段差1段あたり RELIEF_HOP_PX_PER_STEP、
+	## RELIEF_HOP_MAX_PX で頭打ち。
+	## 降り: 補間係数を p^RELIEF_DROP_EXP にして、前半は高さを
+	## 保ち気味に後半でストンと落ちる (行き過ぎはしない)。
+	var dh := to_h - from_h
+	if dh > 0:
+		var hop := minf(RELIEF_HOP_PX_PER_STEP * float(dh),
+			RELIEF_HOP_MAX_PX)
+		return -float(RELIEF_STEP) * lerpf(float(from_h), float(to_h), p) \
+			- hop * 4.0 * p * (1.0 - p)
+	if dh < 0:
+		var q := pow(p, RELIEF_DROP_EXP)
+		return -float(RELIEF_STEP) * lerpf(float(from_h), float(to_h), q)
+	return -float(RELIEF_STEP) * float(from_h)
+
+
+static func relief_is_face(cells: Array, dim: int, col: int, row: int) -> bool:
+	## 北の隣が高い = このセルの上部に段面の帯が出る。
+	return height_at(cells, dim, col, row - 1) > height_at(cells, dim, col, row)
+
+
+static func relief_involved(cells: Array, dim: int, col: int, row: int) -> bool:
+	## 起伏の自動生成が要るセルか。自他の段数と、左右の段面の
+	## テーパー (隣の段面の有無) に関わるセルだけが対象で、
+	## 高さの無い地図では全セル false になり従来描画と一致する。
+	if height_at(cells, dim, col, row) != 0:
+		return true
+	if height_at(cells, dim, col, row - 1) != 0 or height_at(cells, dim, col, row + 1) != 0:
+		return true
+	if height_at(cells, dim, col - 1, row) != 0 or height_at(cells, dim, col + 1, row) != 0:
+		return true
+	return relief_is_face(cells, dim, col - 1, row) or relief_is_face(cells, dim, col + 1, row)
+
+
+static func relief_face_span(cells: Array, dim: int, col: int, row: int, x: int) -> Array:
+	## 段面の帯の列 x の形状 [下端行 fb, 唇の厚み lip]。帯が出ない
+	## 列 (端の先端) は空配列。サンプルの式そのまま。
+	var s := 1.0
+	if not relief_is_face(cells, dim, col - 1, row):
+		s = minf(s, pow((float(x) + 1.0) / 10.0, 1.1))
+	if not relief_is_face(cells, dim, col + 1, row):
+		s = minf(s, pow((float(CHIP_SIZE - x)) / 10.0, 1.1))
+	var fb := int(round(3.0 + 9.0 * s))
+	var lip := int(round(3.0 * s))
+	if fb <= lip + 1:
+		return []
+	return [fb, lip]
+
+
+static func relief_noise(x: int, y: int) -> int:
+	## サンプルの帯のざらつき (決定的なハッシュ)。
+	return ((x * 73856093) ^ (y * 19349663)) % 13 - 6
+
+
+static func relief_tone_rgb(r: float, g: float, b: float, h: int) -> Array:
+	## サンプル (render_auto_relief.py の toned()) の色調変換。
+	## 戻り値は [r, g, b] (0〜255、未クランプの丸め前)。
+	## 暗いピクセル (輝度 0.30 未満) でのみ、丘側には小さな加算
+	## 成分、窪地には追加の彩度落としを混ぜる (全チップ評価で
+	## 暗いチップの段差が乗算だけでは消えたため)。Field の草
+	## (輝度 ≈ 0.5) では補正は 0 で、サンプルと完全一致する。
+	var f := float(RELIEF_TONES.get(h, 1.0))
+	var nr := r * f
+	var ng := g * f
+	var nb := b * f
+	if h == -1:
+		var lum := 0.35 * nr + 0.5 * ng + 0.15 * nb
+		nr = nr * 0.85 + lum * 0.15
+		ng = ng * 0.85 + lum * 0.15
+		nb = nb * 0.9 + lum * 0.1 + 4.0
+	var lum2 := (0.35 * nr + 0.5 * ng + 0.15 * nb) / 255.0
+	var dark := clampf((0.30 - lum2) / 0.30, 0.0, 1.0)
+	dark = pow(dark, 1.5)
+	if dark > 0.0:
+		if h > 0:
+			var add := 7.0 * float(h) * dark
+			nr += add
+			ng += add
+			nb += add * 0.9
+		elif h == -1:
+			var lum3 := 0.35 * nr + 0.5 * ng + 0.15 * nb
+			var mix := 0.35 * dark
+			nr = lerpf(nr, lum3, mix)
+			ng = lerpf(ng, lum3, mix)
+			nb = lerpf(nb, lum3, mix) + 3.0 * dark
+	return [nr, ng, nb]
+
+
+static func char_pass(ch: Dictionary, cells: Array, dim: int, dy_px: float) -> int:
+	## キャラを描く行パス。高さの絡まないキャラは従来の
+	## char_draw_row と同じ (高さ 0 の地図では描画が完全一致)。
+	## 高さのあるセルでは足元基準にする: 表示上の足元
+	## (スプライト下端 + 高さずれ) の属する行で描く。行単位の
+	## ままだと、段差の入口で段面の帯がキャラを横切って一瞬
+	## 奥に隠れる (サンプルで実証され、足元基準で解消済み)。
+	var base := char_draw_row(ch, dim)
+	var cx := int(ch.get("x", 0))
+	var cy := int(ch.get("y", 0))
+	if height_at(cells, dim, cx, cy) == 0 and dy_px == 0.0:
+		return base
+	var foot_row := cy + (1 if is_big(ch.get("gigant")) else 0)
+	var foot := foot_row * CHIP_SIZE + CHARA_FOOT + int(round(dy_px))
+	return clampi(foot / CHIP_SIZE, 0, dim - 1)
+
+
 static func chara_src_rect(dir_value: Variant, gigant: Variant, anim_frame: int = 0, large: bool = false) -> Rect2:
 	## キャラスプライトのソース矩形。
 	## 96px幅レイアウト: [小frame0=16][小frame1=16][大frame0=32][大frame1=32]。
@@ -1024,6 +1444,13 @@ func _draw_cell_row(cells: Array, dim: int, z: float, row: int, water: Variant) 
 	## 1行分のセル (ベースチップ・水縁・看板・アイテム) を描く。
 	## 滑らかスクロールの「前の地図」パスと共用する (第64段)。
 	var half := CHIP_SIZE / 2
+	# 起伏の対象セル (この行)。高さの無い地図では全て false で、
+	# 以下の分岐は全て従来どおりになる。
+	var relief: Array = []
+	var rheights: Array = []
+	for col in range(dim):
+		relief.append(relief_involved(cells, dim, col, row))
+		rheights.append(height_at(cells, dim, col, row))
 	# 1. ベースチップ
 	for col in range(dim):
 		var idx := row * dim + col
@@ -1034,6 +1461,11 @@ func _draw_cell_row(cells: Array, dim: int, z: float, row: int, water: Variant) 
 		if sheet == null:
 			_fallback_cell(cell, col, row, z)
 			continue
+		if relief[col]:
+			var rtex: Variant = relief_cell_texture(cells, dim, col, row)
+			if rtex != null:
+				_draw_cell_image(rtex, col, row, z)
+				continue
 		for chip_index in chip_indices(int(cell.get("chip", 0))):
 			_draw_chip(sheet, chip_index, col, row, z)
 	# 1.5 水縁overlay
@@ -1055,11 +1487,18 @@ func _draw_cell_row(cells: Array, dim: int, z: float, row: int, water: Variant) 
 				var hit: Variant = water_quarter_chip(q, patterns[q])
 				if hit == null:
 					continue
+				var dx := (cell_x + (q & 1) * half) * z
+				var dy := (cell_y + ((q >> 1) & 1) * half) * z
+				if relief[col]:
+					# 起伏セルでは色調済みチップから quarter を取る。
+					var qtex := _toned_chip_texture(sheet, int(hit[0]), int(rheights[col]))
+					var qrect := Rect2((q & 1) * half,
+						(CHIP_HEIGHT - CHIP_SIZE) + ((q >> 1) & 1) * half, half, half)
+					draw_texture_rect_region(qtex, Rect2(dx, dy, half * z, half * z), qrect)
+					continue
 				var rect := chip_quarter_src_rect(hit[0], hit[1])
 				if rect.size.x <= 0:
 					continue
-				var dx := (cell_x + (q & 1) * half) * z
-				var dy := (cell_y + ((q >> 1) & 1) * half) * z
 				draw_texture_rect_region(sheet, Rect2(dx, dy, half * z, half * z), rect)
 	# 2. 看板overlay
 	for col in range(dim):
@@ -1071,7 +1510,12 @@ func _draw_cell_row(cells: Array, dim: int, z: float, row: int, water: Variant) 
 			continue
 		var sheet := _sheet_for(cell)
 		if sheet != null:
-			_draw_chip(sheet, _board_chip_index(int(cell.get("chip", 0))), col, row, z)
+			if relief[col]:
+				var btex := _toned_chip_texture(sheet,
+					_board_chip_index(int(cell.get("chip", 0))), int(rheights[col]))
+				_draw_cell_image(btex, col, row, z, -RELIEF_STEP * int(rheights[col]))
+			else:
+				_draw_chip(sheet, _board_chip_index(int(cell.get("chip", 0))), col, row, z)
 	# 3. アイテムoverlay
 	for col in range(dim):
 		var idx := row * dim + col
@@ -1080,7 +1524,8 @@ func _draw_cell_row(cells: Array, dim: int, z: float, row: int, water: Variant) 
 		var cell: Dictionary = cells[idx]
 		if (int(cell.get("attr", 0)) & 0x70) == 0:
 			continue
-		_draw_item(cell, col, row, z)
+		_draw_item(cell, col, row, z,
+			-RELIEF_STEP * int(rheights[col]) if relief[col] else 0)
 
 
 func _draw() -> void:
@@ -1134,16 +1579,18 @@ func _draw() -> void:
 
 	for row in range(dim):
 		_draw_cell_row(cells, dim, z, row, water)
-		# 4. キャラ(この行)
+		# 4. キャラ(この行)。高さのあるセルでは足元基準の行で
+		# 描き、高さぶん y をずらす。
 		var row_chars: Array = []
 		for ch in chars:
-			if char_draw_row(ch, dim) == row and 0 <= int(ch.get("x", -1)) and int(ch.get("x", -1)) < dim:
+			if char_pass(ch, cells, dim, _chara_dy(ch, cells, dim, scrolling)) == row \
+					and 0 <= int(ch.get("x", -1)) and int(ch.get("x", -1)) < dim:
 				row_chars.append(ch)
 		for pair in arrange_row(row_chars):
 			var ch: Dictionary = pair[0]
-			var po := Vector2.ZERO
+			var po := Vector2(0.0, _chara_dy(ch, cells, dim, scrolling) * z)
 			if scrolling and bool(ch.get("__self", false)):
-				po = -so  # 自キャラは中央に留める
+				po += -so  # 自キャラは中央に留める
 			_draw_state_icon(ch, pair[1], z, true, po)
 			_draw_fx_aura(ch, pair[1], z, po)
 			_draw_chara(ch, pair[1], z, null, Color.WHITE, po)
@@ -1180,6 +1627,20 @@ func _draw() -> void:
 	# 8. DM 演出拡張 (FX) のオーバーレイ (暗転→発光→画像→文字→
 	# ワイプの順。ワイプが最前面)。
 	_draw_fx_overlays()
+
+
+func _chara_dy(ch: Dictionary, cells: Array, dim: int, scrolling: bool) -> float:
+	## キャラの高さずれ (px、拡大前)。自キャラはスクロール中に
+	## 中心セルの段数の間を、地図のイーズと同じ進み具合で補間
+	## する (relief_scroll_dy: 登りはホップ、降りは後半に落ちる
+	## 曲線)。それ以外は自セルの段数。
+	if bool(ch.get("__self", false)):
+		if scrolling and _scroll_from_h != _scroll_to_h:
+			var p := 1.0 - pow(1.0 - _scroll_t, 3.0)
+			return relief_scroll_dy(_scroll_from_h, _scroll_to_h, p)
+		return -float(RELIEF_STEP) * float(_scroll_to_h)
+	return float(relief_offset_y(cells, dim,
+		int(ch.get("x", 0)), int(ch.get("y", 0))))
 
 
 func _scroll_mask_rect(ox: float, oy: float, dim: int, z: float) -> Rect2:
@@ -1244,6 +1705,11 @@ func _draw_chip(tex: Texture2D, index: int, col: int, row: int, z: float) -> voi
 func _fallback_cell(cell: Dictionary, col: int, row: int, z: float) -> void:
 	var indices := chip_indices(int(cell.get("chip", 0)))
 	var color: Color = FALLBACK_CHIP_COLORS.get(indices[0], FALLBACK_CHIP_DEFAULT)
+	var h := cell_height(cell)
+	if h != 0:
+		# 絵が無いセルの代用色にも段の色調だけは付ける。
+		var f := float(RELIEF_TONES.get(h, 1.0))
+		color = Color(minf(color.r * f, 1.0), minf(color.g * f, 1.0), minf(color.b * f, 1.0), color.a)
 	draw_rect(Rect2(col * CHIP_SIZE * z, (row * CHIP_SIZE + MAP_TOP) * z, CHIP_SIZE * z, CHIP_SIZE * z), color)
 
 
@@ -1251,10 +1717,10 @@ func _board_chip_index(chip_byte: int) -> int:
 	return BOARD_CHIP_HARD if chip_byte in _HARD_BOARD_CHIPS else BOARD_CHIP_SOFT
 
 
-func _draw_item(cell: Dictionary, col: int, row: int, z: float) -> void:
+func _draw_item(cell: Dictionary, col: int, row: int, z: float, dy_px: int = 0) -> void:
 	var no := (int(cell.get("attr", 0)) & 0x70) >> 4
 	var dst_x := col * CHIP_SIZE
-	var dst_y := row * CHIP_SIZE + MAP_TOP
+	var dst_y := row * CHIP_SIZE + MAP_TOP + dy_px
 	if _items_tex == null:
 		draw_rect(Rect2((dst_x + 8) * z, (dst_y + 8) * z, 16 * z, 16 * z), Color(1.0, 1.0, 0.78))
 		return
@@ -1621,13 +2087,15 @@ func _draw_labels(chars: Array, dim: int, z: float) -> void:
 			big_cells[Vector2i(x, y)] = true
 	var font_size := PhiFont.ui_size_for_zoom(int(z))
 	var mask := _name_mask_style(z)
+	var lcells: Array = _event.get("cells", [])
 	for cell_key in per_cell:
 		var cell_pos: Vector2i = cell_key
 		var chara_name: String = per_cell[cell_key]
 		# 2x2 の敵は名前を 2 マス分の中心に置く。
 		var center_off := CHIP_SIZE / 2 if big_cells.has(cell_key) else 0
 		var x := (cell_pos.x * CHIP_SIZE + CHIP_SIZE / 2 + center_off) * z
-		var y := (cell_pos.y * CHIP_SIZE + int(CHIP_SIZE * 0.6) + MAP_TOP) * z
+		var y := (cell_pos.y * CHIP_SIZE + int(CHIP_SIZE * 0.6) + MAP_TOP
+			+ relief_offset_y(lcells, dim, cell_pos.x, cell_pos.y)) * z
 		var ts := name_font.get_string_size(chara_name, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size)
 		var pos := Vector2(x - ts.x / 2.0, y + name_font.get_ascent(font_size))
 		var pad_x := 5.0 * z
@@ -1931,7 +2399,9 @@ func _draw_ghosts(row: int, dim: int, z: float) -> void:
 		if step >= GHOST_STEPS:
 			continue
 		var alpha := 1.0 - float(step) / GHOST_STEPS
-		_draw_chara(gch, 0, z, g["tex"], Color(1, 1, 1, alpha))
+		var gcells: Array = _event.get("cells", [])
+		var gdy := float(relief_offset_y(gcells, dim, gx, int(gch.get("y", 0))))
+		_draw_chara(gch, 0, z, g["tex"], Color(1, 1, 1, alpha), Vector2(0.0, gdy * z))
 
 
 func _draw_effects(dim: int, z: float) -> void:
