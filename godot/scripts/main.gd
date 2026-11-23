@@ -773,6 +773,33 @@ func _apply_chrome_size() -> void:
 		_plus_button.add_theme_font_size_override("font_size", chrome_size)
 	if _priv_window != null:
 		_priv_window.apply_font_size(maxi(size, 15))
+	_refresh_dialog_themes()
+
+
+func _refresh_dialog_themes() -> void:
+	## 作り済みのダイアログ/窓へ、現在のテーマを付け直す。
+	## テーマは作った時点で固定されるため、フォント設定
+	## (MenuFontSize) を変えても、付け直さないと本文の文字が
+	## 古い大きさのまま残る (りんぐ報告、2026-11-23)。
+	## 個室窓とファイル選択は倍率連動が指定なので対象外。
+	var wins: Array[Window] = []
+	for win in [_ask_dialog, _transfer_dialog, _import_notice,
+			_about_dialog, _update_dialog, _loud_dialog,
+			_shortcut_dialog, _connect_dialog, _sayall_dialog,
+			_talk_add_dialog, _map_size_dialog, _display_size_dialog,
+			_alt_confirm_dialog, _mm_confirm, _mm_text_dialog,
+			_image_window, _eagle_window, _medit_window,
+			_sound_test_window, _chip_viewer, _chara_viewer,
+			_unew_panel]:
+		if win != null:
+			wins.append(win)
+	if _register_dialog != null:
+		_register_dialog.theme = _register_dialog_theme()
+	if wins.is_empty():
+		return
+	var dialog_theme := _dialog_theme()
+	for win in wins:
+		win.theme = dialog_theme
 
 
 func _apply_args(args: Dictionary) -> void:
@@ -1257,7 +1284,7 @@ func _dialog_theme() -> Theme:
 	## 日本語フォント入りのテーマを別に作る。
 	var theme := Theme.new()
 	theme.default_font = _font
-	var size := _applied_font_size if _applied_font_size > 0 else 15
+	var size := _dialog_body_size()
 	theme.default_font_size = size
 	theme.set_font("font", "Label", _font)
 	theme.set_font_size("font_size", "Label", size)
@@ -1322,8 +1349,11 @@ func _dialog_theme() -> Theme:
 
 
 func _dialog_body_size() -> int:
-	## ダイアログの本文の文字サイズ(ズーム連動で適用済みの値)。
-	return _applied_font_size if _applied_font_size > 0 else 15
+	## ダイアログの本文の文字サイズ。リストやステータスパネルと
+	## 同じく、全体のフォント設定 (MenuFontSize) に追従させる
+	## (りんぐ報告、2026-11-23。倍率連動のまま残っていて、
+	## 題名だけが大きく見えていた)。
+	return _config.menu_font_size
 
 
 func _title_font_size() -> int:
@@ -1759,6 +1789,8 @@ func _on_tab_edit_requested(mode: String, tab: PhiCharacter) -> void:
 			_medit_window.send_requested.connect(_on_medit_send)
 			_medit_window.cancel_requested.connect(_on_medit_cancel)
 			add_child(_medit_window)
+		# テーマ (下部の説明文やボタン) も表示のたびに付け直す。
+		_medit_window.theme = _dialog_theme()
 		_medit_window.title_size = _title_font_size()
 		_medit_window.body_size = _dialog_body_size()
 		_medit_window.show_editor(tab.tab_title())
@@ -2238,6 +2270,11 @@ func _ask_text(action_name: String) -> void:
 		_ask_edit.text_changed.connect(_on_ask_text_changed)
 		_draggable_title(box, _ask_dialog)
 		add_child(_ask_dialog)
+	# テーマと題名の大きさは作った時点で固定されるので、
+	# 出すたびに現在のフォント設定で付け直す (Pay などの
+	# 説明文が古い大きさのまま残らないように)。
+	_ask_dialog.theme = _dialog_theme()
+	_ask_title.add_theme_font_size_override("font_size", _title_font_size())
 	_ask_action = action_name
 	_ask_numeric = bool(action.get("integer", false))
 	_ask_title.text = str(action["title"])
