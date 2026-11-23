@@ -609,6 +609,43 @@ func _on_tab_register_completed(_display_name: String, _tab: PhiCharacter) -> vo
 	_save_tab_session()
 
 
+func _registered_entry_for_id(host: String, port: int, char_id: String) -> Dictionary:
+	## 接続先と ID が一致する登録済みキャラ。無ければ空の辞書。
+	if char_id.is_empty():
+		return {}
+	for entry in _registered_characters():
+		if str(entry["host"]) == host and int(entry["port"]) == port and str(entry["id"]) == char_id:
+			return entry
+	return {}
+
+
+func _on_tab_auto_register_ready(tab: PhiCharacter) -> void:
+	## 登録ファイルの無いキャラ (手入力の ID など) が接続に成功し、
+	## サーバから名前が届いたので、キャラクター一覧へ登録する
+	## (第134段)。これが無いと手入力キャラは一覧に出ず、タブを
+	## 閉じると再接続の手段が無くなっていた。書き込むのは従来の
+	## `.phirc` の範囲 (ID と接続先) だけで、パスワード等は保存
+	## しない。
+	var char_id := tab.session.char_id
+	if char_id.is_empty() or tab.player_name().is_empty():
+		return
+	# 同じ接続先+ID の登録が既にあれば、それを尊重して何もしない。
+	if not _registered_entry_for_id(tab.host, tab.port, char_id).is_empty():
+		return
+	var root := PhiCharacters.chara_root(_assets.philly_roots)
+	var made := PhiCharacters.make_display_name(tab.player_name(), PhiCharacters.scan_root(root), root)
+	if not bool(made["ok"]):
+		tab.log_message("error", str(made["error"]))
+		return
+	var display_name := str(made["display_name"])
+	if PhiCharacters.write_phirc(root, display_name, char_id, tab.host, tab.port):
+		tab.log_message("system", "キャラクター一覧に登録しました: %s" % display_name)
+		tab.set_restored_name(display_name)
+		_save_tab_session()
+	else:
+		tab.log_message("error", "ID ファイル(.phirc)の保存に失敗しました。ID は %s です。必ず控えてください。" % char_id)
+
+
 func _import_dialog_theme() -> Theme:
 	## フォルダ選択ダイアログ用のテーマ。標準の FileDialog は
 	## メイン画面のテーマを引き継がず文字が小さくなるため、
@@ -1163,6 +1200,10 @@ func _connect_tab(tab: PhiCharacter, host: String, port: int, char_id: String, u
 		if not _startup_map_style.is_empty():
 			tab.session.map_style = _startup_map_style
 	tab.connect_to(host, port, char_id)
+	# 登録ファイルの無いキャラ (手入力の ID など) は、接続に
+	# 成功した時点で一覧へ登録する対象にしておく (第134段)。
+	# 登録済みのキャラは対象にしない (既存の登録を尊重する)。
+	tab.auto_register_pending = _registered_entry_for_id(host, port, char_id).is_empty()
 	_update_action_states()
 
 
@@ -1458,6 +1499,7 @@ func _create_tab() -> PhiCharacter:
 	tab.transfer_confirm_requested.connect(_on_tab_transfer_confirm.bind(tab))
 	tab.status_changed.connect(_on_tab_status_changed.bind(tab))
 	tab.register_completed.connect(_on_tab_register_completed.bind(tab))
+	tab.auto_register_ready.connect(_on_tab_auto_register_ready.bind(tab))
 	tab.screenshot_requested.connect(_save_screenshot)
 	_tab_container.add_child(tab)
 	_tabs.append(tab)
@@ -2889,8 +2931,10 @@ func _send_priv() -> void:
 
 func _show_connect_dialog(target: PhiCharacter) -> void:
 	## 新しいタブ(target == null)か、未接続のタブへの接続を聞く。
-	## 手入力の ID は常に入力欄が空で、保存しない。登録済み
-	## キャラクターを選んだ時だけ、`.phirc` の ID が入力欄に入る。
+	## 手入力の ID は入力欄が空から始まる。登録済みキャラクターを
+	## 選んだ時だけ、`.phirc` の ID が入力欄に入る。手入力で接続に
+	## 成功したキャラは、サーバから届いた名前で一覧へ登録する
+	## (第134段)。
 	_connect_target = target
 	if _connect_dialog == null:
 		_connect_dialog = ConfirmationDialog.new()

@@ -34,6 +34,9 @@ signal edit_requested(mode: String)
 signal transfer_confirm_requested(host: String, port: int)
 ## 新規キャラクター作成が完了した(表示名を渡す。第7段)。
 signal register_completed(display_name: String)
+## 登録ファイルの無い接続 (手入力の ID など) で、サーバから
+## 名前が届いた (第134段)。Main が一覧への登録を行う。
+signal auto_register_ready
 
 ## 第2段: 移動の繰り返し(Philly classMoveCommand)。
 ## リピートのペーシング起点は「保持の初回送信」: 初回送信から
@@ -100,6 +103,10 @@ var host := ""
 var port := 0
 ## タブセッションから復元したキャラ名。ログインするまで題名に使う。
 var restored_name := ""
+## 登録ファイルの無い接続で、名前が届いたら一覧へ登録する
+## ための印 (第134段)。Main が接続のたびに立て直し、名前を
+## 受け取った時点で下ろして auto_register_ready を出す。
+var auto_register_pending := false
 var unread := false
 
 var _assets: GameAssets = null
@@ -308,6 +315,9 @@ var _log_float_content: MarginContainer = null
 var _input_float_content: MarginContainer = null
 var _float_mode := false
 var _floats_placed := false
+## 既定配置のもとにした地図の大きさ。自動配置 (設定に矩形が
+## 無い) の窓を、地図の大きさの変化で置き直すために覚える。
+var _floats_placed_map_size := Vector2.ZERO
 var _float_drag_panel: PanelContainer = null
 var _float_drag_offset := Vector2.ZERO
 var _float_resize_panel: PanelContainer = null
@@ -1463,13 +1473,22 @@ func apply_ui_style() -> void:
 func _place_floats() -> void:
 	## フロート窓の位置と大きさを設定に合わせる。未設定なら
 	## 既定の置き方 (右上にログ、右下に入力) にする。
+	## 既定の置き方は、その時点の地図の大きさから決まる。
+	## タブを作り直した直後はレイアウトの途中で地図がまだ
+	## 狭いことがあり、その幅で決めた既定が固定されると、
+	## 地図が本来の幅に広がっても窓は狭いままになり、窓幅
+	## から決まる文字まで小さいまま残る (2026-11-23 報告)。
+	## そのため、設定に矩形が無い (自動配置の) 窓は、地図の
+	## 大きさが変わるたびに既定で置き直す。ユーザーが動か
+	## したり大きさを変えたりした窓は、離した時点で設定に
+	## 矩形が残るので、そちらが優先されて置き直されない。
 	if map_view == null or map_view.size.x < 50.0 or map_view.size.y < 50.0:
 		return
 	var mw := map_view.size
 	if _config.log_float_rect.size.x > 0.0 and _config.log_float_rect.size.y > 0.0:
 		_log_float.position = _config.log_float_rect.position
 		_log_float.size = _config.log_float_rect.size
-	elif not _floats_placed:
+	else:
 		var w := clampf(mw.x * 0.44, 320.0, 760.0)
 		var h := clampf(mw.y * 0.58, 200.0, 600.0)
 		_log_float.position = Vector2(mw.x - w - 10.0, 10.0)
@@ -1477,11 +1496,12 @@ func _place_floats() -> void:
 	if _config.input_float_rect.size.x > 0.0 and _config.input_float_rect.size.y > 0.0:
 		_input_float.position = _config.input_float_rect.position
 		_input_float.size = _config.input_float_rect.size
-	elif not _floats_placed:
+	else:
 		var w2 := clampf(mw.x * 0.44, 320.0, 760.0)
 		_input_float.position = Vector2(mw.x - w2 - 10.0, mw.y - 128.0)
 		_input_float.size = Vector2(w2, 118.0)
 	_floats_placed = true
+	_floats_placed_map_size = mw
 	_clamp_float_panels()
 
 
@@ -1497,11 +1517,17 @@ func _clamp_float_panels() -> void:
 
 
 func _on_map_resized_floats() -> void:
-	## 地図の大きさが決まったら、未配置の窓を置き、
-	## 配置済みの窓は内側へ戻す。
+	## 地図の大きさが決まったら、未配置の窓を置く。
+	## 配置済みでも、既定配置のもとにした地図の大きさから
+	## 変わっていれば置き直す (自動配置の窓が、レイアウト
+	## 途中の狭い地図で決めた既定のまま残らないように)。
+	## 設定に矩形がある窓は _place_floats 側で設定が優先
+	## されるので、ユーザーが置いた窓は動かない。
 	if not _float_mode:
 		return
 	if not _floats_placed:
+		_place_floats()
+	elif map_view != null and map_view.size != _floats_placed_map_size:
 		_place_floats()
 	else:
 		_clamp_float_panels()
@@ -2548,6 +2574,8 @@ func connect_to(p_host: String, p_port: int, p_char_id: String) -> void:
 	## セッションに付けてある。
 	if _register != null:
 		_clear_register()
+	# 一覧登録の印は接続ごとに Main が立て直す (第134段)。
+	auto_register_pending = false
 	host = p_host
 	port = p_port
 	restored_name = ""
@@ -2569,6 +2597,7 @@ func connect_register(p_host: String, p_port: int, p_name: String, p_password: S
 	## ログイン行を作成用に差し替え、受信行フックでサーバの
 	## プロンプトに応答する。成功すると `.phirc` を書いて、
 	## そのまま通常プレイのセッションに移行する。
+	auto_register_pending = false
 	host = p_host
 	port = p_port
 	_close_handled = false
@@ -3646,6 +3675,11 @@ func _accept_player_name(new_name: String) -> void:
 	_player_name = new_name
 	map_view.player_name = _player_name
 	title_changed.emit(tab_title())
+	# 登録ファイルの無い接続は、名前が届いた = 接続成功なので、
+	# Main に一覧への登録を頼む (第134段)。
+	if auto_register_pending:
+		auto_register_pending = false
+		auto_register_ready.emit()
 
 
 func _update_status(event: Dictionary) -> void:
