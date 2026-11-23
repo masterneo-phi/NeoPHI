@@ -3373,7 +3373,7 @@ func _show_display_size_dialog() -> void:
 		_display_icon_spin.step = 1
 		box.add_child(_display_icon_spin)
 		var repeat_label := Label.new()
-		repeat_label.text = "移動キーの繰り返し間隔 (%d〜%dms、小さいほど速い)" % [PhiConfig.MIN_MOVE_REPEAT_MS, PhiConfig.MAX_MOVE_REPEAT_MS]
+		repeat_label.text = "移動キーの繰り返し間隔 (%d〜%dms、0 はサーバの応答ペース)" % [PhiConfig.MIN_MOVE_REPEAT_MS, PhiConfig.MAX_MOVE_REPEAT_MS]
 		box.add_child(repeat_label)
 		_display_repeat_spin = SpinBox.new()
 		_display_repeat_spin.min_value = PhiConfig.MIN_MOVE_REPEAT_MS

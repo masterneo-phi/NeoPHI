@@ -41,6 +41,8 @@ const CHARA_W_GIANT := 32
 const CHARA_H := 32
 
 const _DIR_TO_ROW := {"B": 0, "R": 1, "F": 2, "L": 3}
+## dir(文字) → 向いている隣接マスへのオフセット。B=北, R=東, F=南, L=西。
+const _DIR_FACING_OFFSET := {"B": Vector2i(0, -1), "R": Vector2i(1, 0), "F": Vector2i(0, 1), "L": Vector2i(-1, 0)}
 const _DIR_NUM_TO_CHAR := {0: "B", 1: "B", 2: "R", 3: "F", 4: "F", 5: "F", 6: "L", 7: "B"}
 
 ## 水縁チップのベースindex。
@@ -433,6 +435,12 @@ var _items_tex: Texture2D = null
 ## 浮き数字などの基準点。名前 → 地図の絵の中の座標(中心x、頭の上y)。
 var _anchors: Dictionary = {}
 var _center_anchor: Variant = null
+## 自キャラが向いているマスの基準点 (頭の上)。人形オブジェの
+## 台詞の吹き出しを付ける先で、地図が差し替わるたびに作り直す。
+var _faced_anchor: Variant = null
+## 台詞行やオブジェの発言で覚えた話し手 → 基準点。地図に居ない
+## 話し手 (人形オブジェ) の吹き出し用で、地図の差し替えで消す。
+var _dialogue_anchors: Dictionary = {}
 var _last_charas: Dictionary = {}
 var _prev_charas: Dictionary = {}
 var _caster_tracker: PhiCombatFx.CasterTracker = null
@@ -728,7 +736,9 @@ func set_map(event: Dictionary, p_assets: GameAssets, p_mapset: String, defines:
 	_prev_charas = _last_charas
 	_last_charas = {}
 	_anchors = {}
+	_dialogue_anchors = {}
 	_center_anchor = null
+	_faced_anchor = null
 	var head_top := (CHIP_SIZE - CHARA_H) / 2 - CHARA_Y_ABOVE_FLOOR + MAP_TOP
 	var ev_cells: Array = event.get("cells", [])
 	for ch in event.get("chars", []):
@@ -746,6 +756,13 @@ func set_map(event: Dictionary, p_assets: GameAssets, p_mapset: String, defines:
 		_anchors[nm] = anchor
 		if cx == dim / 2 and cy == dim / 2:
 			_center_anchor = anchor
+		if bool(cd.get("__self", false)):
+			var off := facing_offset(cd.get("dir", "F"))
+			var fx := cx + off.x
+			var fy := cy + off.y
+			if 0 <= fx and fx < dim and 0 <= fy and fy < dim:
+				_faced_anchor = Vector2(fx * CHIP_SIZE + CHIP_SIZE / 2,
+					fy * CHIP_SIZE + head_top + relief_offset_y(ev_cells, dim, fx, fy))
 	_update_zoom()
 	queue_redraw()
 
@@ -1054,6 +1071,16 @@ func debug_center_anchor() -> Variant:
 	return _center_anchor
 
 
+## テスト用: 自キャラが向いているマスの基準点を返します。
+func debug_faced_anchor() -> Variant:
+	return _faced_anchor
+
+
+## テスト用: 台詞行で覚えた基準点の表を返します。
+func debug_dialogue_anchors() -> Dictionary:
+	return _dialogue_anchors
+
+
 ## テスト用: 残像の数を返します。
 func debug_event_empty() -> bool:
 	return _event.is_empty()
@@ -1209,6 +1236,12 @@ static func chip_src_rect(index: int) -> Rect2:
 	var col := index % CHIPS_PER_ROW
 	var row := index / CHIPS_PER_ROW
 	return Rect2(col * CHIP_SIZE, row * CHIP_HEIGHT, CHIP_SIZE, CHIP_HEIGHT)
+
+
+static func facing_offset(dir_value: Variant) -> Vector2i:
+	## キャラ dir(文字) → 向いている隣接マスへのオフセット。
+	## 知らない値は F(南) に倒す (dir_to_row の既定と同じ)。
+	return _DIR_FACING_OFFSET.get(str(dir_value), Vector2i(0, 1))
 
 
 static func dir_to_row(dir_value: Variant) -> int:
@@ -2421,7 +2454,8 @@ func spawn_death_fx(text: String) -> void:
 
 
 func show_log_bubble(raw_text: String, plain: String) -> void:
-	## NPCの発言や action の行を、吹き出しで出します。
+	## NPCの発言や action の行、台詞行、オブジェの発言を、
+	## 吹き出しで出します。
 	var names: Array = _anchors.keys()
 	if not player_name.is_empty():
 		names.append(player_name)
@@ -2430,8 +2464,37 @@ func show_log_bubble(raw_text: String, plain: String) -> void:
 		found = PhiBubbles.bubble_from_action_line(plain, names)
 	if found == null:
 		found = PhiBubbles.bubble_from_log_line(plain, names)
+	if found == null:
+		# 地図に居ない話し手 (人形オブジェ) の 名前 > 本文 の行。
+		# 正面のマスの基準点に吹き出しを付ける。
+		found = PhiBubbles.bubble_from_object_speech_line(plain)
+		if found != null:
+			if _faced_anchor == null:
+				found = null
+			else:
+				_dialogue_anchors[str(found[0])] = _faced_anchor
+	if found == null:
+		# Metro 表記の台詞行 (DM > 名前「台詞」)。話し手が地図に
+		# 居ればその基準点、居なければ (人形オブジェ) 正面の
+		# マスの基準点に吹き出しを付ける。
+		found = PhiBubbles.bubble_from_dialogue_line(plain)
+		if found != null and not (str(found[0]) in names):
+			if _faced_anchor == null:
+				found = null
+			else:
+				_dialogue_anchors[str(found[0])] = _faced_anchor
 	if found != null:
 		show_bubble(found[0], found[1])
+
+
+func _bubble_position(speaker: String) -> Variant:
+	## 吹き出しを出す位置 (地図の絵の中の座標)。キャラの基準点が
+	## 無ければ、台詞行やオブジェの発言で覚えた正面マスの基準点を
+	## 使う。
+	var pos: Variant = _float_position(speaker)
+	if pos != null:
+		return pos
+	return _dialogue_anchors.get(speaker)
 
 
 func show_bubble(speaker: String, body: String) -> void:
@@ -2710,7 +2773,7 @@ func _draw_bubbles(dim: int, z: float) -> void:
 	var ascent := label_font.get_ascent(font_size)
 	var occupied: Array = []
 	for speaker in _bubbles:
-		var pos: Variant = _float_position(speaker)
+		var pos: Variant = _bubble_position(speaker)
 		if pos == null:
 			continue
 		var measure := func(t: String) -> float:

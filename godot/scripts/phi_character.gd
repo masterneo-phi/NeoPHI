@@ -36,7 +36,11 @@ signal transfer_confirm_requested(host: String, port: int)
 signal register_completed(display_name: String)
 
 ## 第2段: 移動の繰り返し(Philly classMoveCommand)。
-const REPEAT_START_MS := 200
+## リピートのペーシング起点は「保持の初回送信」: 初回送信から
+## 設定間隔が経つとリピートが始まる。かつてあった押し始めの
+## 待ち (REPEAT_START_MS 200ms) は廃止した (第128段の改訂)。
+## 設定間隔 0 のときは間隔ゲートなしで、地図フレームの到着
+## ペースで送る。保険タイマー側はこの間隔が上限。
 const REPEAT_FALLBACK_MS := 500
 ## リピートの最小間隔は第128段で設定値化した
 ## (PhiConfig.move_repeat_ms、[Disp] MoveRepeatMs、既定 60ms。
@@ -203,7 +207,6 @@ var _bump_last_played := 0
 
 var _mouse_held := false
 var _mouse_hold_cursor := ""
-var _mouse_hold_since := 0
 var _mouse_last_repeat := 0
 var _mouse_last_pos := Vector2.ZERO
 var _mouse_cursor_now := ""
@@ -213,7 +216,9 @@ var _held_moves: Array[Dictionary] = []
 ## 最後に受けた地図の向き (0=北 2=東 4=南 6=西)。送った
 ## 移動コマンドの絶対方向を求めるのに使う (第119段)。
 var _facing := 0
-var _held_since := 0
+## この保持で最後に歩を送った時刻 (msec)。初回送信・リピート
+## 送信のたびに _send_held_step が更新し、リピートのペーシング
+## 起点になる。送っていない間は 0 のまま。
 var _last_repeat_send := 0
 ## 第77段: 新しい保持の最初のキーは、同時押し (斜め) の相方が
 ## すぐ後に来るかもしれないので、少しだけ送らずに待つ。
@@ -492,7 +497,34 @@ func set_active(active: bool) -> void:
 			map_view.request_zoom_growth.call_deferred()
 		# ツールバーの位置は全タブ共通(設定の保持値)にそろえる。
 		_apply_toolbar_home()
+		# フロート窓・Talk・リストの位置も同じく、他のタブで
+		# 動かした最新の保持値にそろえる (第130段)。
+		_sync_panel_positions_from_config()
 		_on_split_resized()
+
+
+func _sync_panel_positions_from_config() -> void:
+	## フロート窓 (チャット/ログ)・Talk ボタン・リストパネルの
+	## 位置を、設定の保持値 (全タブ共通) にそろえる。タブの
+	## 有効化のたびに呼ぶ (ツールバーの _apply_toolbar_home と
+	## 同じ扱い、第130段)。これが無いと、各タブが構築時に
+	## 読み込んだ位置を持ち続けて、他のタブで動かしても
+	## 切り替えた先では古い位置に戻って見えた。保持値が
+	## 無いものは今のままにする。
+	if _config == null:
+		return
+	# フロート窓: 「窓配置を全タブにそろえる」と同じ反映。
+	apply_float_layout_from_config()
+	# Talk ボタン: 保持値を自分の置き場所に取り込み直す。
+	if _config.talk_button_pos.x >= 0.0 and _config.talk_button_pos.y >= 0.0:
+		_talk_pos = _config.talk_button_pos
+		_place_talk_button()
+	# リストパネル: 保持値へ移し、見えている間は地図の
+	# 中へ戻す (隠れている間は、次に開く時に戻される)。
+	if _list_panel != null and _config.list_pos.x >= 0.0 and _config.list_pos.y >= 0.0:
+		_list_panel.position = _config.list_pos
+		if _list_panel.visible:
+			_move_list_panel(_list_panel.global_position)
 
 
 func is_active_tab() -> bool:
@@ -4125,8 +4157,6 @@ func press_held_move(key_event: InputEventKey, key: String, mods: String) -> voi
 			_held_moves.remove_at(i)
 			break
 	_held_moves.append({"code": physical, "key": key, "mods": mods})
-	_held_since = Time.get_ticks_msec()
-	_last_repeat_send = 0
 
 
 func release_held_move(key_event: InputEventKey) -> void:
@@ -4143,10 +4173,10 @@ func release_held_move(key_event: InputEventKey) -> void:
 		if int(_held_moves[i]["code"]) == physical:
 			_held_moves.remove_at(i)
 			break
-	if not _held_moves.is_empty():
-		_held_since = Time.get_ticks_msec()
-		_last_repeat_send = 0
-	else:
+	# まだキーが残っている場合は、直前の送信 (保留の吐き出しや
+	# リピート) をペーシング起点のまま続ける。全部離したら
+	# 保持は終わり。
+	if _held_moves.is_empty():
 		_held_seq_sent = false
 
 
@@ -4186,11 +4216,14 @@ func _repeat_on_map() -> void:
 
 
 func _repeat_fallback_tick() -> void:
+	## 地図が届かない時の保険。最後の送信から 500ms 空いた時だけ
+	## _repeat_send_if_ready に任せるので、間隔設定 0 でもこの
+	## 経路が到着ペースを追い越して連送することはない。
 	if _held_moves.is_empty():
 		return
-	var now := Time.get_ticks_msec()
-	if now - _held_since < REPEAT_START_MS:
+	if not _held_seq_sent:
 		return
+	var now := Time.get_ticks_msec()
 	if _last_repeat_send > 0 and now - _last_repeat_send < REPEAT_FALLBACK_MS:
 		return
 	_repeat_send_if_ready()
@@ -4210,13 +4243,25 @@ func _send_held_step() -> void:
 	# 滑って揺れていた。第123段)。
 	send_text("\n".join(commands))
 	_arm_bump_watch()
+	# 送った時刻がリピートのペーシング起点になる (初回送信も
+	# リピート送信も、ここを通る歩はすべて同じ扱い)。
+	_last_repeat_send = Time.get_ticks_msec()
 
 
 static func repeat_due(now: int, last_send: int, interval_ms: int) -> bool:
 	## 押し続けリピートで次の一歩を送ってよいか (間隔判定)。
 	## 第128段で間隔を設定値化したため、判定を設定の参照と
 	## 分けて静的に切り出した (テスト用)。
+	## 間隔 0 は「ゲートなし」: last_send 以後なら常時 due。
 	return last_send <= 0 or now - last_send >= interval_ms
+
+
+static func repeat_ready(now: int, seq_sent: bool, last_send: int, interval_ms: int) -> bool:
+	## 保持リピートの送信可否。保持の初回送信が済んでいること
+	## (seq_sent) が前提で、初回送信より前にリピートが出る
+	## ことはない (初回の1歩との二重送信防止)。間隔は初回送信
+	## (または前回のリピート) からの経過で判定する。
+	return seq_sent and repeat_due(now, last_send, interval_ms)
 
 
 func _repeat_min_interval_ms() -> int:
@@ -4233,12 +4278,9 @@ func _repeat_send_if_ready() -> void:
 	if _list_active or input_box.has_focus():
 		return
 	var now := Time.get_ticks_msec()
-	if now - _held_since < REPEAT_START_MS:
-		return
-	if not repeat_due(now, _last_repeat_send, _repeat_min_interval_ms()):
+	if not repeat_ready(now, _held_seq_sent, _last_repeat_send, _repeat_min_interval_ms()):
 		return
 	_send_held_step()
-	_last_repeat_send = now
 
 
 # -- F1〜F12 -----------------------------------------------------------------
@@ -4753,8 +4795,6 @@ func _start_mouse_hold(ev: InputEventMouseButton) -> void:
 		return
 	_mouse_held = true
 	_mouse_hold_cursor = cursor
-	_mouse_hold_since = Time.get_ticks_msec()
-	_mouse_last_repeat = 0
 	_mouse_send_step()
 
 
@@ -4769,6 +4809,8 @@ func _mouse_send_step() -> void:
 	# (第123段)。
 	send_text("\n".join(commands))
 	_arm_bump_watch()
+	# キー経路と同じく、送った時刻がリピートのペーシング起点。
+	_mouse_last_repeat = Time.get_ticks_msec()
 
 
 func _mouse_repeat_send_if_ready() -> void:
@@ -4781,8 +4823,6 @@ func _mouse_repeat_send_if_ready() -> void:
 	if _list_active or input_box.has_focus():
 		return
 	var now := Time.get_ticks_msec()
-	if now - _mouse_hold_since < REPEAT_START_MS:
-		return
 	if not repeat_due(now, _mouse_last_repeat, _repeat_min_interval_ms()):
 		return
 	# 押している間にマウスが動いたら、方向を追いかける。
@@ -4790,16 +4830,15 @@ func _mouse_repeat_send_if_ready() -> void:
 	if not cursor.is_empty():
 		_mouse_hold_cursor = cursor
 	_mouse_send_step()
-	_mouse_last_repeat = now
 
 
 func _mouse_repeat_fallback_tick() -> void:
 	## 地図が届かない場所でも、500ms ごとに繰り返す。
+	## キー経路と同じく、最後の送信から 500ms 空いた時だけ
+	## 任せるので、間隔設定 0 でも到着を追い越さない。
 	if not _mouse_held:
 		return
 	var now := Time.get_ticks_msec()
-	if now - _mouse_hold_since < REPEAT_START_MS:
-		return
 	if _mouse_last_repeat > 0 and now - _mouse_last_repeat < REPEAT_FALLBACK_MS:
 		return
 	_mouse_repeat_send_if_ready()

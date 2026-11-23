@@ -1,13 +1,19 @@
 extends SceneTree
 ## 第128段: 移動の高速化。
 ## (A) 押し続けリピートの最小間隔を設定値化した
-##     ([Disp] MoveRepeatMs、既定 60ms、範囲 30〜500ms。
+##     ([Disp] MoveRepeatMs、既定 60ms、範囲 0〜500ms。
 ##     かつては 120ms 固定で秒間約8.3マスが天井だった)。
 ##     設定の読み書きと往復、クランプ、リピート判定が
 ##     設定値を参照することを確認する。
 ## (B) スクロール補間時間を地図の到着間隔に追従させた。
 ##     速い到着では間隔まで縮み、遅い時は従来の 0.17 秒を
 ##     維持すること、下限で止まることを確認する。
+## (C) 改訂: 押し始めの待ち (旧 REPEAT_START_MS 200ms) を
+##     廃止し、ペーシング起点を保持の初回送信にした。初回
+##     送信から設定間隔1回分でリピートが始まり、初回送信の
+##     前にはリピートが出ない (二重送信防止) ことを確認する。
+##     間隔 0 は「ゲートなし」: 地図の到着ごとに1歩送り、
+##     保険タイマー経路は追い越さないことも確認する。
 ##
 ## 使い方: godot --headless --path . -s tests/test_stage128.gd
 ## 終了コード 0 = 全一致、1 = 不一致あり。
@@ -62,12 +68,18 @@ func _test_config() -> void:
 	check_eq(cfg2.move_repeat_ms, 90, "往復で 90ms が保たれる")
 	# クランプ: 生の設定ファイルに範囲外を書くと丸まる。
 	var raw := ConfigFile.new()
-	raw.set_value("Disp", "MoveRepeatMs", 5)
+	raw.set_value("Disp", "MoveRepeatMs", -5)
 	raw.save(CFG_PATH)
 	var cfg3 := PhiConfig.new()
 	cfg3.load_file(CFG_PATH)
 	check_eq(cfg3.move_repeat_ms, PhiConfig.MIN_MOVE_REPEAT_MS, "小さすぎる値は下限に丸まる")
-	check_eq(PhiConfig.MIN_MOVE_REPEAT_MS, 30, "下限は 30ms")
+	check_eq(PhiConfig.MIN_MOVE_REPEAT_MS, 0, "下限は 0ms")
+	# 0 は「到着ペース」の指定としてそのまま保たれる。
+	raw.set_value("Disp", "MoveRepeatMs", 0)
+	raw.save(CFG_PATH)
+	var cfg0 := PhiConfig.new()
+	cfg0.load_file(CFG_PATH)
+	check_eq(cfg0.move_repeat_ms, 0, "0 はそのまま読み戻せる")
 	raw.set_value("Disp", "MoveRepeatMs", 9999)
 	raw.save(CFG_PATH)
 	var cfg4 := PhiConfig.new()
@@ -97,9 +109,85 @@ func _test_repeat_due() -> void:
 	# 同じ経過時間でも設定が違えば判定が変わる (設定参照の証拠)。
 	check(not PhiCharacter.repeat_due(1060, 1000, 120), "同じ60ms経過でも 120ms設定ではまだ")
 	check(PhiCharacter.repeat_due(1120, 1000, 120), "120ms 経過で due (120ms設定)")
-	# 下限 30ms 設定でも判定は同じ形。
+	# 30ms 設定でも判定は同じ形。
 	check(not PhiCharacter.repeat_due(1029, 1000, 30), "29ms 経過ではまだ (30ms設定)")
 	check(PhiCharacter.repeat_due(1030, 1000, 30), "30ms 経過で due (30ms設定)")
+	# 間隔 0 はゲートなし: 送信と同時刻でも due になる。
+	check(PhiCharacter.repeat_due(1000, 1000, 0), "0ms設定は同時刻でも due")
+	check(PhiCharacter.repeat_due(1000, 999, 0), "0ms設定は 1ms 経過でも due")
+
+
+func _test_repeat_ready() -> void:
+	# 初回送信が済んでいない保持では、どれだけ経っても送らない
+	# (初回の1歩とリピートの二重送信防止)。
+	check(not PhiCharacter.repeat_ready(100000, false, 0, 60), "初回送信前は送らない (未送信)")
+	check(not PhiCharacter.repeat_ready(100000, false, 1000, 60), "初回送信前は送らない (経過大)")
+	# 初回送信 (last=1000) から設定間隔1回分でリピート可になる。
+	check(not PhiCharacter.repeat_ready(1059, true, 1000, 60), "初回送信から 59ms ではまだ")
+	check(PhiCharacter.repeat_ready(1060, true, 1000, 60), "初回送信から 60ms でリピート可")
+	# 間隔 0 は初回送信さえ済めば同時刻でも可 (到着ペース)。
+	check(PhiCharacter.repeat_ready(1000, true, 1000, 0), "0ms設定は初回送信と同時刻でも可")
+	check(not PhiCharacter.repeat_ready(1000, false, 1000, 0), "0ms設定でも初回送信前は不可")
+
+
+func _key(keycode: Key) -> InputEventKey:
+	var ev := InputEventKey.new()
+	ev.keycode = keycode
+	ev.physical_keycode = keycode
+	ev.pressed = true
+	return ev
+
+
+func _test_hold_pacing() -> void:
+	var cfg := PhiConfig.new()
+	cfg.log_auto_save = false
+	cfg.ui_style = "old"
+	var tab := _make_tab(cfg)
+	if tab.input_box.has_focus():
+		tab.input_box.release_focus()
+	var queue: Array = tab.session.get("_send_queue")
+	# (1) タップでは1歩だけ: 押した直後は保留され、離して1歩。
+	tab.clear_held_input()
+	queue.clear()
+	check(tab.handle_key(_key(KEY_UP)), "タップ: 上キーが扱われる")
+	check_eq(queue.size(), 0, "タップ: 押した直後はまだ送らない")
+	tab.release_held_move(_key(KEY_UP))
+	check_eq(queue, ["go N"], "タップ: 離して1歩だけ")
+	tab._repeat_send_if_ready()
+	tab._repeat_on_map()
+	check_eq(queue.size(), 1, "タップ: 離した後にリピートは出ない")
+	# (2) 初回送信の前は、リピートも保険も出ない。
+	tab.clear_held_input()
+	queue.clear()
+	check(tab.handle_key(_key(KEY_UP)), "保持: 上キーが扱われる")
+	tab._repeat_send_if_ready()
+	tab._repeat_fallback_tick()
+	check_eq(queue.size(), 0, "保持: 初回送信前はリピートも保険も出ない")
+	# (3) 初回送信がペーシング起点になり、間隔1回分で始まる。
+	tab.set("_held_step_pending_until", 1)
+	tab._held_step_pending_tick()
+	check_eq(queue, ["go N"], "保持: 期限で初回送信")
+	check(int(tab.get("_last_repeat_send")) > 0, "保持: 初回送信が起点に記録される")
+	tab._repeat_send_if_ready()
+	check_eq(queue.size(), 1, "保持: 間隔 (60ms) 未経過ではリピートなし")
+	tab.set("_last_repeat_send", Time.get_ticks_msec() - 60)
+	tab._repeat_send_if_ready()
+	check_eq(queue.size(), 2, "保持: 間隔1回分でリピートが始まる")
+	tab._repeat_send_if_ready()
+	check_eq(queue.size(), 2, "保持: 続けては出ない (間隔が再び必要)")
+	# (4) 間隔 0: 地図の到着ごとに1歩。保険は追い越さない。
+	cfg.move_repeat_ms = 0
+	tab._repeat_on_map()
+	check_eq(queue.size(), 3, "0ms: 到着1回で1歩")
+	tab._repeat_on_map()
+	check_eq(queue.size(), 4, "0ms: 到着2回で2歩")
+	tab._repeat_fallback_tick()
+	check_eq(queue.size(), 4, "0ms: 保険タイマーは到着を追い越さない")
+	# (5) 離せば止まる (歩き続けない)。
+	tab.release_held_move(_key(KEY_UP))
+	tab._repeat_on_map()
+	check_eq(queue.size(), 4, "0ms: 離した後は歩き続けない")
+	tab.free()
 
 
 func _test_character_reflects_config() -> void:
@@ -151,7 +239,9 @@ func _test_scroll_adaptation() -> void:
 func _initialize() -> void:
 	_test_config()
 	_test_repeat_due()
+	_test_repeat_ready()
 	_test_character_reflects_config()
+	_test_hold_pacing()
 	_test_scroll_duration()
 	_test_scroll_adaptation()
 	print("test_stage128: ", _checks, " checks, ", _failures, " failures")

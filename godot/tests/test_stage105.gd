@@ -72,7 +72,6 @@ func _run() -> void:
 	check(not bool(tab.get("_mouse_held")), "s105 press on input float starts no hold")
 	# (3) ドラッグ中は繰り返し送信が止まる (last_repeat が進まない)
 	tab.set("_mouse_held", true)
-	tab.set("_mouse_hold_since", 0)
 	tab.set("_float_drag_panel", log_float)
 	tab.call("_mouse_repeat_send_if_ready")
 	check_eq(int(tab.get("_mouse_last_repeat")), 0, "s105 no repeat during float drag")

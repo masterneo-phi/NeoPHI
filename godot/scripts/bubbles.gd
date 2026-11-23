@@ -51,6 +51,35 @@ static func bubble_from_log_line(text: String, names: Array) -> Variant:
 	return null
 
 
+## 地図に居ない話し手 (人形オブジェ) の発言を抜きます。
+##
+## ``text`` はタグを除いた後の ``名前 > 本文`` の行です。話し手が
+## 地図に見えるキャラなら bubble_from_log_line の領分なので、ここ
+## では名前の妥当性だけを見ます。括弧付きの話し手 ((名前)・
+## {名前}・"名前") は従来どおり対象にせず、話し手が "DM" の行
+## (通常の DM 文) も対象にしません。名前に文の区切りや括弧が
+## 混ざる行は発言とは見なしません (台詞行と同じ物差し)。
+## 戻り値は [話し手, 本文] か null です。
+static func bubble_from_object_speech_line(text: String) -> Variant:
+	var hit := _speech_pattern().search(text.strip_edges())
+	if hit == null:
+		return null
+	# 括弧付きの話し手は従来どおり、キャラと一致した時だけ。
+	for i in range(1, 4):
+		if hit.get_start(i) >= 0:
+			return null
+	var speaker := hit.get_string(4).strip_edges()
+	var body := hit.get_string(5).strip_edges()
+	if speaker.is_empty() or body.is_empty():
+		return null
+	if speaker == "DM":
+		return null
+	for bad in ["。", "、", "！", "？", "!", "?", "「", "」", "『", "』", ">", "＞"]:
+		if bad in speaker:
+			return null
+	return [speaker, body]
+
+
 ## action の行から、地図に見えるキャラの動作を抜きます。
 ##
 ## ``text`` はタグを除いた後の ``DM > 名前 本文`` の行です。名前は
@@ -70,6 +99,38 @@ static func bubble_from_action_line(text: String, names: Array) -> Variant:
 			if not body.is_empty():
 				return [nm, body]
 	return null
+
+
+## Metro 表記の台詞行から、話し手と台詞を抜きます。
+##
+## ``text`` はタグを除いた後の ``DM > 名前「台詞」`` の行です。
+## 名前の直後に「が付く行だけを台詞行と見なします。石碑の刻文
+## (『…』や、地の文の中の引用) や通常の DM 文は対象にしません。
+## 戻り値は [名前, 台詞] か null です。
+static func bubble_from_dialogue_line(text: String) -> Variant:
+	var stripped := text.strip_edges()
+	if not stripped.begins_with("DM > "):
+		return null
+	var rest := stripped.substr(5)
+	var open := rest.find("「")
+	if open <= 0:
+		return null
+	var name := rest.substr(0, open)
+	# 名前の前後に空白があれば「名前＋『「』」の形ではない。
+	# 名前に文の区切りや括弧が混ざる行 (刻文の導入文など) も
+	# 台詞行とは見なさない。
+	if name != name.strip_edges():
+		return null
+	for bad in ["。", "、", "！", "？", "!", "?", "「", "」", "『", "』", ">", "＞"]:
+		if bad in name:
+			return null
+	var close := rest.rfind("」")
+	if close <= open + 1:
+		return null
+	var body := rest.substr(open + 1, close - open - 1).strip_edges()
+	if body.is_empty():
+		return null
+	return [name, body]
 
 
 ## 本文を幅に収まる行に分けます。
