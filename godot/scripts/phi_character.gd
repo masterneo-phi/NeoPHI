@@ -159,6 +159,22 @@ var _area := ""
 var _mapset := ""
 ## #mapset-define のスロット (1〜3) → マップセット名。
 var _defines: Dictionary = {}
+# -- phidm-v6 拡張の状態 (段階0+1) ---------------------------------------
+## `#v6 D` のマップセット16枠定義 (枠番号 → 名前)。
+var _defines16: Dictionary = {}
+## v6 モードに入ったことがあるか (抜けた時の従来地図の復旧用)。
+var _v6_was_active := false
+## `#v6 H` の体力表示 (キャラID → {"hp","ag"})。
+var _v6_health: Dictionary = {}
+## `#v6 P/L/K/S/I/B/Q` の最新内容 (表示は既存 UI の範囲で使う)。
+var _v6_party: Array = []
+var _v6_marks: Array = []
+var _v6_mark_names: Array = []
+var _v6_talk_words: Array = []
+var _v6_spells: Array = []
+var _v6_items: Array = []
+var _v6_shop: Array = []
+var _v6_quests: Array = []
 var _users: Array[Dictionary] = []
 var _priv_history: Array[String] = []
 var _log_lines: Array[Dictionary] = []
@@ -2266,7 +2282,48 @@ func _sent_move_dir(first: String) -> Variant:
 			return Vector2i(0, 1)
 		"w":
 			return Vector2i(-1, 0)
+		"ne":
+			return Vector2i(1, -1)
+		"nw":
+			return Vector2i(-1, -1)
+		"se":
+			return Vector2i(1, 1)
+		"sw":
+			return Vector2i(-1, 1)
 	return null
+
+
+static func diag_word_for(screen_dir: Vector2i) -> String:
+	## 画面の斜めベクトル → go の斜め単語。斜めでなければ ""。
+	## 北固定では絶対方向、turn 様式ではサーバが向き基準に
+	## 回すので、どちらも画面の向きのままの単語でよい。
+	match [screen_dir.x, screen_dir.y]:
+		[1, -1]:
+			return "ne"
+		[-1, -1]:
+			return "nw"
+		[1, 1]:
+			return "se"
+		[-1, 1]:
+			return "sw"
+	return ""
+
+
+func _collapse_diag(commands: Array[String]) -> Array[String]:
+	## 直交2方向の go 2行を、斜め1行へ畳む (v6 の move=diag
+	## が有効な接続だけ)。畳めなければ元のまま返す。
+	if session == null or not session.v6_diag or commands.size() != 2:
+		return commands
+	var d0: Variant = _sent_move_dir(commands[0])
+	var d1: Variant = _sent_move_dir(commands[1])
+	if d0 == null or d1 == null:
+		return commands
+	var v: Vector2i = d0 + d1
+	var word := diag_word_for(v)
+	if word.is_empty():
+		return commands
+	var out: Array[String] = ["go " + word]
+	return out
 
 
 func _on_list_header_gui_input(event: InputEvent) -> void:
@@ -2539,6 +2596,9 @@ func _on_input_split_dragged(offset: int) -> void:
 
 func _do_fallback_bigmap() -> void:
 	## 11x11 を諦めて 7x7 を要求し直す (この接続だけ)。
+	## v6 モードでは大きさの概念が違うので何もしない。
+	if session != null and session.v6_mode:
+		return
 	_bigmap_fell_back = true
 	_bigmap_upgrade_pending = false
 	_bigmap_attempts = 0
@@ -2576,6 +2636,12 @@ func _on_bigmap_session_opened() -> void:
 
 func _check_bigmap_watchdog(now_ms: int) -> void:
 	if session == null or not session.is_open():
+		_bigmap_watch_since = 0
+		return
+	if session.v6_mode:
+		# v6 モードでは size= の昇格・落とし直しはしない
+		# (送るとサーバ側の v6 が解除されてしまう)。
+		_bigmap_upgrade_pending = false
 		_bigmap_watch_since = 0
 		return
 	if _bigmap_upgrade_pending:
@@ -2624,6 +2690,13 @@ func connect_to(p_host: String, p_port: int, p_char_id: String) -> void:
 	_close_handled = false
 	_cut_by_other = false
 	_clear_pet_job()
+	# v6 の表示状態も接続ごとに落とす (前の世界の残像防止)。
+	_v6_was_active = false
+	_v6_health.clear()
+	_defines16.clear()
+	if map_view != null:
+		map_view.set_v6_health(_v6_health)
+		map_view.set_defines16(_defines16)
 	_bigmap_fell_back = false
 	_bigmap_watch_since = 0
 	_bigmap_attempts = 0
@@ -2705,6 +2778,9 @@ func _finish_register() -> void:
 	else:
 		log_message("error", "ID ファイル(.phirc)の保存に失敗しました。発行された ID は %s です。必ず控えてください。" % id)
 	for line in PhiSession.post_register_lines(session.map_size, session.map_style, session.disp_magic):
+		session.send_line(line)
+	# 登録直後も v6 を検出する (通常ログインと同じプローブ)。
+	for line in session.v6_probe_lines():
 		session.send_line(line)
 	register_completed.emit(display_name)
 
@@ -2855,6 +2931,11 @@ func _on_event(event: Dictionary) -> void:
 	match str(event.get("type", "")):
 		"message":
 			var channel := str(event.get("channel", "log"))
+			# `#v6 T` のタグ: パーティ発言は表示を分ける。
+			if event.has("v6tag"):
+				var v6tag: Dictionary = event["v6tag"]
+				if str(v6tag.get("kind", "")) == "party" and channel == "talk":
+					channel = "party"
 			var raw := str(event.get("text", ""))
 			var plain := PhiTags.plain_text(raw)
 			# 大量行の受信中は、行ごとの演出照合を止める
@@ -2889,7 +2970,11 @@ func _on_event(event: Dictionary) -> void:
 				set_unread(true)
 			if not flooding_now and channel == "log":
 				map_view.spawn_floats(plain)
-				map_view.spawn_combat_fx(plain)
+				# v6 モードでは戦闘演出は `#v6 E` が位置つきで
+				# 出すので、ログ由来の演出は二重になるため止める
+				# (浮き数字と死亡の残像はログ由来のまま)。
+				if session == null or not session.v6_mode:
+					map_view.spawn_combat_fx(plain)
 				map_view.spawn_death_fx(plain)
 				map_view.show_log_bubble(raw, plain)
 			elif channel in ["talk", "priv"]:
@@ -2968,7 +3053,11 @@ func _on_event(event: Dictionary) -> void:
 			if int(event.get("size", 7)) == 5:
 				_fixup_classic_self(event)
 			_demo_chars = event.get("chars", [])
-			_demo_dim = MapView.grid_dim(int(event.get("size", 7)))
+			if event.has("w"):
+				var v6dims := MapView.grid_dims(event)
+				_demo_dim = maxi(v6dims.x, v6dims.y)
+			else:
+				_demo_dim = MapView.grid_dim(int(event.get("size", 7)))
 			_map_dim_now = int(event.get("size", 0))
 			if event.has("style"):
 				_map_style_now = str(event["style"])
@@ -3013,6 +3102,101 @@ func _on_event(event: Dictionary) -> void:
 		"mode":
 			if status_panel != null:
 				status_panel.set_mode(bool(event.get("attack", false)), bool(event.get("magic", false)))
+		"v6view":
+			_handle_v6_view(event)
+		"v6move":
+			pass # 状態はセッションが保持する (斜め移動の可否)。
+		"v6go":
+			# 自分の go への返事。次のフレームのスクロール同期に使う。
+			if map_view != null:
+				map_view.note_move(Vector2i(int(event.get("dx", 0)), int(event.get("dy", 0))))
+		"v6jump":
+			# go 以外で動かされた (転送・落下など)。次のフレームは
+			# 滑らせない。
+			if map_view != null:
+				map_view.note_move(Vector2i.ZERO)
+		"v6health":
+			var hid := int(event.get("id", -1))
+			if hid >= 0:
+				_v6_health[hid] = {"hp": int(event.get("hp", -1)), "ag": int(event.get("ag", 0))}
+				if map_view != null:
+					map_view.set_v6_health(_v6_health)
+		"v6effect":
+			if map_view != null:
+				map_view.spawn_v6_effect(event)
+		"v6wait":
+			_handle_v6_wait(event)
+		"v6define":
+			_defines16[int(event.get("slot", 0))] = str(event.get("name", ""))
+			if map_view != null:
+				map_view.set_defines16(_defines16)
+		"v6party":
+			_v6_party = event.get("members", [])
+		"v6marks":
+			_handle_v6_marks(event)
+		"v6talkwords":
+			_v6_talk_words = event.get("words", [])
+		"v6spells":
+			_v6_spells = event.get("spells", [])
+		"v6items":
+			_v6_items = event.get("items", [])
+		"v6shop":
+			_v6_shop = event.get("items", [])
+		"v6quests":
+			_v6_quests = event.get("quests", [])
+
+
+func _handle_v6_view(event: Dictionary) -> void:
+	## `#ex-map view=` への返事。受理されたら v6 モードの開始を
+	## 知らせ、不受理で v6 から落ちたら従来地図を取り直す。
+	if bool(event.get("accepted", false)):
+		var first := not _v6_was_active
+		_v6_was_active = true
+		# v6 の世界では #ex-pet / #ex-job は届かない。前の世界の
+		# 表示が残っていたら落とす。
+		_clear_pet_job()
+		if first:
+			log_message("system", "V6 プロトコルで接続しました (視界 %dx%d)" % [
+				int(event.get("w", 0)), int(event.get("h", 0))])
+	elif _v6_was_active:
+		_v6_was_active = false
+		_v6_health.clear()
+		if map_view != null:
+			map_view.set_v6_health(_v6_health)
+		if session != null:
+			# サーバ側の v6 は解除済み。今の大きさで従来地図を
+			# 取り直して表示を復旧する。
+			session.send_line("#ex-map size=%d" % session.map_size)
+
+
+func _handle_v6_wait(event: Dictionary) -> void:
+	## `#v6 W` の詠唱・攻撃待ちを地図のバー表示へ渡す。
+	if map_view == null:
+		return
+	var who: Variant = event.get("who", "self")
+	var key := "self" if str(who) == "self" else "id:%d" % int(who)
+	if event.has("cast"):
+		var cast := int(event.get("cast", -1))
+		if cast >= 0:
+			map_view.note_v6_cast(key, cast, str(event.get("spell", "")))
+		else:
+			map_view.clear_v6_cast(key)
+	elif event.has("at"):
+		map_view.note_v6_cast(key, int(event.get("at", 0)), "")
+
+
+func _handle_v6_marks(event: Dictionary) -> void:
+	## `#v6 L` の目印一覧。名前の集合が変わったらログへ出す
+	## (サーバは変化した時だけ送る)。
+	_v6_marks = event.get("marks", [])
+	var names: Array = []
+	for m in _v6_marks:
+		names.append(str((m as Dictionary).get("name", "")))
+	names.sort()
+	if names != _v6_mark_names:
+		_v6_mark_names = names
+		if not names.is_empty():
+			log_message("system", "目印: %s" % ", ".join(names))
 
 
 func _collect_image_refs(raw: String) -> void:
@@ -3032,6 +3216,8 @@ func log_message(channel: String, text: String, raw: String = "") -> void:
 	match channel:
 		"talk":
 			prefix = "[発言] "
+		"party":
+			prefix = "[パーティ] "
 		"priv":
 			prefix = "[priv] "
 		"system", "error":
@@ -4386,6 +4572,7 @@ func _send_held_step() -> void:
 	var commands: Array[String] = []
 	for step in steps:
 		commands.append(PhiKeys.move_command(str(step[0]), str(step[1]), north_fix_now()))
+	commands = _collapse_diag(commands)
 	# 自前の send_text を通して _note_sent に移動の印を残す
 	# (session へ直接送ると印が付かず、向き変更のたびに地図が
 	# 滑って揺れていた。第123段)。
@@ -4953,6 +5140,7 @@ func _mouse_send_step() -> void:
 	var commands := PhiMouse.move_commands(_mouse_hold_cursor, north_fix_now(), _mouse_mods())
 	if commands.is_empty():
 		return
+	commands = _collapse_diag(commands)
 	# キー経路と同じく、印を残すため自前の send_text を通す
 	# (第123段)。
 	send_text("\n".join(commands))

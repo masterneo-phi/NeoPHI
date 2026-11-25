@@ -238,6 +238,8 @@ var _grow_requested := false
 var _grow_drive_until := 0.0
 ## 前に受けた地図の一辺のマス数。地図の大きさの変化を検知する。
 var _last_dim := 0
+## 前に受けた地図の (横, 縦)。v6 の矩形フレームの変化検知用。
+var _last_dims := Vector2i.ZERO
 
 
 ## 外部からのサイズ変更があったことを知らせる。次の `_update_zoom` で、
@@ -333,12 +335,12 @@ func _detect_scroll(new_event: Dictionary) -> void:
 	_prev_cells = []
 	if not smooth_scroll or map_style != "solid" or _event.is_empty():
 		return
-	var dim := grid_dim(int(_event.get("size", 7)))
-	if dim != grid_dim(int(new_event.get("size", 7))):
+	var dims := grid_dims(_event)
+	if dims != grid_dims(new_event):
 		return
 	var old_cells: Array = _event.get("cells", [])
 	var new_cells: Array = new_event.get("cells", [])
-	if old_cells.size() != dim * dim or new_cells.size() != dim * dim:
+	if old_cells.size() != dims.x * dims.y or new_cells.size() != dims.x * dims.y:
 		return
 	# サーバが絶対座標を付けている時は、ずれはプレイヤーの
 	# 実移動で決まる。一面同じ地形だとチップ比較だけでは
@@ -376,7 +378,7 @@ func _detect_scroll(new_event: Dictionary) -> void:
 		# 揺れていた (第123段、実機報告)。地形が完全に同じ
 		# なら、滑らせる移動は無かったということにする。
 		var same := true
-		for i in range(dim * dim):
+		for i in range(dims.x * dims.y):
 			if int(new_cells[i].get("chip", 0)) != int(old_cells[i].get("chip", 0)):
 				same = false
 				break
@@ -385,14 +387,14 @@ func _detect_scroll(new_event: Dictionary) -> void:
 	for sv in candidates:
 		var s: Vector2i = sv
 		var bad := 0
-		for y in range(dim):
-			for x in range(dim):
+		for y in range(dims.y):
+			for x in range(dims.x):
 				var ox := x + s.x
 				var oy := y + s.y
-				if ox < 0 or oy < 0 or ox >= dim or oy >= dim:
+				if ox < 0 or oy < 0 or ox >= dims.x or oy >= dims.y:
 					continue
-				var nc: Dictionary = new_cells[y * dim + x]
-				var oc: Dictionary = old_cells[oy * dim + ox]
+				var nc: Dictionary = new_cells[y * dims.x + x]
+				var oc: Dictionary = old_cells[oy * dims.x + ox]
 				if int(nc.get("chip", 0)) != int(oc.get("chip", 0)):
 					bad += 1
 					if bad > 2:
@@ -420,8 +422,14 @@ func _note_scroll_start(now_s: float = -1.0) -> void:
 ## チップシートは属性の下位2ビット (#mapset-define の番号) ごとに
 ## 4枚。slot 0 は現在のマップセット、1〜3 は define があればその
 ## 名前、無ければ既定シート (Python 版と同じ解決)。
-var _chip_texs: Array = [null, null, null, null]
+## phidm-v6 のマップセット16枠では、セルが持つ枠番号 (slot) で
+## 16枚まで引く。定義の無い枠は null のままで、描画は属性の
+## 下位2ビットのシートへ落とす。
+var _chip_texs: Array = [null, null, null, null, null, null, null, null,
+	null, null, null, null, null, null, null, null]
 var _defines: Dictionary = {}
+## v6 の16枠定義 (枠番号 -> 名前)。`#v6 D` で届く。
+var _defines16: Dictionary = {}
 ## 起伏の自動生成のキャッシュ。シートを取り直すたびに捨てる。
 ## _sheet_images: シートの instance id → Image (RGBA8)。
 ## _toned_cache: [sheet_id, index, 段数] → 32x48 のバイト列。
@@ -691,7 +699,7 @@ func _update_zoom() -> void:
 	## 拡大は、外部からのサイズ変更で要求があった時だけ1段階ずつ。
 	## 縮小は収まらなくなったら即座に。要求が無いときは拡大しないので、
 	## 文字サイズの連動によるレイアウトのフィードバックでは発振しない。
-	var dim := grid_dim(int(_event.get("size", 7)))
+	var dims := grid_dims(_event)
 	var avail := size
 	if avail.x < 1.0 or avail.y < 1.0:
 		return
@@ -706,8 +714,8 @@ func _update_zoom() -> void:
 			_sync_compass_size()
 			queue_redraw()
 		return
-	var zw := int(avail.x / (dim * CHIP_SIZE))
-	var zh := int(avail.y / (dim * CHIP_SIZE + MAP_TOP))
+	var zw := int(avail.x / (dims.x * CHIP_SIZE))
+	var zh := int(avail.y / (dims.y * CHIP_SIZE + MAP_TOP))
 	var fit := clampi(mini(zw, zh), 1, 8)
 	if fit > zoom:
 		if _grow_requested:
@@ -730,6 +738,8 @@ func _mark_self(event: Dictionary, dim: int) -> void:
 	## スクロール中に中央へ留めるのはこの行だけ (第120段)。
 	## 同じマスに乗った家具などのオブジェ行 (種別 B) まで
 	## 留めてしまい、家具が一瞬動いて見えていた。
+	## 代用の中心は、v6 イベントでは selfCell、それ以外は
+	## (dim/2, dim/2)。
 	var chars: Array = event.get("chars", [])
 	var pick: Dictionary = {}
 	if not self_name.is_empty():
@@ -739,12 +749,13 @@ func _mark_self(event: Dictionary, dim: int) -> void:
 			if PhiTags.strip_tags(str(ch.get("name", ""))).strip_edges() == self_name:
 				pick = ch
 	if pick.is_empty():
-		var cx := dim / 2
-		var cy := dim / 2
+		var center := Vector2i(dim / 2, dim / 2)
+		if event.has("selfCell"):
+			center = self_cell_of(event)
 		for ch_var in chars:
 			var ch: Dictionary = ch_var
 			ch.erase("__self")
-			if int(ch.get("x", -1)) == cx and int(ch.get("y", -1)) == cy \
+			if int(ch.get("x", -1)) == center.x and int(ch.get("y", -1)) == center.y \
 					and int(ch.get("layer", -1)) == 12:
 				pick = ch
 	if not pick.is_empty():
@@ -767,13 +778,14 @@ func set_job_info(p_info: Dictionary) -> void:
 func set_map(event: Dictionary, p_assets: GameAssets, p_mapset: String, defines: Dictionary = {}) -> void:
 	_detect_scroll(event)
 	var scrolled := _scroll_t == 0.0 and not _prev_cells.is_empty()
-	_mark_self(event, grid_dim(int(event.get("size", 7))))
+	var dims := grid_dims(event)
+	var center := self_cell_of(event)
+	_mark_self(event, dims.x)
 	# 中心セルの段数の遷移を覚える (自キャラの高さ補間用)。
 	_scroll_from_h = _scroll_to_h
-	var ndim := grid_dim(int(event.get("size", 7)))
 	var ncells: Array = event.get("cells", [])
 	if not ncells.is_empty():
-		_scroll_to_h = height_at(ncells, ndim, ndim / 2, ndim / 2)
+		_scroll_to_h = height_at_wh(ncells, dims.x, dims.y, center.x, center.y)
 	_event = event
 	_title_rect.visible = false
 	if compass != null:
@@ -790,10 +802,10 @@ func set_map(event: Dictionary, p_assets: GameAssets, p_mapset: String, defines:
 		_items_tex = assets.items()
 		_fx_icons_tex = assets.skin_image("fx_icons")
 		_pet_tex = assets.pet_sheet() as Texture2D
-	var dim := grid_dim(int(event.get("size", 7)))
-	custom_minimum_size = Vector2(dim * CHIP_SIZE, dim * CHIP_SIZE + MAP_TOP)
-	if dim != _last_dim:
-		_last_dim = dim
+	custom_minimum_size = Vector2(dims.x * CHIP_SIZE, dims.y * CHIP_SIZE + MAP_TOP)
+	if dims != _last_dims:
+		_last_dims = dims
+		_last_dim = dims.x
 		# 地図の大きさの変化は配置の反動ではなく内容の変化なので、
 		# 外部からのサイズ変更と同じく拡大を1段階だけ許します。
 		request_zoom_growth()
@@ -812,23 +824,23 @@ func set_map(event: Dictionary, p_assets: GameAssets, p_mapset: String, defines:
 		_last_charas[nm] = cd
 		var cx := int(cd.get("x", -1))
 		var cy := int(cd.get("y", -1))
-		if not (0 <= cx and cx < dim and 0 <= cy and cy < dim):
+		if not (0 <= cx and cx < dims.x and 0 <= cy and cy < dims.y):
 			continue
 		if nm.is_empty():
 			continue
 		var anchor := Vector2(cx * CHIP_SIZE + CHIP_SIZE / 2,
-			cy * CHIP_SIZE + head_top + relief_offset_y(ev_cells, dim, cx, cy))
+			cy * CHIP_SIZE + head_top + relief_offset_y_wh(ev_cells, dims.x, dims.y, cx, cy))
 		_anchors[nm] = anchor
-		if cx == dim / 2 and cy == dim / 2:
+		if cx == center.x and cy == center.y:
 			_center_anchor = anchor
 		if bool(cd.get("__self", false)):
 			var off := facing_offset(cd.get("dir", "F"))
 			var fx := cx + off.x
 			var fy := cy + off.y
-			if 0 <= fx and fx < dim and 0 <= fy and fy < dim:
+			if 0 <= fx and fx < dims.x and 0 <= fy and fy < dims.y:
 				_faced_anchor = Vector2(fx * CHIP_SIZE + CHIP_SIZE / 2,
-					fy * CHIP_SIZE + head_top + relief_offset_y(ev_cells, dim, fx, fy))
-	_update_pet_trails(event, dim, scrolled)
+					fy * CHIP_SIZE + head_top + relief_offset_y_wh(ev_cells, dims.x, dims.y, fx, fy))
+	_update_pet_trails(event, dims, scrolled)
 	_update_zoom()
 	queue_redraw()
 
@@ -895,10 +907,15 @@ static func pet_cells_relation(old_cells: Array, new_cells: Array, dim: int) -> 
 	## 保持)、2 = 地形の入れ替わり (転送・階段。経路は作り直す)、
 	## 3 = 半分以下の大きな書き換え (スイッチで地形が変わる等。
 	## 経路は保持し、飼い主が跳んだ場合は経路側の作り直しが効く)。
-	if old_cells.size() != dim * dim or new_cells.size() != dim * dim:
+	return pet_cells_relation_wh(old_cells, new_cells, dim, dim)
+
+
+static func pet_cells_relation_wh(old_cells: Array, new_cells: Array, w: int, h: int) -> Array:
+	## pet_cells_relation の (横, 縦) 指定版 (v6 の矩形盤面用)。
+	if old_cells.size() != w * h or new_cells.size() != w * h:
 		return [2, Vector2i.ZERO]
 	var diff0 := 0
-	for i in range(dim * dim):
+	for i in range(w * h):
 		if int((new_cells[i] as Dictionary).get("chip", 0)) \
 				!= int((old_cells[i] as Dictionary).get("chip", 0)):
 			diff0 += 1
@@ -910,14 +927,14 @@ static func pet_cells_relation(old_cells: Array, new_cells: Array, dim: int) -> 
 	for sv in [Vector2i(0, -1), Vector2i(0, 1), Vector2i(-1, 0), Vector2i(1, 0)]:
 		var s: Vector2i = sv
 		var bad := 0
-		for y in range(dim):
-			for x in range(dim):
+		for y in range(h):
+			for x in range(w):
 				var ox := x + s.x
 				var oy := y + s.y
-				if ox < 0 or oy < 0 or ox >= dim or oy >= dim:
+				if ox < 0 or oy < 0 or ox >= w or oy >= h:
 					continue
-				if int((new_cells[y * dim + x] as Dictionary).get("chip", 0)) \
-						!= int((old_cells[oy * dim + ox] as Dictionary).get("chip", 0)):
+				if int((new_cells[y * w + x] as Dictionary).get("chip", 0)) \
+						!= int((old_cells[oy * w + ox] as Dictionary).get("chip", 0)):
 					bad += 1
 					if bad > 2:
 						break
@@ -925,7 +942,7 @@ static func pet_cells_relation(old_cells: Array, new_cells: Array, dim: int) -> 
 				break
 		if bad <= 2:
 			return [1, s]
-	if diff0 * 2 <= dim * dim:
+	if diff0 * 2 <= w * h:
 		return [3, Vector2i.ZERO]
 	return [2, Vector2i.ZERO]
 
@@ -969,7 +986,7 @@ func _pet_common_char_shift(event: Dictionary) -> Vector2i:
 	return Vector2i.ZERO
 
 
-func _update_pet_trails(event: Dictionary, dim: int, scrolled: bool) -> void:
+func _update_pet_trails(event: Dictionary, dims: Vector2i, scrolled: bool) -> void:
 	## ペットの追随経路を新しい地図に合わせる。絶対座標が
 	## 使える時は世界座標で経路を持ち (自分の移動の影響を
 	## 受けない)、使えない時は盤面座標で持ち、自キャラの
@@ -981,6 +998,7 @@ func _update_pet_trails(event: Dictionary, dim: int, scrolled: bool) -> void:
 	## 通常の移動で見える地形が変わっても壊さない (壊すと
 	## 静止中の他人のペットが飼い主の足元に張り付く)。
 	var cells: Array = event.get("cells", [])
+	var center := self_cell_of(event)
 	var has_pos := event.has("pos")
 	if has_pos != _pet_origin_ok and _pet_origin_ok:
 		# 座標の持ち方が切り替わったら、経路は作り直す。
@@ -992,7 +1010,7 @@ func _update_pet_trails(event: Dictionary, dim: int, scrolled: bool) -> void:
 	if has_pos:
 		var p: Dictionary = event["pos"]
 		var self_world := Vector2i(int(p.get("x", 0)), int(p.get("y", 0)))
-		_pet_origin = self_world - Vector2i(dim / 2, dim / 2)
+		_pet_origin = self_world - center
 		if _pet_prev_self_ok:
 			var d := self_world - _pet_prev_self_world
 			if absi(d.x) + absi(d.y) == 1:
@@ -1012,7 +1030,7 @@ func _update_pet_trails(event: Dictionary, dim: int, scrolled: bool) -> void:
 			shift = Vector2i(int(_scroll_from.x), int(_scroll_from.y))
 			have_shift = true
 		else:
-			var rel := pet_cells_relation(_pet_last_cells, cells, dim)
+			var rel := pet_cells_relation_wh(_pet_last_cells, cells, dims.x, dims.y)
 			match int(rel[0]):
 				2:
 					# 地形が跳んだ (転送・階段・サイズ変更)。
@@ -1040,9 +1058,9 @@ func _update_pet_trails(event: Dictionary, dim: int, scrolled: bool) -> void:
 			_pet_drawn_cell[nm] = (_pet_drawn_cell[nm] as Vector2i) - shift
 		# 自キャラのペットは、主人が直前に居たマスへ。
 		if pets.has(self_name):
-			_pet_self_cell = Vector2i(dim / 2, dim / 2) - shift
+			_pet_self_cell = center - shift
 			_pet_self_dir = dir_between(Vector2i.ZERO, shift)
-	if _pet_self_cell.x >= 0 and (_pet_self_cell.x >= dim or _pet_self_cell.y >= dim):
+	if _pet_self_cell.x >= 0 and (_pet_self_cell.x >= dims.x or _pet_self_cell.y >= dims.y):
 		_pet_self_cell = Vector2i(-1, -1)
 	var seen := {}
 	var self_cell := Vector2i(-1, -1)
@@ -1055,7 +1073,7 @@ func _update_pet_trails(event: Dictionary, dim: int, scrolled: bool) -> void:
 		if nm.is_empty() or not pets.has(nm):
 			continue
 		var cell := Vector2i(int(cd.get("x", -1)), int(cd.get("y", -1)))
-		if cell.x < 0 or cell.x >= dim or cell.y < 0 or cell.y >= dim:
+		if cell.x < 0 or cell.x >= dims.x or cell.y < 0 or cell.y >= dims.y:
 			continue
 		seen[nm] = true
 		if has_pos:
@@ -1138,7 +1156,7 @@ func _pet_draw_pos(cd: Dictionary) -> Array:
 	return [cell, str(cd.get("dir", "F"))]
 
 
-func _draw_pets_row(chars: Array, cells: Array, dim: int, z: float, row: int) -> void:
+func _draw_pets_row(chars: Array, cells: Array, dims: Vector2i, z: float, row: int) -> void:
 	## この行のペットを描く。キャラ本体より先に描き、同じマス
 	## では主人が手前に来るようにする。行の判定はキャラと
 	## 同じ足元基準 (char_pass)。
@@ -1154,13 +1172,13 @@ func _draw_pets_row(chars: Array, cells: Array, dim: int, z: float, row: int) ->
 		if not PET_TYPE_ROW.has(type_id):
 			continue
 		var owner_cell := Vector2i(int(cd.get("x", -1)), int(cd.get("y", -1)))
-		if owner_cell.x < 0 or owner_cell.x >= dim or owner_cell.y < 0 or owner_cell.y >= dim:
+		if owner_cell.x < 0 or owner_cell.x >= dims.x or owner_cell.y < 0 or owner_cell.y >= dims.y:
 			continue
 		var pos := _pet_draw_pos(cd)
 		var cell: Vector2i = pos[0]
 		var fake := {"x": cell.x, "y": cell.y, "gigant": "#"}
-		var dy := float(relief_offset_y(cells, dim, cell.x, cell.y))
-		if char_pass(fake, cells, dim, dy) != row:
+		var dy := float(relief_offset_y_wh(cells, dims.x, dims.y, cell.x, cell.y))
+		if char_pass_wh(fake, cells, dims.x, dims.y, dy) != row:
 			continue
 		var po := Vector2(0.0, dy * z)
 		if _pet_hop_at.has(nm):
@@ -1223,8 +1241,16 @@ func hover_text_for(cname: String) -> String:
 ## マップセット、1〜3 は _defines に名前があればそれ、無ければ
 ## 既定シート (assets.chip(""))。シートが無いスロットは null で、
 ## そのセルの描画は色塗りの代用に落ちる。
+func set_defines16(defines: Dictionary) -> void:
+	## v6 のマップセット16枠の定義を差し替える。
+	_defines16 = defines.duplicate()
+	_load_chip_texs()
+	queue_redraw()
+
+
 func _load_chip_texs() -> void:
-	_chip_texs = [null, null, null, null]
+	_chip_texs = [null, null, null, null, null, null, null, null,
+		null, null, null, null, null, null, null, null]
 	_sheet_images.clear()
 	_toned_cache.clear()
 	_toned_tex_cache.clear()
@@ -1234,10 +1260,22 @@ func _load_chip_texs() -> void:
 	_chip_texs[0] = assets.chip(mapset)
 	for slot in range(1, 4):
 		_chip_texs[slot] = assets.chip(str(_defines.get(slot, "")))
+	# 16枠: 定義のある枠だけシートを持つ (従来の4枠の解決が優先)。
+	for slot in range(1, 16):
+		if _defines16.has(slot):
+			_chip_texs[slot] = assets.chip(str(_defines16[slot]))
 
 
-## セルの属性下位2ビットが指すシート。無ければ null。
+## セルの指すシート。無ければ null。v6 のセルは枠番号 (slot) を
+## 持ち、その枠のシートを引く (定義が無ければ属性の下位2ビット
+## のシートへ落とす)。従来のセルは属性の下位2ビットのまま。
 func _sheet_for(cell: Dictionary) -> Texture2D:
+	if cell.has("slot"):
+		var slot := int(cell.get("slot", 0))
+		if 0 <= slot and slot < _chip_texs.size():
+			var tex: Variant = _chip_texs[slot]
+			if tex != null:
+				return tex as Texture2D
 	return _chip_texs[int(cell.get("attr", 0)) & 0x03] as Texture2D
 
 
@@ -1436,25 +1474,30 @@ static func relief_apply_overlays(data: PackedByteArray, base: PackedByteArray,
 func relief_cell_texture(cells: Array, dim: int, col: int, row: int) -> Variant:
 	## 起伏合成済みのセル画像 (32x48) のテクスチャ。シートが無い
 	## 場合は null (呼び出し側は従来描画に落とす)。
-	var idx := row * dim + col
+	return relief_cell_texture_wh(cells, dim, dim, col, row)
+
+
+func relief_cell_texture_wh(cells: Array, w: int, hgt: int, col: int, row: int) -> Variant:
+	## relief_cell_texture の (横, 縦) 指定版 (v6 の矩形盤面用)。
+	var idx := row * w + col
 	if idx < 0 or idx >= cells.size():
 		return null
 	var cell: Dictionary = cells[idx]
 	var sheet := _sheet_for(cell)
 	if sheet == null:
 		return null
-	var h := height_at(cells, dim, col, row)
-	var hn := height_at(cells, dim, col, row - 1)
-	var hs := height_at(cells, dim, col, row + 1)
-	var hw := height_at(cells, dim, col - 1, row)
-	var he := height_at(cells, dim, col + 1, row)
+	var h := height_at_wh(cells, w, hgt, col, row)
+	var hn := height_at_wh(cells, w, hgt, col, row - 1)
+	var hs := height_at_wh(cells, w, hgt, col, row + 1)
+	var hw := height_at_wh(cells, w, hgt, col - 1, row)
+	var he := height_at_wh(cells, w, hgt, col + 1, row)
 	var indices := chip_indices(int(cell.get("chip", 0)))
-	var north_cell: Dictionary = cells[clampi(row - 1, 0, dim - 1) * dim + col]
+	var north_cell: Dictionary = cells[clampi(row - 1, 0, hgt - 1) * w + col]
 	var north_sheet := _sheet_for(north_cell)
 	var north_indices := chip_indices(int(north_cell.get("chip", 0)))
 	var key := str([sheet.get_instance_id(), indices, h, hn, hs, hw, he,
 		north_sheet.get_instance_id() if north_sheet != null else 0, north_indices,
-		relief_is_face(cells, dim, col - 1, row), relief_is_face(cells, dim, col + 1, row)])
+		relief_is_face_wh(cells, w, hgt, col - 1, row), relief_is_face_wh(cells, w, hgt, col + 1, row)])
 	var cached: Variant = _relief_cache.get(key)
 	if cached != null:
 		return cached
@@ -1470,7 +1513,7 @@ func relief_cell_texture(cells: Array, dim: int, col: int, row: int) -> Variant:
 			_alpha_over(north, _toned_chip_data(north_sheet, index, hn))
 	var spans: Array = []
 	for x in range(CHIP_SIZE):
-		spans.append(relief_face_span(cells, dim, col, row, x) if hn > h else [])
+		spans.append(relief_face_span_wh(cells, w, hgt, col, row, x) if hn > h else [])
 	relief_apply_overlays(data, base, north, [h, hn, hs, hw, he], spans)
 	var img := Image.create_from_data(CHIP_SIZE, CHIP_HEIGHT, false, Image.FORMAT_RGBA8, data)
 	var tex := ImageTexture.create_from_image(img)
@@ -1551,9 +1594,8 @@ func set_guide_cell(cell: Vector2i) -> void:
 
 
 func player_cell() -> Vector2i:
-	## 自キャラのいるセル (盤面の中心)。
-	var dim := grid_dim(int(_event.get("size", 7)))
-	return Vector2i(dim / 2, dim / 2)
+	## 自キャラのいるセル (盤面の中心。v6 は様式でずれる)。
+	return self_cell_of(_event)
 
 
 func cell_at_local(local_pos: Vector2) -> Vector2i:
@@ -1562,9 +1604,9 @@ func cell_at_local(local_pos: Vector2) -> Vector2i:
 	if not rect.has_point(local_pos):
 		return Vector2i(-1, -1)
 	var board := (local_pos - rect.position) / float(zoom)
-	var dim := grid_dim(int(_event.get("size", 7)))
+	var dims := grid_dims(_event)
 	var cell := Vector2i(floori(board.x / CHIP_SIZE), floori((board.y - MAP_TOP) / CHIP_SIZE))
-	if cell.x < 0 or cell.y < 0 or cell.x >= dim or cell.y >= dim:
+	if cell.x < 0 or cell.y < 0 or cell.x >= dims.x or cell.y >= dims.y:
 		return Vector2i(-1, -1)
 	return cell
 
@@ -1637,10 +1679,10 @@ func _align_factor() -> float:
 
 func drawn_map_rect() -> Rect2:
 	## 描いている地図の範囲(コントロール内の座標)。マウスの当たり判定用。
-	var dim := grid_dim(int(_event.get("size", 7)))
+	var dims := grid_dims(_event)
 	var z := float(zoom)
-	var w := dim * CHIP_SIZE * z
-	var h := (dim * CHIP_SIZE + MAP_TOP) * z
+	var w := dims.x * CHIP_SIZE * z
+	var h := (dims.y * CHIP_SIZE + MAP_TOP) * z
 	# 固定倍率で地図が窓より大きい時は、中心 (自キャラ) が
 	# 見えるよう原点を負側にも許す。通常モードでは倍率が
 	# 収まるよう調整されるため従来どおり 0 で止める。
@@ -1678,6 +1720,26 @@ func debug_ghost_count() -> int:
 
 static func grid_dim(size: int) -> int:
 	return size if size == 5 or size == 7 or size == 9 or size == 11 else 7
+
+
+static func grid_dims(event: Dictionary) -> Vector2i:
+	## 地図イベントの盤面の大きさ (横, 縦)。phidm-v6 のフレームは
+	## w/h を持ち、従来フレームは size から正方形になる。
+	if event.has("w"):
+		return Vector2i(maxi(int(event.get("w", 0)), 1),
+			maxi(int(event.get("h", 0)), 1))
+	var d := grid_dim(int(event.get("size", 7)))
+	return Vector2i(d, d)
+
+
+static func self_cell_of(event: Dictionary) -> Vector2i:
+	## 自キャラのいるマス。v6 はイベントの selfCell (様式で中心から
+	## ずれる)、従来は盤面の中心。
+	var dims := grid_dims(event)
+	if event.has("selfCell"):
+		var sc: Dictionary = event["selfCell"]
+		return Vector2i(int(sc.get("x", 0)), int(sc.get("y", 0)))
+	return Vector2i(dims.x / 2, dims.y / 2)
 
 
 static func chip_indices(chip_byte: int) -> Array:
@@ -1723,8 +1785,13 @@ static func is_big(gigant: Variant) -> bool:
 static func char_draw_row(ch: Dictionary, dim: int) -> int:
 	## キャラを描く行パス。2x2 の敵は足元が南の行にあるため、
 	## 基準マスの次の行で描く (重なり順を足元に合わせる)。
+	return char_draw_row_wh(ch, dim)
+
+
+static func char_draw_row_wh(ch: Dictionary, h: int) -> int:
+	## char_draw_row の縦幅指定版 (v6 の矩形盤面用)。
 	var row := int(ch.get("y", 0)) + (1 if is_big(ch.get("gigant")) else 0)
-	return mini(row, dim - 1)
+	return mini(row, h - 1)
 
 
 static func arrange_row(chars: Array) -> Array:
@@ -1770,9 +1837,14 @@ static func cell_height(cell: Dictionary) -> int:
 static func height_at(cells: Array, dim: int, col: int, row: int) -> int:
 	## セル (col,row) の段数。範囲外は端のセルの高さで延長する
 	## (サンプルの height_at と同じ。画面端で段差が誤爆しない)。
-	var c := clampi(col, 0, dim - 1)
-	var r := clampi(row, 0, dim - 1)
-	var idx := r * dim + c
+	return height_at_wh(cells, dim, dim, col, row)
+
+
+static func height_at_wh(cells: Array, w: int, h: int, col: int, row: int) -> int:
+	## height_at の (横, 縦) 指定版 (v6 の矩形盤面用)。
+	var c := clampi(col, 0, w - 1)
+	var r := clampi(row, 0, h - 1)
+	var idx := r * w + c
 	if idx < 0 or idx >= cells.size():
 		return 0
 	return cell_height(cells[idx])
@@ -1780,7 +1852,11 @@ static func height_at(cells: Array, dim: int, col: int, row: int) -> int:
 
 static func relief_offset_y(cells: Array, dim: int, col: int, row: int) -> int:
 	## そのセルの高さぶんの描画 y ずれ (px)。高いほど上へ。
-	return -RELIEF_STEP * height_at(cells, dim, col, row)
+	return relief_offset_y_wh(cells, dim, dim, col, row)
+
+
+static func relief_offset_y_wh(cells: Array, w: int, h: int, col: int, row: int) -> int:
+	return -RELIEF_STEP * height_at_wh(cells, w, h, col, row)
 
 
 static func relief_scroll_dy(from_h: int, to_h: int, p: float) -> float:
@@ -1806,29 +1882,41 @@ static func relief_scroll_dy(from_h: int, to_h: int, p: float) -> float:
 
 static func relief_is_face(cells: Array, dim: int, col: int, row: int) -> bool:
 	## 北の隣が高い = このセルの上部に段面の帯が出る。
-	return height_at(cells, dim, col, row - 1) > height_at(cells, dim, col, row)
+	return relief_is_face_wh(cells, dim, dim, col, row)
+
+
+static func relief_is_face_wh(cells: Array, w: int, h: int, col: int, row: int) -> bool:
+	return height_at_wh(cells, w, h, col, row - 1) > height_at_wh(cells, w, h, col, row)
 
 
 static func relief_involved(cells: Array, dim: int, col: int, row: int) -> bool:
 	## 起伏の自動生成が要るセルか。自他の段数と、左右の段面の
 	## テーパー (隣の段面の有無) に関わるセルだけが対象で、
 	## 高さの無い地図では全セル false になり従来描画と一致する。
-	if height_at(cells, dim, col, row) != 0:
+	return relief_involved_wh(cells, dim, dim, col, row)
+
+
+static func relief_involved_wh(cells: Array, w: int, h: int, col: int, row: int) -> bool:
+	if height_at_wh(cells, w, h, col, row) != 0:
 		return true
-	if height_at(cells, dim, col, row - 1) != 0 or height_at(cells, dim, col, row + 1) != 0:
+	if height_at_wh(cells, w, h, col, row - 1) != 0 or height_at_wh(cells, w, h, col, row + 1) != 0:
 		return true
-	if height_at(cells, dim, col - 1, row) != 0 or height_at(cells, dim, col + 1, row) != 0:
+	if height_at_wh(cells, w, h, col - 1, row) != 0 or height_at_wh(cells, w, h, col + 1, row) != 0:
 		return true
-	return relief_is_face(cells, dim, col - 1, row) or relief_is_face(cells, dim, col + 1, row)
+	return relief_is_face_wh(cells, w, h, col - 1, row) or relief_is_face_wh(cells, w, h, col + 1, row)
 
 
 static func relief_face_span(cells: Array, dim: int, col: int, row: int, x: int) -> Array:
 	## 段面の帯の列 x の形状 [下端行 fb, 唇の厚み lip]。帯が出ない
 	## 列 (端の先端) は空配列。サンプルの式そのまま。
+	return relief_face_span_wh(cells, dim, dim, col, row, x)
+
+
+static func relief_face_span_wh(cells: Array, w: int, h: int, col: int, row: int, x: int) -> Array:
 	var s := 1.0
-	if not relief_is_face(cells, dim, col - 1, row):
+	if not relief_is_face_wh(cells, w, h, col - 1, row):
 		s = minf(s, pow((float(x) + 1.0) / 10.0, 1.1))
-	if not relief_is_face(cells, dim, col + 1, row):
+	if not relief_is_face_wh(cells, w, h, col + 1, row):
 		s = minf(s, pow((float(CHIP_SIZE - x)) / 10.0, 1.1))
 	var fb := int(round(3.0 + 9.0 * s))
 	var lip := int(round(3.0 * s))
@@ -1883,14 +1971,19 @@ static func char_pass(ch: Dictionary, cells: Array, dim: int, dy_px: float) -> i
 	## (スプライト下端 + 高さずれ) の属する行で描く。行単位の
 	## ままだと、段差の入口で段面の帯がキャラを横切って一瞬
 	## 奥に隠れる (サンプルで実証され、足元基準で解消済み)。
-	var base := char_draw_row(ch, dim)
+	return char_pass_wh(ch, cells, dim, dim, dy_px)
+
+
+static func char_pass_wh(ch: Dictionary, cells: Array, w: int, h: int, dy_px: float) -> int:
+	## char_pass の (横, 縦) 指定版 (v6 の矩形盤面用)。
+	var base := char_draw_row_wh(ch, h)
 	var cx := int(ch.get("x", 0))
 	var cy := int(ch.get("y", 0))
-	if height_at(cells, dim, cx, cy) == 0 and dy_px == 0.0:
+	if height_at_wh(cells, w, h, cx, cy) == 0 and dy_px == 0.0:
 		return base
 	var foot_row := cy + (1 if is_big(ch.get("gigant")) else 0)
 	var foot := foot_row * CHIP_SIZE + CHARA_FOOT + int(round(dy_px))
-	return clampi(foot / CHIP_SIZE, 0, dim - 1)
+	return clampi(foot / CHIP_SIZE, 0, h - 1)
 
 
 static func chara_src_rect(dir_value: Variant, gigant: Variant, anim_frame: int = 0, large: bool = false) -> Rect2:
@@ -1937,15 +2030,20 @@ static func chip_quarter_src_rect(chip_index: int, quarter: int) -> Rect2:
 
 static func build_water_grid(cells: Array, dim: int) -> Array:
 	## 水有無の (dim+2)×(dim+2) 配列を作る(枠=0)。
+	return build_water_grid_wh(cells, dim, dim)
+
+
+static func build_water_grid_wh(cells: Array, w: int, h: int) -> Array:
+	## build_water_grid の (横, 縦) 指定版 (v6 の矩形盤面用)。
 	var water: Array = []
-	for r in range(dim + 2):
+	for r in range(h + 2):
 		var row: Array = []
-		for c in range(dim + 2):
+		for c in range(w + 2):
 			row.append(0)
 		water.append(row)
-	for r in range(dim):
-		for c in range(dim):
-			var idx := r * dim + c
+	for r in range(h):
+		for c in range(w):
+			var idx := r * w + c
 			if idx < cells.size() and int(cells[idx].get("chip", 0)) == WATER_BYTE:
 				water[r + 1][c + 1] = 1
 	return water
@@ -1965,7 +2063,7 @@ func _draw_wallpaper() -> void:
 		y += WALLPAPER_TILE.y
 
 
-func _draw_cell_row(cells: Array, dim: int, z: float, row: int, water: Variant) -> void:
+func _draw_cell_row(cells: Array, dims: Vector2i, z: float, row: int, water: Variant) -> void:
 	## 1行分のセル (ベースチップ・水縁・看板・アイテム) を描く。
 	## 滑らかスクロールの「前の地図」パスと共用する (第64段)。
 	var half := CHIP_SIZE / 2
@@ -1973,12 +2071,12 @@ func _draw_cell_row(cells: Array, dim: int, z: float, row: int, water: Variant) 
 	# 以下の分岐は全て従来どおりになる。
 	var relief: Array = []
 	var rheights: Array = []
-	for col in range(dim):
-		relief.append(relief_involved(cells, dim, col, row))
-		rheights.append(height_at(cells, dim, col, row))
+	for col in range(dims.x):
+		relief.append(relief_involved_wh(cells, dims.x, dims.y, col, row))
+		rheights.append(height_at_wh(cells, dims.x, dims.y, col, row))
 	# 1. ベースチップ
-	for col in range(dim):
-		var idx := row * dim + col
+	for col in range(dims.x):
+		var idx := row * dims.x + col
 		if idx >= cells.size():
 			continue
 		var cell: Dictionary = cells[idx]
@@ -1987,7 +2085,7 @@ func _draw_cell_row(cells: Array, dim: int, z: float, row: int, water: Variant) 
 			_fallback_cell(cell, col, row, z)
 			continue
 		if relief[col]:
-			var rtex: Variant = relief_cell_texture(cells, dim, col, row)
+			var rtex: Variant = relief_cell_texture_wh(cells, dims.x, dims.y, col, row)
 			if rtex != null:
 				_draw_cell_image(rtex, col, row, z)
 				continue
@@ -1995,8 +2093,8 @@ func _draw_cell_row(cells: Array, dim: int, z: float, row: int, water: Variant) 
 			_draw_chip(sheet, chip_index, col, row, z)
 	# 1.5 水縁overlay
 	if water != null:
-		for col in range(dim):
-			var idx := row * dim + col
+		for col in range(dims.x):
+			var idx := row * dims.x + col
 			if idx >= cells.size():
 				continue
 			var cell: Dictionary = cells[idx]
@@ -2026,8 +2124,8 @@ func _draw_cell_row(cells: Array, dim: int, z: float, row: int, water: Variant) 
 					continue
 				draw_texture_rect_region(sheet, Rect2(dx, dy, half * z, half * z), rect)
 	# 2. 看板overlay
-	for col in range(dim):
-		var idx := row * dim + col
+	for col in range(dims.x):
+		var idx := row * dims.x + col
 		if idx >= cells.size():
 			continue
 		var cell: Dictionary = cells[idx]
@@ -2042,8 +2140,8 @@ func _draw_cell_row(cells: Array, dim: int, z: float, row: int, water: Variant) 
 			else:
 				_draw_chip(sheet, _board_chip_index(int(cell.get("chip", 0))), col, row, z)
 	# 3. アイテムoverlay
-	for col in range(dim):
-		var idx := row * dim + col
+	for col in range(dims.x):
+		var idx := row * dims.x + col
 		if idx >= cells.size():
 			continue
 		var cell: Dictionary = cells[idx]
@@ -2057,7 +2155,7 @@ func _draw() -> void:
 	if _event.is_empty():
 		draw_rect(Rect2(Vector2.ZERO, size), TITLE_BG)
 		return
-	var dim := grid_dim(int(_event.get("size", 7)))
+	var dims := grid_dims(_event)
 	var cells: Array = _event.get("cells", [])
 	var chars: Array = _event.get("chars", [])
 	var z := float(zoom)
@@ -2065,8 +2163,8 @@ func _draw() -> void:
 	# 配置は整数ピクセルに丸める。小数位置だと線形補間でチップの
 	# 端が隣の絵と混ざり、セルの境に黒い線が出ることがある。
 	var shake := _shake_offset(z)
-	var raw_ox := (size.x - dim * CHIP_SIZE * z) * _align_factor()
-	var raw_oy := (size.y - (dim * CHIP_SIZE + MAP_TOP) * z) * 0.5
+	var raw_ox := (size.x - dims.x * CHIP_SIZE * z) * _align_factor()
+	var raw_oy := (size.y - (dims.y * CHIP_SIZE + MAP_TOP) * z) * 0.5
 	if zoom_mode != 1:
 		# 固定倍率の時は原点を負側にも許し、地図を中央に保つ
 		# (drawn_map_rect と一致させる)。
@@ -2089,43 +2187,44 @@ func _draw() -> void:
 	# 隙間からは後ろの壁紙が見える(黒く塗ると帯になって目立つ)。
 	var water: Variant = null
 	if _any_sheet():
-		water = build_water_grid(cells, dim)
+		water = build_water_grid_wh(cells, dims.x, dims.y)
 	var half := CHIP_SIZE / 2
 
 	if scrolling:
 		# 前の地図を後ろに敷く (端のはみ出し側を覆う)。
 		var pwater: Variant = null
 		if _any_sheet():
-			pwater = build_water_grid(_prev_cells, dim)
+			pwater = build_water_grid_wh(_prev_cells, dims.x, dims.y)
 		draw_set_transform(Vector2(ox, oy) + so - _scroll_from * float(CHIP_SIZE) * z, 0.0, Vector2.ONE)
-		for prow in range(dim):
-			_draw_cell_row(_prev_cells, dim, z, prow, pwater)
+		for prow in range(dims.y):
+			_draw_cell_row(_prev_cells, dims, z, prow, pwater)
 		draw_set_transform(Vector2(ox + so.x, oy + so.y), 0.0, Vector2.ONE)
 
-	for row in range(dim):
-		_draw_cell_row(cells, dim, z, row, water)
+	for row in range(dims.y):
+		_draw_cell_row(cells, dims, z, row, water)
 		# 4a. ペット (この行)。キャラ本体より先に描き、同じ
 		# マスでは主人が手前に来るようにする。
-		_draw_pets_row(chars, cells, dim, z, row)
+		_draw_pets_row(chars, cells, dims, z, row)
 		# 4. キャラ(この行)。高さのあるセルでは足元基準の行で
 		# 描き、高さぶん y をずらす。
 		var row_chars: Array = []
 		for ch in chars:
-			if char_pass(ch, cells, dim, _chara_dy(ch, cells, dim, scrolling)) == row \
-					and 0 <= int(ch.get("x", -1)) and int(ch.get("x", -1)) < dim:
+			if char_pass_wh(ch, cells, dims.x, dims.y, _chara_dy(ch, cells, dims, scrolling)) == row \
+					and 0 <= int(ch.get("x", -1)) and int(ch.get("x", -1)) < dims.x:
 				row_chars.append(ch)
 		for pair in arrange_row(row_chars):
 			var ch: Dictionary = pair[0]
-			var po := Vector2(0.0, _chara_dy(ch, cells, dim, scrolling) * z)
+			var po := Vector2(0.0, _chara_dy(ch, cells, dims, scrolling) * z)
 			if scrolling and bool(ch.get("__self", false)):
 				po += -so  # 自キャラは中央に留める
 			_draw_state_icon(ch, pair[1], z, true, po)
 			_draw_fx_aura(ch, pair[1], z, po)
 			_draw_chara(ch, pair[1], z, null, Color.WHITE, po)
+			_draw_v6_bars(ch, pair[1], z, po)
 			_draw_state_icon(ch, pair[1], z, false, po)
 			_draw_fx_icons(ch, pair[1], z, po)
 		# 4.5 残像(この行)。ずらさず、この行のキャラの上に重ねます。
-		_draw_ghosts(row, dim, z)
+		_draw_ghosts(row, dims, z)
 	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 	if scrolling:
 		# スクロール中は地図の四角の外へはみ出したセル・キャラの
@@ -2136,12 +2235,12 @@ func _draw() -> void:
 		# (第67段、ユーザーの指摘「一瞬壁紙が前に来ている」)。
 		# 上の余白帯 (MAP_TOP) は内側に含める (帯まで隠す版は
 		# 張り出しが最後にぱっと現れてちらついたため戻した)。
-		_mask_outside_grid(_scroll_mask_rect(ox, oy, dim, z))
+		_mask_outside_grid(_scroll_mask_rect(ox, oy, dims.x, z))
 	draw_set_transform(Vector2(ox + so.x, oy + so.y), 0.0, Vector2.ONE)
 	# 5. キャラ名ラベル(中心の自キャラは除外)。同じマスは後勝ち。
-	_draw_labels(chars, dim, z)
+	_draw_labels(chars, dims, z)
 	# 6. 戦闘の演出(点滅・斬撃・魔法弾・着弾・浮き数字・吹き出し)。
-	_draw_effects(dim, z)
+	_draw_effects(dims, z)
 	# 7. マウス移動ガイド線 (Philly MouseMoveLine)。自セルから
 	# マウスのセルへ目安の線を引く。
 	if guide_cell.x >= 0:
@@ -2157,7 +2256,7 @@ func _draw() -> void:
 	_draw_fx_overlays()
 
 
-func _chara_dy(ch: Dictionary, cells: Array, dim: int, scrolling: bool) -> float:
+func _chara_dy(ch: Dictionary, cells: Array, dims: Vector2i, scrolling: bool) -> float:
 	## キャラの高さずれ (px、拡大前)。自キャラはスクロール中に
 	## 中心セルの段数の間を、地図のイーズと同じ進み具合で補間
 	## する (relief_scroll_dy: 登りはホップ、降りは後半に落ちる
@@ -2167,15 +2266,19 @@ func _chara_dy(ch: Dictionary, cells: Array, dim: int, scrolling: bool) -> float
 			var p := 1.0 - pow(1.0 - _scroll_t, 3.0)
 			return relief_scroll_dy(_scroll_from_h, _scroll_to_h, p)
 		return -float(RELIEF_STEP) * float(_scroll_to_h)
-	return float(relief_offset_y(cells, dim,
+	return float(relief_offset_y_wh(cells, dims.x, dims.y,
 		int(ch.get("x", 0)), int(ch.get("y", 0))))
 
 
 func _scroll_mask_rect(ox: float, oy: float, dim: int, z: float) -> Rect2:
 	## スクロール中のマスクの内側 = 地図の四角 (上の余白帯
-	## MAP_TOP を含む)。
-	return Rect2(ox, oy, dim * float(CHIP_SIZE) * z,
-		(dim * float(CHIP_SIZE) + MAP_TOP) * z)
+	## MAP_TOP を含む)。v6 イベントでは (w, h)、それ以外は
+	## dim の正方形。
+	var dims := Vector2i(dim, dim)
+	if _event.has("w"):
+		dims = grid_dims(_event)
+	return Rect2(ox, oy, dims.x * float(CHIP_SIZE) * z,
+		(dims.y * float(CHIP_SIZE) + MAP_TOP) * z)
 
 
 func _outside_strips(rect: Rect2, bounds: Vector2) -> Array:
@@ -2623,22 +2726,21 @@ func _draw_fx_icons(ch: Dictionary, dx: int, z: float, po := Vector2.ZERO) -> vo
 			Rect2(int(icons[i]) * 32, 0, 32, 32))
 
 
-func _draw_labels(chars: Array, dim: int, z: float) -> void:
+func _draw_labels(chars: Array, dims: Vector2i, z: float) -> void:
 	# キャラ名は太字で、背景に半透明のマスクを敷いて読めるようにする
 	# (ユーザーの指定)。
 	var name_font: Font = bold_font if bold_font != null else label_font
 	if name_font == null:
 		return
-	var cx := dim / 2
-	var cy := dim / 2
+	var center := self_cell_of(_event)
 	var per_cell := {}
 	var big_cells := {}
 	for ch in chars:
 		var x := int(ch.get("x", -1))
 		var y := int(ch.get("y", -1))
-		if not (0 <= x and x < dim and 0 <= y and y < dim):
+		if not (0 <= x and x < dims.x and 0 <= y and y < dims.y):
 			continue
-		if x == cx and y == cy:
+		if x == center.x and y == center.y:
 			continue
 		var chara_name := PhiTags.strip_tags(str(ch.get("name", ""))).strip_edges()
 		if chara_name.is_empty():
@@ -2656,7 +2758,7 @@ func _draw_labels(chars: Array, dim: int, z: float) -> void:
 		var center_off := CHIP_SIZE / 2 if big_cells.has(cell_key) else 0
 		var x := (cell_pos.x * CHIP_SIZE + CHIP_SIZE / 2 + center_off) * z
 		var y := (cell_pos.y * CHIP_SIZE + int(CHIP_SIZE * 0.6) + MAP_TOP
-			+ relief_offset_y(lcells, dim, cell_pos.x, cell_pos.y)) * z
+			+ relief_offset_y_wh(lcells, dims.x, dims.y, cell_pos.x, cell_pos.y)) * z
 		var ts := name_font.get_string_size(chara_name, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size)
 		var pos := Vector2(x - ts.x / 2.0, y + name_font.get_ascent(font_size))
 		var pad_x := 5.0 * z
@@ -2687,8 +2789,8 @@ func _process(_delta: float) -> void:
 	# 拡大の追いかけ: 期限までは、収まる余地がある時に要求を
 	# 出し直して1段階ずつ収まる倍率へ近づける。
 	if _now() <= _grow_drive_until and size.x >= 1.0 and size.y >= 1.0:
-		var gdim := grid_dim(int(_event.get("size", 7)))
-		var gfit := clampi(mini(int(size.x / (gdim * CHIP_SIZE)), int(size.y / (gdim * CHIP_SIZE + MAP_TOP))), 1, 8)
+		var gdims := grid_dims(_event)
+		var gfit := clampi(mini(int(size.x / (gdims.x * CHIP_SIZE)), int(size.y / (gdims.y * CHIP_SIZE + MAP_TOP))), 1, 8)
 		if gfit > zoom:
 			_grow_requested = true
 			_update_zoom()
@@ -2709,7 +2811,7 @@ func _process(_delta: float) -> void:
 	if not _pet_hop_at.is_empty() and not _event.is_empty() \
 			and is_visible_in_tree() and _pet_hop_active():
 		queue_redraw()
-	if _floats.is_empty() and _flashes.is_empty() and _swings.is_empty() and _slashes.is_empty() and _bolts.is_empty() and _impacts.is_empty() and _casts.is_empty() and _ghosts.is_empty() and _bubbles.is_empty() and _disp_magics.is_empty() and not _shake_active and not _fx_any_active():
+	if _floats.is_empty() and _flashes.is_empty() and _swings.is_empty() and _slashes.is_empty() and _bolts.is_empty() and _impacts.is_empty() and _casts.is_empty() and _ghosts.is_empty() and _bubbles.is_empty() and _disp_magics.is_empty() and _v6_casts.is_empty() and not _shake_active and not _fx_any_active():
 		return
 	_expire_effects()
 	queue_redraw()
@@ -2730,6 +2832,11 @@ func _expire_effects() -> void:
 	_bolts = kept_bolts
 	_impacts = _impacts.filter(func(f: Dictionary) -> bool: return now - float(f["spawned"]) < IMPACT_FRAME * IMPACT_FRAMES)
 	_casts = _casts.filter(func(f: Dictionary) -> bool: return now - float(f["spawned"]) < CAST_DURATION)
+	# v6 の詠唱バーは、残り時間が過ぎたものを落とす。
+	for key in _v6_casts.keys():
+		var cd3: Dictionary = _v6_casts[key]
+		if now - float(cd3.get("started", 0.0)) >= float(int(cd3.get("ticks", 0))) * 0.1:
+			_v6_casts.erase(key)
 	_ghosts = _ghosts.filter(func(g: Dictionary) -> bool: return int((now - float(g["spawned"])) / GHOST_STEP) < GHOST_STEPS)
 	_disp_magics = _disp_magics.filter(func(d: Dictionary) -> bool: return now - float(d["spawned"]) < DISP_MAGIC_PHASE * DISP_MAGIC_PHASES)
 	_recent_disp_hits = _recent_disp_hits.filter(func(h: Dictionary) -> bool: return now - float(h["spawned"]) < DISP_MAGIC_SUPPRESS_WINDOW)
@@ -2866,12 +2973,123 @@ func spawn_disp_magic(data: Dictionary) -> void:
 	queue_redraw()
 
 
+# -- phidm-v6 の情報表示 (段階1) -------------------------------------------
+## `#v6 H` の体力表示 (キャラID -> {"hp": 割合, "ag": 敵対})。
+var _v6_health: Dictionary = {}
+## `#v6 W` の詠唱・攻撃待ち (キー -> {"ticks","started","spell"})。
+## キーは "self" か "id:<キャラID>"。
+var _v6_casts: Dictionary = {}
+
+
+func set_v6_health(health: Dictionary) -> void:
+	## `#v6 H` で届いた体力表示を差し替える。
+	_v6_health = health.duplicate()
+	queue_redraw()
+
+
+func note_v6_cast(key: String, ticks: int, spell: String) -> void:
+	## 詠唱・攻撃の待ちの開始 (残りは 0.1 秒単位)。
+	_v6_casts[key] = {"ticks": ticks, "started": _now(), "spell": spell}
+	queue_redraw()
+
+
+func clear_v6_cast(key: String) -> void:
+	## 待ちの終了 (cast=stop / at の消費)。
+	_v6_casts.erase(key)
+	queue_redraw()
+
+
+func debug_v6_casts() -> Dictionary:
+	return _v6_casts.duplicate()
+
+
+func spawn_v6_effect(ev: Dictionary) -> void:
+	## `#v6 E` (戦闘の演出位置) を既存の演出へ流す。座標は視界の
+	## 列・行で、攻撃側が視界外の時は ax が負。
+	var now := _now()
+	var tx := int(ev.get("tx", -1))
+	var ty := int(ev.get("ty", -1))
+	if tx < 0 or ty < 0:
+		return
+	var head_top := (CHIP_SIZE - CHARA_H) / 2 - CHARA_Y_ABOVE_FLOOR + MAP_TOP
+	var target := _sprite_center(Vector2(tx * CHIP_SIZE + CHIP_SIZE / 2,
+		ty * CHIP_SIZE + head_top))
+	var ax := int(ev.get("ax", -1))
+	var ay := int(ev.get("ay", -1))
+	var has_from := ax >= 0 and ay >= 0
+	var from := Vector2.ZERO
+	if has_from:
+		from = _sprite_center(Vector2(ax * CHIP_SIZE + CHIP_SIZE / 2,
+			ay * CHIP_SIZE + head_top))
+	match str(ev.get("kind", "")):
+		"chant":
+			if has_from:
+				_casts.append({"center": from, "spawned": now})
+		"hit":
+			if has_from and from != target:
+				_swings.append({"from": from, "to": target, "spawned": now})
+			else:
+				_slashes.append({"center": target, "spawned": now})
+		"miss":
+			_slashes.append({"center": target, "spawned": now})
+		"magic", "spell":
+			if has_from:
+				_casts.append({"center": from, "spawned": now})
+			if has_from and magic_bolt and from != target:
+				_bolts.append({"start": from, "end": target, "spawned": now})
+			else:
+				_impacts.append({"center": target, "spawned": now})
+		_:
+			return
+	queue_redraw()
+
+
+func _draw_v6_bars(ch: Dictionary, dx: int, z: float, po: Vector2) -> void:
+	## `#v6 H` の体力バー (足元) と敵対印 (頭上)、`#v6 W` の
+	## 詠唱バー (頭上) を描く。v6 接続でしか届かないので、
+	## 従来モードでは何も描かれない。
+	if _v6_health.is_empty() and _v6_casts.is_empty():
+		return
+	var rect := chara_src_rect(ch.get("dir", "F"), ch.get("gigant", "#"), _anim_frame)
+	var sw := rect.size.x * (2.0 if is_big(ch.get("gigant")) else 1.0)
+	var base_x := int(ch.get("x", 0)) * CHIP_SIZE + (CHIP_SIZE - int(rect.size.x)) / 2 + dx
+	var base_y := int(ch.get("y", 0)) * CHIP_SIZE + (CHIP_SIZE - CHARA_H) / 2 - CHARA_Y_ABOVE_FLOOR + MAP_TOP
+	var cid := int(ch.get("id", -1))
+	if _v6_health.has(cid):
+		var hd: Dictionary = _v6_health[cid]
+		var hp := int(hd.get("hp", -1))
+		if 0 <= hp and hp < 100:
+			var bw := 28.0
+			var bx := (base_x + (sw - bw) / 2.0) * z + po.x
+			var by := (base_y + CHARA_H + 1.0) * z + po.y
+			draw_rect(Rect2(bx, by, bw * z, 3.0 * z), Color(0, 0, 0, 0.6))
+			var frac := clampf(float(hp) / 100.0, 0.0, 1.0)
+			var col := Color(0.35, 0.9, 0.4) if hp > 30 else Color(0.95, 0.35, 0.3)
+			draw_rect(Rect2(bx, by, bw * frac * z, 3.0 * z), col)
+		if int(hd.get("ag", 0)) == 1:
+			var mx := (base_x + sw / 2.0) * z + po.x
+			var my := (base_y - 7.0) * z + po.y
+			draw_circle(Vector2(mx, my), 2.5 * z, Color(0.95, 0.3, 0.25))
+	var key := "self" if bool(ch.get("__self", false)) else "id:%d" % cid
+	if _v6_casts.has(key):
+		var cd2: Dictionary = _v6_casts[key]
+		var total := float(int(cd2.get("ticks", 0))) * 0.1
+		if total > 0.0:
+			var remain := total - (_now() - float(cd2.get("started", 0.0)))
+			if remain > 0.0:
+				var bw2 := 28.0
+				var bx2 := (base_x + (sw - bw2) / 2.0) * z + po.x
+				var by2 := (base_y - 4.0) * z + po.y
+				draw_rect(Rect2(bx2, by2, bw2 * z, 3.0 * z), Color(0, 0, 0, 0.6))
+				draw_rect(Rect2(bx2, by2, bw2 * clampf(remain / total, 0.0, 1.0) * z, 3.0 * z),
+					Color(0.45, 0.75, 1.0))
+
+
 func _disp_magic_covers_target(target: String, now: float) -> bool:
 	## 対象のいるマスを、サーバー駆動の魔法表示が最近出したか。
 	var cell := Vector2i(-1, -1)
-	var dim := grid_dim(int(_event.get("size", 7)))
 	if target == player_name or target == "あなた" or target == "自分":
-		cell = Vector2i(dim / 2, dim / 2)
+		cell = player_cell()
 	else:
 		var ch: Variant = _last_charas.get(target)
 		if ch == null:
@@ -2979,7 +3197,7 @@ func show_bubble(speaker: String, body: String) -> void:
 	queue_redraw()
 
 
-func _draw_ghosts(row: int, dim: int, z: float) -> void:
+func _draw_ghosts(row: int, dims: Vector2i, z: float) -> void:
 	if _ghosts.is_empty():
 		return
 	var now := _now()
@@ -2988,7 +3206,7 @@ func _draw_ghosts(row: int, dim: int, z: float) -> void:
 		if int(gch.get("y", -1)) != row:
 			continue
 		var gx := int(gch.get("x", -1))
-		if not (0 <= gx and gx < dim):
+		if not (0 <= gx and gx < dims.x):
 			continue
 		# 描き直しが重くても、壁時計どおりの速さで薄くします
 		var step := int((now - float(g["spawned"])) / GHOST_STEP)
@@ -2996,11 +3214,11 @@ func _draw_ghosts(row: int, dim: int, z: float) -> void:
 			continue
 		var alpha := 1.0 - float(step) / GHOST_STEPS
 		var gcells: Array = _event.get("cells", [])
-		var gdy := float(relief_offset_y(gcells, dim, gx, int(gch.get("y", 0))))
+		var gdy := float(relief_offset_y_wh(gcells, dims.x, dims.y, gx, int(gch.get("y", 0))))
 		_draw_chara(gch, 0, z, g["tex"], Color(1, 1, 1, alpha), Vector2(0.0, gdy * z))
 
 
-func _draw_effects(dim: int, z: float) -> void:
+func _draw_effects(dims: Vector2i, z: float) -> void:
 	var now := _now()
 	for f in _flashes:
 		_draw_flash(f, z, now)
@@ -3018,7 +3236,7 @@ func _draw_effects(dim: int, z: float) -> void:
 		_draw_disp_magic(dm, z, now)
 	for f in _floats:
 		_draw_float(f, z, now)
-	_draw_bubbles(dim, z)
+	_draw_bubbles(dims, z)
 
 
 func _draw_flash(f: Dictionary, z: float, now: float) -> void:
@@ -3224,13 +3442,13 @@ func _draw_float(f: Dictionary, z: float, now: float) -> void:
 	draw_string(label_font, Vector2(bx, y), label, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, c)
 
 
-func _draw_bubbles(dim: int, z: float) -> void:
+func _draw_bubbles(dims: Vector2i, z: float) -> void:
 	if label_font == null or _bubbles.is_empty():
 		return
 	# Tk のポイント数(6pt)をピクセル数に直します(96dpi で ×4/3)。
 	var font_size := int(round(8.0 * z)) - 2
 	var pad := 4.0 * z
-	var map_w := dim * CHIP_SIZE * z
+	var map_w := dims.x * CHIP_SIZE * z
 	var max_text := minf(BUBBLE_MAX_WIDTH * z, map_w - 2.0 * pad)
 	if max_text <= 0.0:
 		return

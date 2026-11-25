@@ -13,7 +13,8 @@ const _MAP_CELLS := 49
 const _M57_DIRECTION_OFFSET := 7
 const _M57_CHIP_OFFSET := 18
 const _MAP_CHIP_BYTES := _MAP_CELLS * 2
-const _MAX_EAGLE_EYE := 25
+## Eagle Eye の最大辺。従来サーバは 25、phidm-v6 は 65x49 まで送る。
+const _MAX_EAGLE_EYE := 65
 const _MAX_LIST_LINES := 1000
 const _MAX_MAP_CHARS := 1000
 const _I64_MIN := -9223372036854775808
@@ -291,6 +292,26 @@ var _mapset: Variant = null
 var _map_style: Variant = null
 var _abs_pos: Variant = null # {"x":..,"y":..} か null
 
+# -- phidm-v6 拡張 (段階0+1) -------------------------------------------------
+## `#ex-map view=` が受理されたか (サーバが v6 フレームを送る状態)。
+var _v6_active := false
+var _v6_view := Vector2i.ZERO
+## 構築中の v6 フレーム。R 行は (chip, attr) の生バイト列で保持する。
+var _v6_frame := false
+var _v6_w := 0
+var _v6_h := 0
+var _v6_dir := 0
+var _v6_rows: Dictionary = {} # 行番号 -> PackedByteArray
+var _v6_arows: Dictionary = {} # 行番号 -> 16進文字列 (マップセット枠)
+var _v6_xrows: Dictionary = {} # 行番号 -> 通行可否の文字列
+var _v6_chars: Array[Dictionary] = []
+## マップセット16枠の定義 (枠番号 -> 名前)。接続中は保持される。
+var _v6_defines: Dictionary = {}
+## S/I/B/P/L/Q/K のブロック蓄積 (頭文字 -> エントリの配列)。
+var _v6_blocks: Dictionary = {}
+## `#v6 T` のタグ。次の発言メッセージに付けてから消す。
+var _v6_tag: Variant = null
+
 
 func _init() -> void:
 	_eagle_reset()
@@ -349,6 +370,8 @@ func feed(raw: PackedByteArray) -> Array[Dictionary]:
 		if _starts_with_bytes(raw, "#map C"):
 			_parse_map_c(raw)
 			return []
+		if _starts_with_bytes(raw, "#v6 "):
+			return _feed_v6(raw)
 		return _dispatch_command(Cp932.decode(raw), raw)
 
 	if _in_list:
@@ -361,15 +384,23 @@ func feed(raw: PackedByteArray) -> Array[Dictionary]:
 	if raw[0] == 0x5B: # [
 		var end := text.find("]")
 		if end > 0 and text.substr(end + 1).strip_edges(true, false).begins_with(">"):
-			return [_message("priv", text, text.substr(1, end - 1))]
+			return [_tag_message(_message("priv", text, text.substr(1, end - 1)))]
 	# 行頭の /**/ は何もしないタグです。実サーバは発言の行の頭に
 	# /**/ を付けるので、分類の時だけ取り除きます。
 	var classify := text.substr(4) if text.begins_with("/**/") else text
 	# "名前 > 本文" で名前が #user にあればプレイヤーの発言
 	var idx := classify.find(" > ")
 	if idx > 0 and user_no(classify.substr(0, idx)) != null:
-		return [_message("talk", text, classify.substr(0, idx))]
-	return [_message("log", text, null)]
+		return [_tag_message(_message("talk", text, classify.substr(0, idx)))]
+	return [_tag_message(_message("log", text, null))]
+
+
+func _tag_message(ev: Dictionary) -> Dictionary:
+	## `#v6 T` のタグを次の発言メッセージへ付ける (1回だけ)。
+	if _v6_tag != null and ev.get("type") == "message":
+		ev["v6tag"] = _v6_tag
+		_v6_tag = null
+	return ev
 
 
 func end_list() -> Array[Dictionary]:
@@ -559,6 +590,13 @@ func _dispatch_command(text: String, raw: PackedByteArray) -> Array[Dictionary]:
 			if port != null:
 				return [{"type": "worldTransfer", "state": "start", "server": "%s:%d" % [parts[1], port]}]
 		return []
+	if text.begins_with("#ex-map view="):
+		# phidm-v6 の視界申告への返事。受理なら v6 フレームが届く。
+		return _parse_v6_view(text.substr(13))
+	if text == "#ex-switch move=diag":
+		return [{"type": "v6move", "diag": true}]
+	if text == "#ex-switch move=no":
+		return [{"type": "v6move", "diag": false}]
 	# #bgm と #ex-bgm-speed は wphi のパーサと同じく無視する
 	# (golden の notice シナリオに `#bgm Seiju` → イベント無しがある)。
 	# BGM の解釈はセッションが bgm_event_for_line() で行う(第5段)。
@@ -1187,3 +1225,394 @@ func _eagle_build(mapset: Variant) -> Dictionary:
 	if mapset != null:
 		event["mapset"] = mapset
 	return event
+
+
+# -- phidm-v6 拡張の解析 -------------------------------------------------------
+#
+# 仕様の正は phidm-v6 の rs/src/phi_v6.rs ほかの実装と test/replay の
+# golden。フレームは `#v6 M` 〜 `#v6 .` の自己完結型で、キャラは
+# 毎フレーム全員分が届く (従来の差分配信とは違う)。
+
+func _parse_v6_view(rest: String) -> Array[Dictionary]:
+	## `#ex-map view=` への返事。`no` は不受理 (従来モードのまま)。
+	if rest.strip_edges() == "no":
+		_v6_active = false
+		_v6_view = Vector2i.ZERO
+		return [{"type": "v6view", "accepted": false, "w": 0, "h": 0}]
+	var parts := _split_ws(rest)
+	if parts.size() >= 2:
+		var w: Variant = _ascii_uint(parts[0])
+		var h: Variant = _ascii_uint(parts[1])
+		if w != null and h != null and int(w) > 0 and int(h) > 0:
+			_v6_active = true
+			_v6_view = Vector2i(int(w), int(h))
+			return [{"type": "v6view", "accepted": true, "w": int(w), "h": int(h)}]
+	return []
+
+
+static func _v6_kv_fields(text: String) -> Dictionary:
+	## TAB 区切りの `key=value` 列 → 辞書。値は最初の '=' の後ろ全部
+	## (名前や題に空白・'=' が含まれ得る)。
+	var out := {}
+	for f in text.split("\t"):
+		var eq := f.find("=")
+		if eq > 0:
+			out[f.substr(0, eq)] = f.substr(eq + 1)
+	return out
+
+
+func _feed_v6(raw: PackedByteArray) -> Array[Dictionary]:
+	## `#v6 ` で始まる行の振り分け。R 行 (地形の生バイト対) と
+	## O 行 (固定欄) はバイトのまま読み、それ以外は CP932 で読む。
+	## 最短の行はフレーム確定の `#v6 .` (5バイト)。
+	if raw.size() < 5:
+		return []
+	var sub := raw[4]
+	if sub == 0x52: # R
+		_v6_parse_r(raw)
+		return []
+	if sub == 0x4F: # O
+		_v6_parse_o(raw)
+		return []
+	var text := Cp932.decode(raw)
+	var rest := text.substr(6) if text.length() > 6 else ""
+	match sub:
+		0x4D: # M
+			_v6_parse_m(text)
+		0x2E: # . (フレーム確定)
+			return _finish_v6_map()
+		0x41, 0x58: # A / X
+			_v6_parse_ax(sub, text)
+		0x44: # D
+			return _v6_parse_d(text)
+		0x47: # G
+			return _v6_parse_g(text)
+		0x4A: # J
+			return [{"type": "v6jump"}]
+		0x48: # H
+			return _v6_parse_h(text)
+		0x45: # E
+			return _v6_parse_e(text)
+		0x57: # W
+			return _v6_parse_w(rest)
+		0x54: # T
+			_v6_parse_t(text)
+		0x53, 0x49, 0x42, 0x50, 0x4C, 0x51, 0x4B: # S I B P L Q K
+			return _v6_parse_block(sub, rest)
+	return []
+
+
+func _v6_parse_m(text: String) -> void:
+	## `#v6 M 向き 時刻(16進) W H`。フレームの蓄積を始める。
+	var parts := _split_ws(text)
+	_v6_rows.clear()
+	_v6_arows.clear()
+	_v6_xrows.clear()
+	_v6_chars = []
+	_v6_frame = false
+	_v6_w = 0
+	_v6_h = 0
+	if parts.size() < 6:
+		return
+	_v6_dir = _dir_to_num(parts[2].unicode_at(0) if not parts[2].is_empty() else 0)
+	var w: Variant = _ascii_uint(parts[4])
+	var h: Variant = _ascii_uint(parts[5])
+	if w == null or h == null:
+		return
+	if not (1 <= int(w) and int(w) <= 128 and 1 <= int(h) and int(h) <= 128):
+		return
+	_v6_w = int(w)
+	_v6_h = int(h)
+	_v6_frame = true
+
+
+func _v6_parse_r(raw: PackedByteArray) -> void:
+	## `#v6 R NN ` + (chip, attr) x W の生バイト対 + 空白。
+	## セルの符号化は #m57 と同一。
+	if not _v6_frame or raw.size() < 9:
+		return
+	if not (_is_digit(raw[6]) and _is_digit(raw[7])):
+		return
+	var row := (raw[6] - 0x30) * 10 + (raw[7] - 0x30)
+	if row >= _v6_h:
+		return
+	var need := 9 + _v6_w * 2
+	if raw.size() < need:
+		return
+	_v6_rows[row] = raw.slice(9, need)
+
+
+func _v6_parse_ax(sub: int, text: String) -> void:
+	## `#v6 A NN ` + W 文字 (マップセット枠の16進)、
+	## `#v6 X NN ` + W 文字 (通行可否 '.' / 'x')。
+	if not _v6_frame or text.length() < 9:
+		return
+	var row_v: Variant = _ascii_uint(text.substr(6, 2))
+	if row_v == null or int(row_v) >= _v6_h:
+		return
+	var body := text.substr(9, _v6_w)
+	if sub == 0x41:
+		_v6_arows[int(row_v)] = body
+	else:
+		_v6_xrows[int(row_v)] = body
+
+
+func _v6_parse_o(raw: PackedByteArray) -> void:
+	## `#v6 O` の固定位置の欄を読む。欄の並びは #m57 O とほぼ同じで、
+	## X/Y が2桁固定・区切りに ':' が入る。
+	## [6]種別文字 [7..10]ID(16進) [11]':' [12..13]X [15..16]Y
+	## [18]向き [20..50]名前 [52..53]状態(16進) [55..69]グラ名
+	## [71]印 [73..74]種別(16進)
+	if not _v6_frame or raw.size() < 76:
+		return
+	var layer := _hex_digit(raw[6])
+	if layer < 0:
+		return
+	var char_id: Variant = _hex_u32(raw.slice(7, 11))
+	if char_id == null or raw[11] != 0x3A: # ':'
+		return
+	if not (_is_digit(raw[12]) and _is_digit(raw[13])
+			and _is_digit(raw[15]) and _is_digit(raw[16])):
+		return
+	var status: Variant = _hex_u32(raw.slice(52, 54))
+	var default: Variant = _hex_u32(raw.slice(73, 75))
+	if status == null or default == null:
+		return
+	var chara_name := Cp932.decode(raw.slice(20, 51)).strip_edges(false, true)
+	var gra := Cp932.decode(raw.slice(55, 70)).strip_edges(false, true)
+	var magnify: Variant = null
+	for pair in _name_magnify:
+		if pair[0] == chara_name:
+			magnify = pair[1]
+			break
+	if _v6_chars.size() >= _MAX_MAP_CHARS:
+		return
+	var chara := {
+		"id": char_id,
+		"x": (raw[12] - 0x30) * 10 + (raw[13] - 0x30),
+		"y": (raw[15] - 0x30) * 10 + (raw[16] - 0x30),
+		"dir": PackedByteArray([raw[18]]).get_string_from_ascii(),
+		"name": chara_name,
+		"gra": gra,
+		"status": status,
+		"gigant": PackedByteArray([raw[71]]).get_string_from_ascii(),
+		"layer": layer,
+		"default": default,
+		"cn": 0,
+		"kind": PackedByteArray([raw[6]]).get_string_from_ascii(),
+	}
+	if magnify != null:
+		chara["magnify"] = magnify
+	_v6_chars.append(chara)
+
+
+func _finish_v6_map() -> Array[Dictionary]:
+	## `#v6 .`。溜めたフレームを地図イベントにする。
+	if not _v6_frame or _v6_w <= 0 or _v6_h <= 0:
+		_v6_frame = false
+		return []
+	var cells: Array = []
+	for y in range(_v6_h):
+		var pairs: PackedByteArray = _v6_rows.get(y, PackedByteArray())
+		var arow: String = _v6_arows.get(y, "")
+		for x in range(_v6_w):
+			var cell := {"chip": 0x3F, "attr": 0}
+			if pairs.size() >= (x + 1) * 2:
+				cell["chip"] = pairs[x * 2]
+				cell["attr"] = pairs[x * 2 + 1]
+			if x < arow.length():
+				var slot := _hex_digit(arow.unicode_at(x))
+				if slot > 0:
+					cell["slot"] = slot
+			cells.append(cell)
+	# 自キャラのマス。solid は中央、turn は後ろ 1/3 を除いた中央
+	# (サーバの view_rows と同じ割り付け)。
+	var sx := (_v6_w - 1) / 2
+	var sy := (_v6_h - 1) / 2
+	if _map_style != "solid":
+		sy = _v6_h - 1 - _v6_h / 3
+	var event := {
+		"type": "map",
+		"v6": true,
+		"w": _v6_w,
+		"h": _v6_h,
+		"dir": _v6_dir,
+		"cells": cells,
+		"chars": _v6_chars.duplicate(),
+		"selfCell": {"x": sx, "y": sy},
+	}
+	if not _v6_xrows.is_empty():
+		event["xrows"] = _v6_xrows.duplicate()
+	if _map_style != null:
+		event["style"] = _map_style
+	if _abs_pos != null:
+		event["pos"] = _abs_pos
+	_abs_pos = null
+	_v6_frame = false
+	return [event]
+
+
+func _v6_parse_d(text: String) -> Array[Dictionary]:
+	## `#v6 D 枠番号 名前`。マップセット16枠の定義 (枠 1〜15)。
+	var parts := _split_ws(text)
+	if parts.size() < 4:
+		return []
+	var slot: Variant = _ascii_uint(parts[2])
+	if slot == null or not (1 <= int(slot) and int(slot) <= 15):
+		return []
+	var define_name := " ".join(parts.slice(3))
+	_v6_defines[int(slot)] = define_name
+	return [{"type": "v6define", "slot": int(slot), "name": define_name}]
+
+
+func _v6_parse_g(text: String) -> Array[Dictionary]:
+	## `#v6 G dx dy [理由]`。自分の go への返事 (フレームの直前に来る)。
+	var parts := _split_ws(text)
+	if parts.size() < 4:
+		return []
+	var dx: Variant = _py_int(parts[2])
+	var dy: Variant = _py_int(parts[3])
+	if dx == null or dy == null:
+		return []
+	return [{"type": "v6go", "dx": int(dx), "dy": int(dy),
+		"word": parts[4] if parts.size() >= 5 else ""}]
+
+
+func _v6_parse_h(text: String) -> Array[Dictionary]:
+	## `#v6 H C番号 hp=割合 ag=0/1`。地図の直後に、変わった者だけ。
+	var parts := _split_ws(text)
+	if parts.size() < 3 or parts[2].length() < 2 or parts[2][0] != "C":
+		return []
+	var char_id: Variant = _hex_u32(parts[2].substr(1).to_ascii_buffer())
+	if char_id == null:
+		return []
+	var fields := _v6_kv_fields("\t".join(parts.slice(3))) if parts.size() > 3 else {}
+	var hp: Variant = _py_int(str(fields.get("hp", "")))
+	var ag: Variant = _py_int(str(fields.get("ag", "")))
+	return [{"type": "v6health", "id": int(char_id),
+		"hp": int(hp) if hp != null else -1,
+		"ag": int(ag) if ag != null else 0}]
+
+
+func _v6_parse_e(text: String) -> Array[Dictionary]:
+	## `#v6 E 種類 AX AY TX TY 属性 分類 [待ち]`。戦闘ログの直前に来る。
+	## 座標は視界の列・行 (0始まり)。攻撃側が視界外なら `-- --`。
+	var parts := _split_ws(text)
+	if parts.size() < 9:
+		return []
+	var ax := -1
+	var ay := -1
+	if parts[3] != "--":
+		var axv: Variant = _py_int(parts[3])
+		var ayv: Variant = _py_int(parts[4])
+		if axv != null and ayv != null:
+			ax = int(axv)
+			ay = int(ayv)
+	var txv: Variant = _py_int(parts[5])
+	var tyv: Variant = _py_int(parts[6])
+	if txv == null or tyv == null:
+		return []
+	var wait_v: Variant = _py_int(parts[9]) if parts.size() >= 10 else null
+	return [{"type": "v6effect", "kind": parts[2], "ax": ax, "ay": ay,
+		"tx": int(txv), "ty": int(tyv), "attr": parts[7], "class": parts[8],
+		"wait": int(wait_v) if wait_v != null else -1}]
+
+
+func _v6_parse_w(rest: String) -> Array[Dictionary]:
+	## `#v6 W cast=残り [呪文名]` / `cast=stop` / `at=残り` /
+	## `#v6 W C番号 cast=…`。詠唱・攻撃の待ち (0.1秒単位)。
+	var who: Variant = "self"
+	var body := rest
+	if body.begins_with("C"):
+		var sp := body.find(" ")
+		if sp < 0:
+			return []
+		var id_v: Variant = _hex_u32(body.substr(1, sp - 1).to_ascii_buffer())
+		if id_v == null:
+			return []
+		who = int(id_v)
+		body = body.substr(sp + 1)
+	if body.begins_with("cast="):
+		var tail := body.substr(5)
+		var sp2 := tail.find(" ")
+		var num := tail if sp2 < 0 else tail.substr(0, sp2)
+		var spell := "" if sp2 < 0 else tail.substr(sp2 + 1)
+		if num == "stop":
+			return [{"type": "v6wait", "who": who, "cast": -1, "spell": spell}]
+		var ticks: Variant = _py_int(num)
+		if ticks == null:
+			return []
+		return [{"type": "v6wait", "who": who, "cast": int(ticks), "spell": spell}]
+	if body.begins_with("at="):
+		var ticks2: Variant = _py_int(body.substr(3).strip_edges())
+		if ticks2 == null:
+			return []
+		return [{"type": "v6wait", "who": who, "at": int(ticks2)}]
+	return []
+
+
+func _v6_parse_t(text: String) -> void:
+	## `#v6 T 種類 [C番号]`。直後の発言行の出所タグ。
+	var parts := _split_ws(text)
+	if parts.size() < 3:
+		return
+	var tag := {"kind": parts[2]}
+	if parts.size() >= 4 and parts[3].length() >= 2 and parts[3][0] == "C":
+		var id_v: Variant = _hex_u32(parts[3].substr(1).to_ascii_buffer())
+		if id_v != null:
+			tag["id"] = int(id_v)
+	_v6_tag = tag
+
+
+func _v6_parse_block(sub: int, rest: String) -> Array[Dictionary]:
+	## S/I/B/P/L/Q/K のブロック行。`.` で閉じたら1イベントにする。
+	var letter := char(sub)
+	if rest.strip_edges() == ".":
+		var entries: Array = _v6_blocks.get(letter, [])
+		_v6_blocks.erase(letter)
+		match letter:
+			"S":
+				return [{"type": "v6spells", "spells": entries}]
+			"I":
+				return [{"type": "v6items", "items": entries}]
+			"B":
+				return [{"type": "v6shop", "items": entries}]
+			"P":
+				return [{"type": "v6party", "members": entries}]
+			"L":
+				return [{"type": "v6marks", "marks": entries}]
+			"Q":
+				return [{"type": "v6quests", "quests": entries}]
+			"K":
+				return [{"type": "v6talkwords", "words": entries}]
+		return []
+	var entry := _v6_block_entry(letter, rest)
+	if entry.is_empty():
+		return []
+	var list: Array = _v6_blocks.get(letter, [])
+	list.append(entry)
+	_v6_blocks[letter] = list
+	return []
+
+
+func _v6_block_entry(letter: String, rest: String) -> Dictionary:
+	## ブロックの1行 → エントリ。L は名前始まり、K は言葉始まり、
+	## それ以外は番号始まりで、残りは TAB 区切りの key=value。
+	var tabs := rest.split("\t")
+	if tabs.is_empty():
+		return {}
+	if letter == "L":
+		var entry := {"name": tabs[0]}
+		entry.merge(_v6_kv_fields("\t".join(tabs.slice(1))))
+		return entry
+	if letter == "K":
+		var entry2 := {"word": tabs[0]}
+		if tabs.size() >= 2:
+			entry2["menu"] = tabs[1]
+		return entry2
+	var no: Variant = _py_int(tabs[0].strip_edges())
+	if no == null:
+		return {}
+	var entry3 := {"no": int(no)}
+	entry3.merge(_v6_kv_fields("\t".join(tabs.slice(1))))
+	return entry3

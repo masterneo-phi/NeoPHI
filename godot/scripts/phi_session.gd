@@ -50,6 +50,14 @@ var desired_map_size := 0
 var map_style := "solid"
 ## ログイン時に送る `#ex-switch ex-disp-magic=` の値。
 var disp_magic := true
+# -- phidm-v6 拡張の状態 -------------------------------------------------
+## サーバが `#ex-map view=` を受理し、v6 フレームを送っているか。
+## ログインのたびにプローブし直す (世界移動でも持ち越さない)。
+var v6_mode := false
+## 受理された視界 (サーバが答えた実寸)。v6_mode の時だけ有効。
+var v6_view := Vector2i.ZERO
+## サーバが `#ex-switch move=diag` を受理したか (斜め移動可)。
+var v6_diag := false
 ## 解読済みの受信行を、パーサ処理の前に通知する任意のフック。
 ## 新規キャラクター作成(PhiRegister)がプロンプト応答に使う。
 ## 既定は無効で、その場合は従来どおりの振る舞いになる。
@@ -168,6 +176,31 @@ func is_transferring() -> bool:
 	return _transfer_stage != ""
 
 
+func v6_probe_lines() -> Array[String]:
+	## phidm-v6 の検出プローブ。ログイン行の後ろに足して送る。
+	## 従来サーバ・PHIDM NEO は未知の項目を読み捨てるので無害。
+	## 視界は希望する地図の大きさから決める (どちらも奇数)。
+	## サーバがクランプした実寸は返事 (`#ex-map view=`) で知る。
+	var want := desired_map_size if desired_map_size > 0 else map_size
+	var view := Vector2i(25, 19)
+	if want >= 121:
+		view = Vector2i(33, 25)
+	elif want <= 40:
+		view = Vector2i(15, 11)
+	return [
+		"#ex-map mapsets=16 view=%d %d" % [view.x, view.y],
+		"#ex-switch move=diag",
+	]
+
+
+func _reset_v6() -> void:
+	## v6 の状態を落とす。接続・世界移動のたびに呼ぶ (サーバ側も
+	## ログイン/転送の受け付けで v6 の状態を作り直すため)。
+	v6_mode = false
+	v6_view = Vector2i.ZERO
+	v6_diag = false
+
+
 func is_open() -> bool:
 	return _state == "open"
 
@@ -181,6 +214,7 @@ func connect_to(p_host: String, p_port: int, p_char_id: String) -> void:
 	_lines.reset()
 	_pending_lines.clear()
 	_clear_inbox()
+	_reset_v6()
 	_parser = PhiParser.new()
 	_send_queue.clear()
 	_out_buffer = PackedByteArray()
@@ -228,6 +262,11 @@ func send_line(line: String) -> void:
 		var v := line.trim_prefix("#ex-map size=").strip_edges()
 		if v.is_valid_int():
 			map_size = int(v)
+		if v6_mode:
+			# v6 モード中に size= を送るとサーバ側の v6 が解除され、
+			# フレーム形式が黙って切り替わってしまう。大きさの
+			# 記録だけ更新して、送信はしない。
+			return
 	_send_queue.append(line)
 
 
@@ -332,6 +371,9 @@ func poll() -> void:
 			var lines := login_lines(char_id, map_size, map_style, disp_magic)
 			if has_login_override:
 				lines = login_override
+			else:
+				# phidm-v6 の検出プローブ (従来サーバでは読み捨て)。
+				lines.append_array(v6_probe_lines())
 			for line in lines:
 				_send_queue.append(line)
 			_flush_queue()
@@ -634,6 +676,16 @@ func _process_line(line: PackedByteArray) -> void:
 		produced = true
 		if event.get("type") == "notice" and event.has("name"):
 			_logged_in = true
+		if event.get("type") == "v6view":
+			# v6 モードの入り・抜けはセッションの状態へ反映する
+			# (イベント自体は UI へもそのまま流す)。
+			if bool(event.get("accepted", false)):
+				v6_mode = true
+				v6_view = Vector2i(int(event.get("w", 0)), int(event.get("h", 0)))
+			else:
+				_reset_v6()
+		elif event.get("type") == "v6move":
+			v6_diag = bool(event.get("diag", false))
 		if _logout_pending and event.get("type") == "connection":
 			# 自分から頼んだ正常ログアウトへの `#close`。切断の
 			# 後始末は poll 側で行うので、イベントとしては出さない。
@@ -814,6 +866,9 @@ func _fail_trans() -> void:
 func _complete_transfer() -> void:
 	var lines: Array[String] = ["#ch-srv-ok"]
 	lines.append_array(login_lines(null, map_size, map_style, disp_magic))
+	# 転送先でも v6 を検出し直す (サーバは転送の受け付けで
+	# v6 の状態を作り直す)。
+	lines.append_array(v6_probe_lines())
 	for line in lines:
 		_dst_out.append_array(Cp932.encode(line))
 		_dst_out.append(10)
@@ -824,6 +879,7 @@ func _complete_transfer() -> void:
 	_dst_tcp = null
 	_lines = _dst_lines
 	_dst_lines = LineBuffer.new()
+	_reset_v6()
 	_parser = PhiParser.new()
 	host = _transfer_host
 	port = _transfer_port
@@ -954,8 +1010,10 @@ static func _now_sec() -> float:
 
 
 static func _is_terrain_line(line: PackedByteArray) -> bool:
-	## 地形のバイナリ行か (`#m57 M` / `#map M`)。
+	## 地形のバイナリ行か (`#m57 M` / `#map M` / `#v6 R`)。
+	## `#v6 R` は (chip, attr) の生バイト対なので、文字列として
+	## フィルタに掛けない。
 	if line.size() < 6:
 		return false
 	var head := Cp932.decode(line.slice(0, 6))
-	return head == "#m57 M" or head == "#map M"
+	return head == "#m57 M" or head == "#map M" or head == "#v6 R"

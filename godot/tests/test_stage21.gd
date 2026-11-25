@@ -163,6 +163,8 @@ func _test_success_same_host() -> void:
 	check(ok, "移動先への送信: %s" % str(dst.received))
 	var expected: Array[String] = ["#reserve TESTID", "#ch-srv-ok"]
 	expected.append_array(PhiSession.login_lines(null))
+	# ログイン行の後には v6 検出プローブが続く (第137段)。
+	expected.append_array(PhiSession.new().v6_probe_lines())
 	check(dst.received == expected, "移動先の受信が #reserve + #ch-srv-ok + ログイン行: %s" % str(dst.received))
 	dst.send_line("DM > moved-ok")
 	ok = await _wait_for(func() -> bool: return _has_message("moved-ok"), servers)
