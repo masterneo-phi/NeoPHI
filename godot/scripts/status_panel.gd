@@ -97,6 +97,16 @@ var _mode_attack := false
 var _mode_magic := false
 var _prev_hp := -1
 var _prev_mp := -1
+## ペット (PHIDM NEO v2.0 の #ex-pet self)。空なら表示なし。
+## {"type","name","mp","st","active","mpMax","stMax"}。
+var _pet: Dictionary = {}
+## 自分の職業・性別 (PHIDM NEO v2.0 の #ex-job self)。
+## phi.jb の無い世界・未設定では空文字列。
+var _job := ""
+var _sex := ""
+
+## ペットのタイプ表示名。
+const PET_TYPE_NAMES := {"fairy": "妖精", "cat": "猫", "dog": "犬", "bird": "鳥"}
 
 
 func _init() -> void:
@@ -117,8 +127,66 @@ static func panel_height(gauge_size: int, status_size: int) -> float:
 func set_ui_sizes(gauge_size: int, status_size: int) -> void:
 	gauge_font_size = gauge_size
 	status_font_size = status_size
-	custom_minimum_size = Vector2(0, panel_height(gauge_size, status_size))
+	_refresh_min_size()
 	queue_redraw()
+
+
+## ペット行・職業行 (追加行) が要るか。
+func extra_row_visible() -> bool:
+	return not _pet.is_empty() or not _job.is_empty() or not _sex.is_empty()
+
+
+## 追加行の高さ。表示が無ければ 0。
+func _extra_height() -> float:
+	return (float(status_font_size) + ROW_PAD) if extra_row_visible() else 0.0
+
+
+func _refresh_min_size() -> void:
+	custom_minimum_size = Vector2(0,
+		panel_height(gauge_font_size, status_font_size) + _extra_height())
+
+
+## 自分のペットを反映する。空の辞書で表示を消す。
+func set_pet(pet: Dictionary) -> void:
+	_pet = pet.duplicate()
+	_refresh_min_size()
+	queue_redraw()
+
+
+## 自分の職業・性別を反映する。
+func set_job(p_job: String, p_sex: String) -> void:
+	_job = p_job
+	_sex = p_sex
+	_refresh_min_size()
+	queue_redraw()
+
+
+static func pet_head_text_for(pet: Dictionary) -> String:
+	## ペット行の見出し。「名前 (タイプ)」、休止中は末尾に足す。
+	if pet.is_empty():
+		return ""
+	var tname: String = PET_TYPE_NAMES.get(str(pet.get("type", "")), "")
+	var head := str(pet.get("name", ""))
+	if not tname.is_empty():
+		head += " (" + tname + ")"
+	if int(pet.get("active", 1)) == 0:
+		head += " 休止中"
+	return head
+
+
+static func job_text_for(p_job: String, p_sex: String) -> String:
+	## 職業・性別の併記。ある方だけでも出す。
+	var parts: Array[String] = []
+	if not p_job.is_empty():
+		parts.append(p_job)
+	if not p_sex.is_empty():
+		parts.append(p_sex)
+	return " ".join(parts)
+
+
+func debug_pet() -> Dictionary:
+	return {"pet": _pet.duplicate(), "job": _job, "sex": _sex,
+		"extra": extra_row_visible()}
 
 
 func set_status(event: Dictionary) -> void:
@@ -313,10 +381,10 @@ func status_box_rects(row_y: float, row_h: float) -> Array:
 
 
 func _bar_height() -> float:
-	## 1本のバーの高さ。パネルの高さからステータス行を引いた
-	## 残りを、すきまを挟んで2等分する。
+	## 1本のバーの高さ。パネルの高さからステータス行と追加行を
+	## 引いた残りを、すきまを挟んで2等分する。
 	var row_h := float(status_font_size) + ROW_PAD
-	var bars_h := maxf(0.0, size.y - row_h - ROW_GAP)
+	var bars_h := maxf(0.0, size.y - _extra_height() - row_h - ROW_GAP)
 	return maxf(1.0, (bars_h - BAR_GAP) * 0.5)
 
 
@@ -342,7 +410,7 @@ func _draw() -> void:
 	else:
 		draw_rect(Rect2(Vector2.ZERO, size), Color(0.16, 0.16, 0.16))
 	var row_h := float(status_font_size) + ROW_PAD
-	var bars_h := maxf(0.0, size.y - row_h - ROW_GAP)
+	var bars_h := maxf(0.0, size.y - _extra_height() - row_h - ROW_GAP)
 	var bar_h := _bar_height()
 	var scale := bar_h / BAR_CELL_H
 	var rects := bar_rects()
@@ -364,6 +432,59 @@ func _draw() -> void:
 	var row_y := bars_h + ROW_GAP
 	draw_rect(Rect2(0, row_y, size.x, 1.0), Color(1, 1, 1, 0.15))
 	_draw_status_row(row_y + 1.0, row_h - 1.0)
+	# 追加行 (ペット・職業)。ある時だけ、ステータス行の下に出す。
+	if extra_row_visible():
+		var ey := row_y + row_h
+		draw_rect(Rect2(0, ey, size.x, 1.0), Color(1, 1, 1, 0.15))
+		_draw_extra_row(ey + 1.0, row_h - 1.0)
+
+
+func _draw_extra_row(y: float, row_h: float) -> void:
+	## 追加行。左にペット (名前と MP/体力の小バー)、右端に
+	## 職業・性別 (ステータス行のモード表示と同じ流儀で、
+	## 重なる時は出さない)。
+	if label_font == null:
+		return
+	var font_size := status_font_size
+	var value_font := bold_font if bold_font != null else label_font
+	var baseline := y + row_h * 0.5 + value_font.get_ascent(font_size) * 0.5
+	var x := 4.0
+	if not _pet.is_empty():
+		var head := pet_head_text_for(_pet)
+		if not head.is_empty():
+			draw_string(value_font, Vector2(x, baseline), head, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, Color(1.0, 0.9, 0.6))
+			x += value_font.get_string_size(head, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x + 8.0
+		x = _draw_pet_pool(x, y, row_h, "MP", int(_pet.get("mp", 0)),
+			int(_pet.get("mpMax", 100)), Color(0.35, 0.8, 1.0), font_size, baseline)
+		x = _draw_pet_pool(x, y, row_h, "体力", int(_pet.get("st", 0)),
+			int(_pet.get("stMax", 100)), Color(0.45, 0.95, 0.5), font_size, baseline)
+	var job_text := job_text_for(_job, _sex)
+	if not job_text.is_empty():
+		var w := label_font.get_string_size(job_text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x
+		var jx := size.x - 4.0 - w
+		if jx > x + 6.0:
+			draw_string(label_font, Vector2(jx, baseline), job_text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, Color(0.85, 0.9, 1.0))
+
+
+func _draw_pet_pool(x: float, y: float, row_h: float, label: String, value: int, max_value: int, color: Color, font_size: int, baseline: float) -> float:
+	## ペットのプール1つ分 (札 + 小バー + 数字)。次の x を返す。
+	var num_font := bold_font if bold_font != null else label_font
+	draw_string(label_font, Vector2(x, baseline), label, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, Color(0.75, 0.75, 0.75))
+	x += label_font.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x + 3.0
+	var bar_w := 44.0
+	var bar_h := maxf(5.0, row_h * 0.34)
+	var bar_y := y + (row_h - bar_h) * 0.5
+	draw_rect(Rect2(x, bar_y, bar_w, bar_h), Color(0.1, 0.1, 0.1))
+	if max_value > 0:
+		var frac := clampf(float(value) / float(max_value), 0.0, 1.0)
+		if frac > 0.0:
+			draw_rect(Rect2(x, bar_y, bar_w * frac, bar_h), color)
+	draw_rect(Rect2(x, bar_y, bar_w, bar_h), Color(0, 0, 0, 0.6), false, 1.0)
+	x += bar_w + 3.0
+	var num := "%d/%d" % [value, max_value]
+	draw_string(num_font, Vector2(x, baseline), num, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, Color.WHITE)
+	x += num_font.get_string_size(num, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x + 8.0
+	return x
 
 
 var _box_style: StyleBoxFlat = null

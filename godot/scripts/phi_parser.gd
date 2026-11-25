@@ -153,6 +153,33 @@ static func _split_ws(text: String) -> Array[String]:
 	return out
 
 
+static func _split_quoted(text: String) -> Array[String]:
+	## 空白区切り。ただし `"..."` の中は1トークンとして扱い、
+	## 引用符は外す (#ex-pet / #ex-job の名前欄用)。
+	var out: Array[String] = []
+	var i := 0
+	var n := text.length()
+	while i < n:
+		var c := text.unicode_at(i)
+		if _is_space_char(c):
+			i += 1
+			continue
+		if c == 0x22: # "
+			var j := text.find("\"", i + 1)
+			if j < 0:
+				out.append(text.substr(i + 1))
+				break
+			out.append(text.substr(i + 1, j - i - 1))
+			i = j + 1
+		else:
+			var j := i
+			while j < n and not _is_space_char(text.unicode_at(j)):
+				j += 1
+			out.append(text.substr(i, j - i))
+			i = j
+	return out
+
+
 static func _split_ws_max(text: String, max_splits: int) -> Array[String]:
 	## 空白で最大 `max_splits` 回だけ分ける。最後の要素は残りそのまま。
 	var out: Array[String] = []
@@ -509,6 +536,14 @@ func _dispatch_command(text: String, raw: PackedByteArray) -> Array[Dictionary]:
 		if dm != null:
 			return [{"type": "dispMagic", "data": dm}]
 		return []
+	if text.begins_with("#ex-pet "):
+		# ペット表示 (PHIDM NEO v2.0)。読めなければ無視する。
+		var pet_ev: Variant = _parse_ex_pet(text)
+		return [pet_ev] if pet_ev != null else []
+	if text.begins_with("#ex-job "):
+		# 職業・性別表示 (PHIDM NEO v2.0)。読めなければ無視する。
+		var job_ev: Variant = _parse_ex_job(text)
+		return [job_ev] if job_ev != null else []
 	if text.begins_with("#fx "):
 		# DM 演出拡張 (FX)。未知の kind は無視する (前方互換)。
 		# FX 行はログに出さない。
@@ -681,6 +716,75 @@ func _parse_user(raw: PackedByteArray) -> Variant:
 	for pair in _ulist:
 		users.append({"key": "u%d" % pair[1], "name": pair[0]})
 	return {"type": "userList", "users": users}
+
+
+## ペットのタイプ識別子 (#ex-pet の type 欄)。
+const PET_TYPE_IDS := ["fairy", "cat", "dog", "bird"]
+
+
+static func _pet_from_frame(type_id: String, pet_name: String, active: Variant) -> Variant:
+	## #ex-pet の1ペット分の欄 → 辞書。`none` は空の辞書 (ペット
+	## 無し)、知らないタイプは null (行全体を無視する)。
+	if type_id == "none":
+		return {}
+	if not PET_TYPE_IDS.has(type_id):
+		return null
+	if active == null:
+		return null
+	return {"type": type_id, "name": pet_name, "active": int(active)}
+
+
+func _parse_ex_pet(text: String) -> Variant:
+	## `#ex-pet self <type> <名前> <mp> <st> <active> [<mp最大> <st最大>]`
+	## `#ex-pet chr "<キャラ名>" <type> <名前> <active>`
+	## (PHIDM NEO v2.0)。読めない形は null。ペット無しは pet={}。
+	var parts := _split_quoted(text)
+	if parts.size() < 3:
+		return null
+	if parts[1] == "self":
+		if parts.size() < 7:
+			return null
+		var pet: Variant = _pet_from_frame(parts[2], parts[3], _ascii_uint(parts[6]))
+		if pet == null:
+			return null
+		var mp: Variant = _ascii_uint(parts[4])
+		var st: Variant = _ascii_uint(parts[5])
+		if mp == null or st == null:
+			return null
+		if not (pet as Dictionary).is_empty():
+			pet["mp"] = int(mp)
+			pet["st"] = int(st)
+			# 最大値は末尾の追加欄 (旧い欄だけでも読める)。
+			if parts.size() >= 9:
+				var mp_max: Variant = _ascii_uint(parts[7])
+				var st_max: Variant = _ascii_uint(parts[8])
+				if mp_max != null and st_max != null:
+					pet["mpMax"] = int(mp_max)
+					pet["stMax"] = int(st_max)
+		return {"type": "petSelf", "pet": pet}
+	if parts[1] == "chr":
+		if parts.size() < 6:
+			return null
+		var pet2: Variant = _pet_from_frame(parts[3], parts[4], _ascii_uint(parts[5]))
+		if pet2 == null:
+			return null
+		return {"type": "petChr", "chr": parts[2], "pet": pet2}
+	return null
+
+
+func _parse_ex_job(text: String) -> Variant:
+	## `#ex-job self "<職業名>" "<性別名>"`
+	## `#ex-job chr "<キャラ名>" "<職業名>" "<性別名>"`
+	## (PHIDM NEO v2.0)。名前は現在の世界の phi.jb 由来で、
+	## 未設定・phi.jb の無い世界では空文字列。読めない形は null。
+	var parts := _split_quoted(text)
+	if parts.size() < 3:
+		return null
+	if parts[1] == "self" and parts.size() >= 4:
+		return {"type": "jobSelf", "job": parts[2], "sex": parts[3]}
+	if parts[1] == "chr" and parts.size() >= 5:
+		return {"type": "jobChr", "chr": parts[2], "job": parts[3], "sex": parts[4]}
+	return null
 
 
 func _parse_ex_obj(text: String) -> void:

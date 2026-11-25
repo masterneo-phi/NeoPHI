@@ -376,6 +376,36 @@ func chip(mapset: String) -> Variant:
 	return _remember(key, tex)
 
 
+func pet_sheet() -> Variant:
+	## ペット専用シート (`Pets.bmp`、128x128 = 4タイプ x 4方向の
+	## 32x32)。探す場所は、フラット式のフォルダ (チップ・キャラと
+	## 同じ場所) → スキンの `Images/Pets.bmp` の順。透過はキャラ
+	## グラと同じティール (0,128,128) の色キー。無ければ null
+	## (クライアントはペットを描かないだけで、動作は従来どおり)。
+	var key := "pets?&&&"
+	var cached: Variant = _cache.get(key)
+	if cached != null:
+		return cached
+	var path: Variant = null
+	var flat_dirs: Array = []
+	flat_dirs.append_array(chip_dirs)
+	flat_dirs.append_array(chara_dirs)
+	for dir in flat_dirs:
+		var listing := _list_dir(str(dir))
+		var found: Variant = listing.get("pets.bmp")
+		if found != null:
+			path = found
+			break
+	if path == null:
+		path = _skin_file("Images/Pets.bmp")
+	if path == null:
+		return null
+	var tex: Variant = _open_image(path, "colorkey")
+	if tex == null:
+		return null
+	return _remember(key, tex)
+
+
 func items() -> Variant:
 	## アイテムのテクスチャ(`Skins/<skin>/Images/Items.bmp` か直接指定)。
 	var key := "items?&&&"

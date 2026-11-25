@@ -463,6 +463,55 @@ var _shake_started := 0.0
 # よう、_event ではなく MapView 自身が持つ (ワイプ帰還の演出のため)。
 var _fx_icons_tex: Texture2D = null
 var _fx_texts := {}
+## ペット表示 (PHIDM NEO v2.0 の #ex-pet)。サーバにペットの
+## 実体は無く、追随はクライアントが主人の移動経路を再生して
+## 描く。pets: キャラ名 → {"type","name","active"} (自分を含む)。
+var pets: Dictionary = {}
+## 職業・性別 (PHIDM NEO v2.0 の #ex-job)。キャラ名 →
+## {"job","sex"}。ホバーのヒントに併記する。
+var job_info: Dictionary = {}
+var _pet_tex: Texture2D = null
+## 他キャラのペットの経路 (キャラ名 → セルの配列、末尾が現在地)。
+var _pet_trails: Dictionary = {}
+## 自キャラのペットの居場所 (盤面座標)。スクロールで確定した
+## 移動の時だけ更新する。それ以外は主人の足元に描く (-1,-1)。
+var _pet_self_cell := Vector2i(-1, -1)
+var _pet_self_dir := "F"
+## 絶対座標 (#ex-abspos) が使える時は、経路と自キャラのペット
+## 位置を世界座標で持つ (自分の移動で盤面がずれても、他人の
+## 経路が汚れない)。_pet_origin は現在の盤面 (0,0) の世界座標。
+var _pet_origin := Vector2i.ZERO
+var _pet_origin_ok := false
+var _pet_self_world := Vector2i(-1, -1)
+var _pet_prev_self_world := Vector2i.ZERO
+var _pet_prev_self_ok := false
+## 前フレームの地形 (盤面座標モード用)。転送・階段で地形が
+## 跳んだ検知と、窓の移動量の判定に使う。観察側の移動で
+## 見える範囲が変わるだけでは経路は壊さない (以前は地形の
+## ハッシュが変わるたび経路を消していたため、静止中の他人
+## のペットが飼い主の足元に張り付いて直らなかった)。
+var _pet_last_cells: Array = []
+## ペットシートのタイプ行 (行 = タイプ、列 = 向き B/R/F/L)。
+const PET_TYPE_ROW := {"fairy": 0, "cat": 1, "dog": 2, "bird": 3}
+## ペットのタイプ表示名。
+const PET_TYPE_NAMES := {"fairy": "妖精", "cat": "猫", "dog": "犬", "bird": "鳥"}
+## ペットスプライト1コマの大きさ (px)。
+const PET_CELL := 32
+## ペットの経路の保持マス数。
+const PET_TRAIL_MAX := 8
+## 地形の差分がこのマス数以下なら「その場の変化」(扉の開閉
+## など) として経路を保持する。
+const PET_LOCAL_DIFF_MAX := 4
+## ペットのホップ (セル移動に合わせた小さな跳ね) の高さ (px)
+## と長さ (秒)。シートに歩行アニメが無い代わりに、描くマスが
+## 変わるたび放物線で跳ねさせて躍動感を出す。
+const PET_HOP_PX := 3.0
+const PET_HOP_DURATION := 0.30
+## ペットを最後に描いたマス (キャラ名 → 経路と同じ座標系の
+## マス) と、ホップの開始時刻 (キャラ名 → _now() の秒)。描く
+## マスが隣へ変わったらホップを始める。
+var _pet_drawn_cell: Dictionary = {}
+var _pet_hop_at: Dictionary = {}
 var _fx_dark := {}
 var _fx_wipe := {}
 var _fx_glow := {}
@@ -702,8 +751,22 @@ func _mark_self(event: Dictionary, dim: int) -> void:
 		pick["__self"] = true
 
 
+func set_pets(p_pets: Dictionary) -> void:
+	## ペット状態 (キャラ名 → ペット) を差し替える。
+	pets = p_pets.duplicate()
+	if not pets.has(self_name):
+		_pet_self_cell = Vector2i(-1, -1)
+	queue_redraw()
+
+
+func set_job_info(p_info: Dictionary) -> void:
+	## 職業・性別 (キャラ名 → {"job","sex"}) を差し替える。
+	job_info = p_info.duplicate()
+
+
 func set_map(event: Dictionary, p_assets: GameAssets, p_mapset: String, defines: Dictionary = {}) -> void:
 	_detect_scroll(event)
+	var scrolled := _scroll_t == 0.0 and not _prev_cells.is_empty()
 	_mark_self(event, grid_dim(int(event.get("size", 7))))
 	# 中心セルの段数の遷移を覚える (自キャラの高さ補間用)。
 	_scroll_from_h = _scroll_to_h
@@ -721,10 +784,12 @@ func set_map(event: Dictionary, p_assets: GameAssets, p_mapset: String, defines:
 	_defines = defines.duplicate()
 	_items_tex = null
 	_fx_icons_tex = null
+	_pet_tex = null
 	_load_chip_texs()
 	if assets != null:
 		_items_tex = assets.items()
 		_fx_icons_tex = assets.skin_image("fx_icons")
+		_pet_tex = assets.pet_sheet() as Texture2D
 	var dim := grid_dim(int(event.get("size", 7)))
 	custom_minimum_size = Vector2(dim * CHIP_SIZE, dim * CHIP_SIZE + MAP_TOP)
 	if dim != _last_dim:
@@ -763,8 +828,395 @@ func set_map(event: Dictionary, p_assets: GameAssets, p_mapset: String, defines:
 			if 0 <= fx and fx < dim and 0 <= fy and fy < dim:
 				_faced_anchor = Vector2(fx * CHIP_SIZE + CHIP_SIZE / 2,
 					fy * CHIP_SIZE + head_top + relief_offset_y(ev_cells, dim, fx, fy))
+	_update_pet_trails(event, dim, scrolled)
 	_update_zoom()
 	queue_redraw()
+
+
+static func pet_trail_step(trail: Array, cell: Vector2i) -> Array:
+	## 主人の新しいマスを経路へ反映する。1マスの歩みなら末尾へ
+	## 足し、それ以外 (出現・転送・階段) は経路を作り直す。
+	var out: Array = trail.duplicate()
+	if out.is_empty():
+		return [cell]
+	var last: Vector2i = out[out.size() - 1]
+	if last == cell:
+		return out
+	if absi(cell.x - last.x) + absi(cell.y - last.y) == 1:
+		out.append(cell)
+		while out.size() > PET_TRAIL_MAX:
+			out.pop_front()
+		return out
+	return [cell]
+
+
+static func pet_draw_cell(trail: Array, owner_cell: Vector2i) -> Vector2i:
+	## ペットを描くマス。経路が2つ以上あれば1マス遅れの位置、
+	## 無ければ主人の足元。
+	if trail.size() >= 2:
+		return trail[trail.size() - 2]
+	return owner_cell
+
+
+static func pet_hop_offset(elapsed: float) -> float:
+	## ホップの y ずらし (px、上向きが負)。開始時と終了時
+	## (PET_HOP_DURATION 以降) は 0、中間で -PET_HOP_PX に
+	## なる放物線。
+	if elapsed <= 0.0 or elapsed >= PET_HOP_DURATION:
+		return 0.0
+	var t := elapsed / PET_HOP_DURATION
+	return -PET_HOP_PX * 4.0 * t * (1.0 - t)
+
+
+static func pet_idle_bob(active: int, anim_frame: int) -> float:
+	## 静止中の小さな上下揺れ (px)。行動中だけ、アニメ周期の
+	## 片側で 1px 上がる (呼吸のような揺れ)。
+	return -1.0 if (active != 0 and anim_frame == 1) else 0.0
+
+
+static func dir_between(a: Vector2i, b: Vector2i) -> String:
+	## a から b への向き (文字)。隣接でなければ "F" (正面)。
+	var d := b - a
+	if d == Vector2i(0, -1):
+		return "B"
+	if d == Vector2i(1, 0):
+		return "R"
+	if d == Vector2i(0, 1):
+		return "F"
+	if d == Vector2i(-1, 0):
+		return "L"
+	return "F"
+
+
+static func pet_cells_relation(old_cells: Array, new_cells: Array, dim: int) -> Array:
+	## 前フレームの地形と新しい地形の関係。[種類, ずれ] を返す。
+	## 種類 0 = その場の変化のみ (経路はそのまま保持)、1 = 窓が
+	## ずれ (プレイヤーの移動方向) だけ動いた (経路をずらして
+	## 保持)、2 = 地形の入れ替わり (転送・階段。経路は作り直す)、
+	## 3 = 半分以下の大きな書き換え (スイッチで地形が変わる等。
+	## 経路は保持し、飼い主が跳んだ場合は経路側の作り直しが効く)。
+	if old_cells.size() != dim * dim or new_cells.size() != dim * dim:
+		return [2, Vector2i.ZERO]
+	var diff0 := 0
+	for i in range(dim * dim):
+		if int((new_cells[i] as Dictionary).get("chip", 0)) \
+				!= int((old_cells[i] as Dictionary).get("chip", 0)):
+			diff0 += 1
+	if diff0 <= PET_LOCAL_DIFF_MAX:
+		return [0, Vector2i.ZERO]
+	# 窓が1マスずれただけなら、ずらした比較でほぼ一致する
+	# (スクロール検知と同じ許容)。スクロール無効時や検知を
+	# すり抜けた移動はここで拾う。
+	for sv in [Vector2i(0, -1), Vector2i(0, 1), Vector2i(-1, 0), Vector2i(1, 0)]:
+		var s: Vector2i = sv
+		var bad := 0
+		for y in range(dim):
+			for x in range(dim):
+				var ox := x + s.x
+				var oy := y + s.y
+				if ox < 0 or oy < 0 or ox >= dim or oy >= dim:
+					continue
+				if int((new_cells[y * dim + x] as Dictionary).get("chip", 0)) \
+						!= int((old_cells[oy * dim + ox] as Dictionary).get("chip", 0)):
+					bad += 1
+					if bad > 2:
+						break
+			if bad > 2:
+				break
+		if bad <= 2:
+			return [1, s]
+	if diff0 * 2 <= dim * dim:
+		return [3, Vector2i.ZERO]
+	return [2, Vector2i.ZERO]
+
+
+func _pet_clear_trails() -> void:
+	## ペットの経路と描画マスの記録を全部捨てる (地形が跳んだ
+	## 時・座標の持ち方が切り替わった時)。ペットは次フレーム
+	## から飼い主の足元に描かれ、飼い主が動けば経路が伸び直す。
+	_pet_trails.clear()
+	_pet_drawn_cell.clear()
+	_pet_hop_at.clear()
+	_pet_self_cell = Vector2i(-1, -1)
+	_pet_self_world = Vector2i(-1, -1)
+	_pet_prev_self_ok = false
+
+
+func _pet_common_char_shift(event: Dictionary) -> Vector2i:
+	## 前フレームと両方に居る他キャラの盤面位置のずれが、2人
+	## 以上で1マス分一致していれば、窓の移動 (プレイヤーの
+	## 歩み) とみなしてその移動方向を返す。一面同じ地形では
+	## 地形比較で窓の移動が読めないための受け皿。1人だけでは
+	## その人自身の歩みと区別できないので使わない。読めなけ
+	## れば Vector2i.ZERO。
+	var delta := Vector2i(999, 999)
+	var count := 0
+	for ch in event.get("chars", []):
+		var cd: Dictionary = ch
+		var nm := PhiTags.strip_tags(str(cd.get("name", ""))).strip_edges()
+		if nm.is_empty() or nm == self_name or not _prev_charas.has(nm):
+			continue
+		var prev: Dictionary = _prev_charas[nm]
+		var v := Vector2i(int(cd.get("x", -1)) - int(prev.get("x", -1)),
+			int(cd.get("y", -1)) - int(prev.get("y", -1)))
+		if delta == Vector2i(999, 999):
+			delta = v
+		elif v != delta:
+			return Vector2i.ZERO
+		count += 1
+	if count >= 2 and absi(delta.x) + absi(delta.y) == 1:
+		return -delta
+	return Vector2i.ZERO
+
+
+func _update_pet_trails(event: Dictionary, dim: int, scrolled: bool) -> void:
+	## ペットの追随経路を新しい地図に合わせる。絶対座標が
+	## 使える時は世界座標で経路を持ち (自分の移動の影響を
+	## 受けない)、使えない時は盤面座標で持ち、自キャラの
+	## 移動ぶんを窓のずれで補正する。自キャラのペットは
+	## 「主人が直前に居たマス」を覚える (自キャラは常に中心に
+	## 居るため、盤面座標だけでは自分の歩みが読めない)。
+	## 経路を作り直すのは、地形がまるごと入れ替わった時
+	## (転送・階段) と自分が遠くへ跳んだ時だけ。観察側の
+	## 通常の移動で見える地形が変わっても壊さない (壊すと
+	## 静止中の他人のペットが飼い主の足元に張り付く)。
+	var cells: Array = event.get("cells", [])
+	var has_pos := event.has("pos")
+	if has_pos != _pet_origin_ok and _pet_origin_ok:
+		# 座標の持ち方が切り替わったら、経路は作り直す。
+		_pet_clear_trails()
+	_pet_origin_ok = has_pos
+	# 盤面座標モードで窓が動いた量 (プレイヤーの移動方向)。
+	var shift := Vector2i.ZERO
+	var have_shift := false
+	if has_pos:
+		var p: Dictionary = event["pos"]
+		var self_world := Vector2i(int(p.get("x", 0)), int(p.get("y", 0)))
+		_pet_origin = self_world - Vector2i(dim / 2, dim / 2)
+		if _pet_prev_self_ok:
+			var d := self_world - _pet_prev_self_world
+			if absi(d.x) + absi(d.y) == 1:
+				if pets.has(self_name):
+					_pet_self_world = _pet_prev_self_world
+					_pet_self_dir = dir_between(Vector2i.ZERO, d)
+			elif d != Vector2i.ZERO:
+				# 自分が遠くへ跳んだ (転送・階段・ゲート)。
+				# 世界座標の履歴は別の場所のものになり得る
+				# ので、経路は作り直す。
+				_pet_clear_trails()
+		_pet_prev_self_world = self_world
+		_pet_prev_self_ok = true
+		_pet_last_cells = []
+	else:
+		if scrolled:
+			shift = Vector2i(int(_scroll_from.x), int(_scroll_from.y))
+			have_shift = true
+		else:
+			var rel := pet_cells_relation(_pet_last_cells, cells, dim)
+			match int(rel[0]):
+				2:
+					# 地形が跳んだ (転送・階段・サイズ変更)。
+					_pet_clear_trails()
+				1:
+					# スクロール検知をすり抜けた窓の移動。
+					shift = rel[1]
+					have_shift = true
+				0:
+					# 一面同じ地形では地形比較で窓の移動が
+					# 読めない。複数キャラの盤面位置の
+					# 一斉のずれで拾う。
+					shift = _pet_common_char_shift(event)
+					have_shift = shift != Vector2i.ZERO
+		_pet_last_cells = cells
+	if have_shift:
+		# 自キャラが動いた分、他キャラの履歴の盤面座標がずれる。
+		for nm in _pet_trails:
+			var trail: Array = _pet_trails[nm]
+			for i in trail.size():
+				trail[i] = (trail[i] as Vector2i) - shift
+		# 描いたマスの記録も同じだけずらす (見かけの変化で
+		# ホップが始まらないように)。
+		for nm in _pet_drawn_cell:
+			_pet_drawn_cell[nm] = (_pet_drawn_cell[nm] as Vector2i) - shift
+		# 自キャラのペットは、主人が直前に居たマスへ。
+		if pets.has(self_name):
+			_pet_self_cell = Vector2i(dim / 2, dim / 2) - shift
+			_pet_self_dir = dir_between(Vector2i.ZERO, shift)
+	if _pet_self_cell.x >= 0 and (_pet_self_cell.x >= dim or _pet_self_cell.y >= dim):
+		_pet_self_cell = Vector2i(-1, -1)
+	var seen := {}
+	var self_cell := Vector2i(-1, -1)
+	for ch in event.get("chars", []):
+		var cd: Dictionary = ch
+		var nm := PhiTags.strip_tags(str(cd.get("name", ""))).strip_edges()
+		if nm == self_name:
+			self_cell = Vector2i(int(cd.get("x", -1)), int(cd.get("y", -1)))
+			continue
+		if nm.is_empty() or not pets.has(nm):
+			continue
+		var cell := Vector2i(int(cd.get("x", -1)), int(cd.get("y", -1)))
+		if cell.x < 0 or cell.x >= dim or cell.y < 0 or cell.y >= dim:
+			continue
+		seen[nm] = true
+		if has_pos:
+			cell = _pet_origin + cell
+		_pet_trails[nm] = pet_trail_step(_pet_trails.get(nm, []), cell)
+		# 描くマスは経路と同じ座標系で覚える (絶対座標があれば
+		# 世界座標、無ければ盤面座標)。原点の移動やスクロールで
+		# 見かけだけずれる変化を、歩みと間違えないため。
+		_pet_note_draw_cell(nm, pet_draw_cell(_pet_trails[nm], cell))
+	# 自キャラのペットも、描くマスの変化でホップを始める。
+	if pets.has(self_name):
+		var self_draw := Vector2i(-1, -1)
+		if _pet_origin_ok:
+			self_draw = _pet_self_world
+			if self_draw.x < 0 and self_cell.x >= 0:
+				self_draw = _pet_origin + self_cell
+		elif _pet_self_cell.x >= 0:
+			self_draw = _pet_self_cell
+		else:
+			self_draw = self_cell
+		if self_draw.x >= 0:
+			_pet_note_draw_cell(self_name, self_draw)
+	# 盤面から消えた・ペットを手放したキャラの経路は捨てる。
+	for nm in _pet_trails.keys():
+		if not seen.has(nm):
+			_pet_trails.erase(nm)
+	for nm in _pet_drawn_cell.keys():
+		if nm != self_name and not seen.has(nm):
+			_pet_drawn_cell.erase(nm)
+			_pet_hop_at.erase(nm)
+	for nm in _pet_drawn_cell.keys():
+		if not pets.has(nm):
+			_pet_hop_at.erase(nm)
+			_pet_drawn_cell.erase(nm)
+
+
+func _pet_note_draw_cell(nm: String, cell: Vector2i) -> void:
+	## ペットを描くマスを覚え、隣のマスへ変わったらホップを
+	## 始める。遠くへの跳び (出現・転送で足元に描かれる場合)
+	## では始めない。
+	var prev: Variant = _pet_drawn_cell.get(nm)
+	_pet_drawn_cell[nm] = cell
+	if prev == null:
+		return
+	var p: Vector2i = prev
+	if p != cell and absi(cell.x - p.x) + absi(cell.y - p.y) == 1:
+		_pet_hop_at[nm] = _now()
+
+
+func _pet_hop_active() -> bool:
+	## 進行中のホップがあるか (_process の描き直し駆動用)。
+	var now := _now()
+	for nm in _pet_hop_at:
+		if now - float(_pet_hop_at[nm]) < PET_HOP_DURATION:
+			return true
+	return false
+
+
+func _pet_draw_pos(cd: Dictionary) -> Array:
+	## ペットを描く [マス, 向き]。主人の行から決める。
+	var nm := PhiTags.strip_tags(str(cd.get("name", ""))).strip_edges()
+	var owner_cell := Vector2i(int(cd.get("x", -1)), int(cd.get("y", -1)))
+	if nm == self_name:
+		if _pet_origin_ok and _pet_self_world.x >= 0:
+			return [_pet_self_world - _pet_origin, _pet_self_dir]
+		if _pet_self_cell.x >= 0:
+			return [_pet_self_cell, _pet_self_dir]
+		return [owner_cell, str(cd.get("dir", "F"))]
+	var trail: Array = _pet_trails.get(nm, [])
+	if _pet_origin_ok:
+		var owner_world := _pet_origin + owner_cell
+		var draw_world := pet_draw_cell(trail, owner_world)
+		if trail.size() >= 2:
+			return [draw_world - _pet_origin,
+				dir_between(draw_world, trail[trail.size() - 1])]
+		return [draw_world - _pet_origin, str(cd.get("dir", "F"))]
+	var cell := pet_draw_cell(trail, owner_cell)
+	if trail.size() >= 2:
+		return [cell, dir_between(cell, trail[trail.size() - 1])]
+	return [cell, str(cd.get("dir", "F"))]
+
+
+func _draw_pets_row(chars: Array, cells: Array, dim: int, z: float, row: int) -> void:
+	## この行のペットを描く。キャラ本体より先に描き、同じマス
+	## では主人が手前に来るようにする。行の判定はキャラと
+	## 同じ足元基準 (char_pass)。
+	if _pet_tex == null or pets.is_empty():
+		return
+	for ch in chars:
+		var cd: Dictionary = ch
+		var nm := PhiTags.strip_tags(str(cd.get("name", ""))).strip_edges()
+		if nm.is_empty() or not pets.has(nm):
+			continue
+		var pet: Dictionary = pets[nm]
+		var type_id := str(pet.get("type", ""))
+		if not PET_TYPE_ROW.has(type_id):
+			continue
+		var owner_cell := Vector2i(int(cd.get("x", -1)), int(cd.get("y", -1)))
+		if owner_cell.x < 0 or owner_cell.x >= dim or owner_cell.y < 0 or owner_cell.y >= dim:
+			continue
+		var pos := _pet_draw_pos(cd)
+		var cell: Vector2i = pos[0]
+		var fake := {"x": cell.x, "y": cell.y, "gigant": "#"}
+		var dy := float(relief_offset_y(cells, dim, cell.x, cell.y))
+		if char_pass(fake, cells, dim, dy) != row:
+			continue
+		var po := Vector2(0.0, dy * z)
+		if _pet_hop_at.has(nm):
+			# セル移動に合わせたホップを、地形の高さずれの
+			# 上に乗せる。
+			po.y += pet_hop_offset(_now() - float(_pet_hop_at[nm])) * z
+		if cell == owner_cell:
+			# 主人の足元では、そのまま重ねると姿が隠れてしまう
+			# ため、少し左下にずらして後ろから覗かせる。
+			po += Vector2(-9.0, 3.0) * z
+		_draw_pet_sprite(type_id, str(pos[1]), cell, z,
+			po, int(pet.get("active", 1)))
+
+
+func _draw_pet_sprite(type_id: String, dir: String, cell: Vector2i, z: float, po: Vector2, active: int) -> void:
+	## ペット1コマを描く。足元の置き方はキャラと同じ
+	## (下端が CHARA_FOOT に合う)。休止中は薄くする。
+	var src := Rect2(dir_to_row(dir) * PET_CELL,
+		PET_TYPE_ROW[type_id] * PET_CELL, PET_CELL, PET_CELL)
+	var base_x := cell.x * CHIP_SIZE + (CHIP_SIZE - PET_CELL) / 2
+	var base_y := cell.y * CHIP_SIZE + (CHIP_SIZE - PET_CELL) / 2 - CHARA_Y_ABOVE_FLOOR + MAP_TOP
+	var bob := pet_idle_bob(active, _anim_frame)
+	var modulate := Color(1, 1, 1, 1.0) if active != 0 else Color(1, 1, 1, 0.55)
+	draw_texture_rect_region(_pet_tex,
+		Rect2(base_x * z + po.x, (base_y + bob) * z + po.y, PET_CELL * z, PET_CELL * z),
+		src, modulate)
+
+
+func debug_pet_state() -> Dictionary:
+	return {"trails": _pet_trails.duplicate(), "selfCell": _pet_self_cell,
+		"selfWorld": _pet_self_world, "originOk": _pet_origin_ok,
+		"selfDir": _pet_self_dir, "pets": pets.duplicate(),
+		"drawnCells": _pet_drawn_cell.duplicate(),
+		"hopAt": _pet_hop_at.duplicate(),
+		"jobInfo": job_info.duplicate()}
+
+
+func hover_text_for(cname: String) -> String:
+	## ホバー表示の文。名前の下に、ペット (名前とタイプ) と
+	## 職業・性別を併記する。
+	var lines: Array[String] = [cname]
+	if pets.has(cname):
+		var pet: Dictionary = pets[cname]
+		var tname: String = PET_TYPE_NAMES.get(str(pet.get("type", "")), "")
+		if not tname.is_empty():
+			lines.append("%s (%s)" % [str(pet.get("name", "")), tname])
+	if job_info.has(cname):
+		var ji: Dictionary = job_info[cname]
+		var parts: Array[String] = []
+		if not str(ji.get("job", "")).is_empty():
+			parts.append(str(ji["job"]))
+		if not str(ji.get("sex", "")).is_empty():
+			parts.append(str(ji["sex"]))
+		if not parts.is_empty():
+			lines.append(" ".join(parts))
+	return "\n".join(lines)
 
 
 ## スロットごとのチップシートを取り直す。slot 0 は現在の
@@ -1155,15 +1607,21 @@ func show_hover_hint(cname: String, local_pos: Vector2, font_size: int) -> void:
 	if bold_font != null:
 		_hint_label.add_theme_font_override("font", bold_font)
 	_hint_label.add_theme_font_size_override("font_size", font_size)
-	_hint_label.text = cname
+	var text := hover_text_for(cname)
+	_hint_label.text = text
 	_hint_label.visible = true
 	var font := bold_font if bold_font != null else label_font
 	var w := 12.0
+	var line_count := 1
 	if font != null:
-		w += font.get_string_size(cname, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x
+		var max_w := 0.0
+		for line in text.split("\n"):
+			max_w = maxf(max_w, font.get_string_size(line, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x)
+		w += max_w
+		line_count = text.split("\n").size()
 	var pos := local_pos + Vector2(14, 14)
 	pos.x = minf(pos.x, maxf(0.0, size.x - w - 2.0))
-	pos.y = minf(pos.y, maxf(0.0, size.y - float(font_size + 6) - 2.0))
+	pos.y = minf(pos.y, maxf(0.0, size.y - float(font_size + 6) * float(line_count) - 2.0))
 	_hint_label.position = pos
 
 
@@ -1646,6 +2104,9 @@ func _draw() -> void:
 
 	for row in range(dim):
 		_draw_cell_row(cells, dim, z, row, water)
+		# 4a. ペット (この行)。キャラ本体より先に描き、同じ
+		# マスでは主人が手前に来るようにする。
+		_draw_pets_row(chars, cells, dim, z, row)
 		# 4. キャラ(この行)。高さのあるセルでは足元基準の行で
 		# 描き、高さぶん y をずらす。
 		var row_chars: Array = []
@@ -2243,6 +2704,10 @@ func _process(_delta: float) -> void:
 	# 間隔に適応した _scroll_duration を使う (第128段)。
 	if _scroll_t < 1.0:
 		_scroll_t = minf(1.0, _scroll_t + _delta / _scroll_duration)
+		queue_redraw()
+	# ペットのホップが進行中なら、それが収まるまで描き直す。
+	if not _pet_hop_at.is_empty() and not _event.is_empty() \
+			and is_visible_in_tree() and _pet_hop_active():
 		queue_redraw()
 	if _floats.is_empty() and _flashes.is_empty() and _swings.is_empty() and _slashes.is_empty() and _bolts.is_empty() and _impacts.is_empty() and _casts.is_empty() and _ghosts.is_empty() and _bubbles.is_empty() and _disp_magics.is_empty() and not _shake_active and not _fx_any_active():
 		return

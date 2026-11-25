@@ -139,6 +139,19 @@ var _cut_by_other := false
 var _applied_size := 0
 
 var _player_name := ""
+## ペット (PHIDM NEO v2.0)。自分のペットと、周囲のキャラの
+## ペット (キャラ名 → ペット辞書)。サーバに実体は無く、
+## 表示は MapView と StatusPanel が担う。
+var _pet_self: Dictionary = {}
+var _pets_by_chr: Dictionary = {}
+## 職業・性別 (PHIDM NEO v2.0)。自分の分と、周囲のキャラの分
+## (キャラ名 → {"job","sex"})。
+var _job_self: Dictionary = {}
+var _jobs_by_chr: Dictionary = {}
+## ログイン申告の時点ではキャラがまだ盤面に居らず、サーバの
+## chr_all (近くのキャラ分) が空振りする。そのため、最初の
+## 地図を受けたら pet / job を一度だけ申告し直す。
+var _ex_redeclared := false
 ## 現在の EXP (#status 由来)。超魔法の出し分けに使う。
 var _exp := 0
 var _world := ""
@@ -1049,14 +1062,23 @@ func _style_talk_button(size: int) -> void:
 	## 中身はスキンの Talk アイコン (無ければ "Talk" の文字)。
 	## 新スタイルでは 1.5 倍にする (第106段、ユーザーの指定。
 	## 地図が画面全域になって相対的に小さく見えるため)。
+	## コマンドパレットのアイコンサイズ設定があれば、パレットの
+	## ボタンが大きくなるのと同じ比率でこのボタンも連動させる
+	## (利用者の要望。設定は作らず ToolbarIconSize を共用する)。
 	if _talk_button == null:
 		return
 	var d := clampi(size * 2 + 40, 68, 100)
 	if _float_mode:
 		d = int(round(float(d) * 1.5))
+	var font_size := size
+	var scale := _toolbar_icon_scale(size)
+	if scale != 1.0:
+		d = int(round(float(d) * scale))
+		font_size = maxi(1, int(round(float(size) * scale)))
 	_talk_d = d
+	_talk_button.custom_minimum_size = Vector2(d, d)
 	_place_talk_button()
-	_talk_button.add_theme_font_size_override("font_size", size)
+	_talk_button.add_theme_font_size_override("font_size", font_size)
 	# 中身は「話してる絵 + TALK」の専用アイコン (assets/talk.png)。
 	if _talk_icon == null:
 		_talk_icon = load("res://assets/talk.png") as Texture2D
@@ -1135,6 +1157,23 @@ func _toolbar_icon_for(action_name: String) -> Variant:
 	return _assets.button_icon(action_name)
 
 
+func _toolbar_icon_scale(ui_size: int) -> float:
+	## コマンドパレットのボタンが、アイコンサイズ設定で従来の
+	## 何倍の高さになるか。設定が無ければ 1.0。決め方はパレット
+	## 側 (_toolbar_button_min_size) と同じで、設定なしの高さは
+	## ui_size + 20、設定ありは px + 地の上下の余白。余白は
+	## パレットのボタン (全部同じテーマ) から取る。Talk ボタンの
+	## 連動に使う。
+	if _config == null or _config.toolbar_icon_size <= 0:
+		return 1.0
+	var my := 0.0
+	if not _toolbar_buttons.is_empty():
+		var box := _toolbar_buttons[0].get_theme_stylebox("normal")
+		if box != null:
+			my = box.get_margin(SIDE_TOP) + box.get_margin(SIDE_BOTTOM)
+	return (float(_config.toolbar_icon_size) + my) / float(ui_size + 20)
+
+
 func refresh_toolbar_icon_size() -> void:
 	## コマンドパレットのアイコンサイズの変更を、全ボタンへ
 	## 反映して並べ直す。アイコンはボタンの大きさに合わせて
@@ -1142,6 +1181,7 @@ func refresh_toolbar_icon_size() -> void:
 	## パレットは大きくならず、ボタンの最小サイズも一緒に
 	## 付け替える。refresh_ui_font_size は倍率由来の大きさが
 	## 同じだと早期に戻るため、ここで直接付ける。
+	## Talk ボタンも同じ設定に連動させる。
 	var ui_size := _applied_size
 	if map_view != null:
 		ui_size = PhiFont.ui_size_for_zoom(map_view.zoom)
@@ -1155,6 +1195,7 @@ func refresh_toolbar_icon_size() -> void:
 		button.custom_minimum_size = _toolbar_button_min_size(button, ui_size)
 	_layout_toolbar()
 	_fit_toolbar_panel()
+	_style_talk_button(ui_size)
 
 
 func _toolbar_button_min_size(button: Button, ui_size: int) -> Vector2:
@@ -2582,6 +2623,7 @@ func connect_to(p_host: String, p_port: int, p_char_id: String) -> void:
 	_save_failed = false
 	_close_handled = false
 	_cut_by_other = false
+	_clear_pet_job()
 	_bigmap_fell_back = false
 	_bigmap_watch_since = 0
 	_bigmap_attempts = 0
@@ -2750,6 +2792,7 @@ func _on_session_closed() -> void:
 	_held_moves.clear()
 	_held_step_pending_until = 0
 	_held_seq_sent = false
+	_clear_pet_job()
 	_hide_list_overlay()
 	# BGM は切断で止める(Philly と同じく曲名も空に戻す)。
 	if not bgm_name.is_empty():
@@ -2762,6 +2805,49 @@ func _on_session_closed() -> void:
 	title_changed.emit(tab_title())
 	# 切断時の行まで含めて、自動保存の残りを書き出す。
 	_flush_log_save()
+
+# -- ペット・職業 (PHIDM NEO v2.0) ------------------------------------------
+
+func _sync_pet_views() -> void:
+	## ペット状態を MapView (追随描画・ホバー) と StatusPanel
+	## (自分のプール表示) へ渡す。自分のペットは自分の名前で
+	## 合流させる (chr フレームは本人には届かないため)。
+	var combined := _pets_by_chr.duplicate()
+	if not _pet_self.is_empty() and not _player_name.is_empty():
+		combined[_player_name] = _pet_self
+	if map_view != null:
+		map_view.set_pets(combined)
+	if status_panel != null:
+		status_panel.set_pet(_pet_self)
+
+
+func _sync_job_views() -> void:
+	## 職業・性別を MapView (ホバー) と StatusPanel へ渡す。
+	var combined := _jobs_by_chr.duplicate()
+	if not _player_name.is_empty():
+		combined[_player_name] = _job_self
+	if map_view != null:
+		map_view.set_job_info(combined)
+	if status_panel != null:
+		status_panel.set_job(str(_job_self.get("job", "")),
+			str(_job_self.get("sex", "")))
+
+
+func _clear_pet_job() -> void:
+	## 接続ごとにペット・職業の表示状態を落とす。
+	_ex_redeclared = false
+	_pet_self = {}
+	_pets_by_chr = {}
+	_job_self = {}
+	_jobs_by_chr = {}
+	_sync_pet_views()
+	_sync_job_views()
+
+
+func debug_pet_job() -> Dictionary:
+	return {"petSelf": _pet_self.duplicate(), "pets": _pets_by_chr.duplicate(),
+		"jobSelf": _job_self.duplicate(), "jobs": _jobs_by_chr.duplicate()}
+
 
 # -- 受信イベント ------------------------------------------------------------
 
@@ -2836,6 +2922,26 @@ func _on_event(event: Dictionary) -> void:
 		"cond":
 			if status_panel != null:
 				status_panel.set_conditions_all(event)
+		"petSelf":
+			_pet_self = (event.get("pet", {}) as Dictionary).duplicate()
+			_sync_pet_views()
+		"petChr":
+			var pet_chr := str(event.get("chr", ""))
+			var pet_d: Dictionary = event.get("pet", {})
+			if not pet_chr.is_empty():
+				if pet_d.is_empty():
+					_pets_by_chr.erase(pet_chr)
+				else:
+					_pets_by_chr[pet_chr] = pet_d.duplicate()
+				_sync_pet_views()
+		"jobSelf":
+			_job_self = {"job": str(event.get("job", "")), "sex": str(event.get("sex", ""))}
+			_sync_job_views()
+		"jobChr":
+			var job_chr := str(event.get("chr", ""))
+			if not job_chr.is_empty():
+				_jobs_by_chr[job_chr] = {"job": str(event.get("job", "")), "sex": str(event.get("sex", ""))}
+				_sync_job_views()
 		"dispMagic":
 			map_view.spawn_disp_magic(event["data"])
 		"fx":
@@ -2853,6 +2959,10 @@ func _on_event(event: Dictionary) -> void:
 				bgm_speed = new_speed
 				bgm_changed.emit()
 		"map":
+			if not _ex_redeclared:
+				_ex_redeclared = true
+				session.send_line("#ex-switch pet=1")
+				session.send_line("#ex-switch job=1")
 			_resolve_bump_watch(event)
 			_learn_self_gra(event)
 			if int(event.get("size", 7)) == 5:
@@ -3674,6 +3784,10 @@ func _accept_player_name(new_name: String) -> void:
 		return
 	_player_name = new_name
 	map_view.player_name = _player_name
+	# ペット・職業は自分の名前で引き直す (申告フレームが
+	# 名前より先に届いた場合の取り直し)。
+	_sync_pet_views()
+	_sync_job_views()
 	title_changed.emit(tab_title())
 	# 登録ファイルの無い接続は、名前が届いた = 接続成功なので、
 	# Main に一覧への登録を頼む (第134段)。
