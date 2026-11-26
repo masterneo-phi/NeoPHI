@@ -104,13 +104,38 @@ func _feed_armed(chunk: PackedByteArray) -> PackedByteArray:
 		_hold = PackedByteArray()
 		_state = "off"
 		return out
-	# まだ返事行が無い。行境界に掛かる分だけ末尾を残して通す。
-	var keep := mark.size()
+	# まだ返事行が無い。返事行の接頭辞になり得る末尾だけ残して通す。
+	# (完成した行は即座に全部通る。残すのは、行頭から始まって
+	# マーカーの真の接頭辞になっている最長の末尾だけ。)
+	var keep := _armed_holdback(_hold)
+	if keep <= 0:
+		var out2 := _hold
+		_hold = PackedByteArray()
+		return out2
 	if _hold.size() <= keep:
 		return PackedByteArray()
 	var out2 := _hold.slice(0, _hold.size() - keep)
 	_hold = _hold.slice(_hold.size() - keep)
 	return out2
+
+
+static func _armed_holdback(hay: PackedByteArray) -> int:
+	## armed 中に留保すべき末尾の長さ。行頭 (先頭か改行の直後) から
+	## 始まり、返事行マーカーどちらかの真の接頭辞になっている最長の
+	## サフィックスの長さ。そのような末尾が無ければ 0 (全部通す)。
+	var marks := [MARK_DEFLATE.to_ascii_buffer(), MARK_NO.to_ascii_buffer()]
+	var maxlen := 0
+	for m in marks:
+		maxlen = maxi(maxlen, m.size() - 1)
+	var lo := maxi(0, hay.size() - maxlen)
+	for i in range(lo, hay.size()):
+		if i > 0 and hay[i - 1] != 0x0A:
+			continue
+		var suffix := hay.slice(i)
+		for m in marks:
+			if suffix.size() < m.size() and m.slice(0, suffix.size()) == suffix:
+				return suffix.size()
+	return 0
 
 
 func _inflate(data: PackedByteArray) -> PackedByteArray:

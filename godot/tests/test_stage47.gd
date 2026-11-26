@@ -33,6 +33,7 @@ const DISPATCH_KINDS := [
 	"scroll-toggle", "smooth-scroll-toggle", "disp-magic-toggle", "bgm-toggle", "se-toggle",
 	"master-magic-toggle", "open-config-folder", "update-check",
 	"about", "image-toggle", "ui-style-toggle", "map-align", "layout-to-all-tabs",
+	"v6-bag", "v6-trade", "v6-quests",
 ]
 
 

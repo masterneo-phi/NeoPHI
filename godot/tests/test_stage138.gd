@@ -360,6 +360,34 @@ func _test_inflate() -> void:
 	inf2.reset()
 	check_eq(inf2.feed(plain), plain, "inflate: reset passthrough")
 	check(not inf2.is_on(), "inflate: not on after reset")
+	# armed: 完成した行ブロックは留保されず即座に全部出る
+	# (従来サーバは返事をしないので、末尾留保があると最終行が
+	# 次の受信か flush まで遅れる。33 バイトの #list 塊が回帰例)。
+	var inf5 := PhiInflate.new()
+	inf5.arm()
+	var block := "#list\nabcdefghijklmnopqrstuvwxyz\n".to_ascii_buffer()
+	check_eq(block.size(), 33, "inflate: armed block fixture size")
+	check_eq(inf5.feed(block), block, "inflate: armed releases complete block at once")
+	check(inf5.is_armed(), "inflate: still armed after plain block")
+	# armed: 返事行が 2 回の feed に跨っても境界を検出する。
+	var inf6 := PhiInflate.new()
+	inf6.arm()
+	var cut6 := prefix.size() + "#ex-switch compress=".length()
+	var got6 := inf6.feed(stream.slice(0, cut6))
+	check_eq(got6, prefix, "inflate: split marker holds only the prefix")
+	check(inf6.is_armed(), "inflate: split marker still armed")
+	got6.append_array(inf6.feed(stream.slice(cut6)))
+	check_eq(got6, want, "inflate: split marker stream")
+	check(inf6.is_on(), "inflate: on after split marker")
+	check(not inf6.failed, "inflate: not failed after split marker")
+	# armed: マーカーの接頭辞に見えた末尾が外れたら平文として出る。
+	var inf7 := PhiInflate.new()
+	inf7.arm()
+	check_eq(inf7.feed(Cp932.encode("案内\n#ex-switch comp")), Cp932.encode("案内\n"),
+		"inflate: partial prefix held")
+	check_eq(inf7.feed(Cp932.encode("uter\n次\n")), Cp932.encode("#ex-switch computer\n次\n"),
+		"inflate: false prefix released as plain")
+	check(inf7.is_armed(), "inflate: still armed after false prefix")
 
 
 func _initialize() -> void:
