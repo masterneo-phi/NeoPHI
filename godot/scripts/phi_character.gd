@@ -3358,20 +3358,26 @@ static func _v6_item_label(e: Dictionary) -> String:
 
 
 static func _v6_inv_reason(reason: String) -> String:
-	## `#ex-inv no` の理由 → 表示文。
+	## `#ex-inv no` の理由 → 表示文。文言はサーバ (phidm-v6 の
+	## phi_items.rs) がその理由を送る条件に合わせる。
 	match reason:
 		"off":
 			return "この接続ではカバンは使えません"
 		"empty":
-			return "カバンは空です"
+			# put: 指定した手持ちの枠が空だった
+			return "その枠には何もありません"
 		"equipped":
 			return "装備中の品はカバンへ入れられません"
 		"nobreak":
-			return "壊れない品はカバンへ入れられません"
+			# put (カバンへ入れられない) と drop (床へ出せない) の
+			# 両方で来るので、操作を限定しない文にする
+			return "壊れない品はカバンに出し入れできません"
 		"epic":
-			return "特別な素材の品はカバンへ入れられません"
+			# drop / destroy: Epic 素材は床に出せず、消す事も出来ない
+			return "特別な素材の品は床に置けず、消すこともできません"
 		"full":
-			return "手持ちがいっぱいです"
+			# put: カバンの数が上限だった
+			return "カバンがいっぱいです"
 		"hand":
 			return "手持ちに空きがありません"
 		"bad":
@@ -3379,30 +3385,41 @@ static func _v6_inv_reason(reason: String) -> String:
 		"none":
 			return "対象の品がありません"
 		"store":
-			return "売り場のマスでは使えません"
+			# 預かり所のマス上では pick / floor / drop が出来ない
+			return "預かり所のマスでは使えません"
 		"gp":
-			return "お金が足りません"
+			# pick: お金はカバンへ直接入れられない (get で拾う)
+			return "お金はカバンへ入れられません"
+		"nobag":
+			# pick: その品がカバンへ入れられなかった (上限・壊れない品)
+			return "その品はカバンへ入れられません"
+		"error":
+			return "カバンへの出し入れに失敗しました"
 		_:
 			return reason
 
 
 static func _v6_trade_reason(reason: String) -> String:
-	## `#ex-trade no` / `#v6 Y end` の理由 → 表示文。
+	## `#ex-trade no` / `#v6 Y end` の理由 → 表示文。文言はサーバ
+	## (phidm-v6 の phi_trade.rs) がその理由を送る条件に合わせる。
 	match reason:
 		"refused":
 			return "取引を断られました"
 		"far":
 			return "相手が近くにいません"
 		"busy":
-			return "相手は取引中です"
+			# 自分・相手のどちらかが取引中か申し込み中でも来る
+			return "どちらかが取引中か、申し込み中です"
 		"off":
 			return "この接続では取引は使えません"
 		"bad":
 			return "対象がいません"
 		"none":
-			return "対象の品がありません"
+			# put / bag / gp: 取引が開いていない
+			return "取引が始まっていません"
 		"empty":
-			return "カバンが空です"
+			# put: 指定した手持ちの枠が空だった
+			return "その枠には何もありません"
 		"equipped":
 			return "装備中の品は出せません"
 		"nobreak":
@@ -3410,17 +3427,20 @@ static func _v6_trade_reason(reason: String) -> String:
 		"epic":
 			return "特別な素材の品は出せません"
 		"many":
-			return "個数が合いません"
+			# 出す品の数が上限だった
+			return "品はこれ以上出せません"
 		"gp":
 			return "お金が足りません"
 		"cancel":
 			return "取引は取りやめになりました"
 		"moved":
-			return "相手が離れたため取引は終わりました"
+			# 自分・相手のどちらかが取引開始位置から動いた
+			return "どちらかが移動したため取引は終わりました"
 		"gone":
 			return "相手がいなくなったため取引は終わりました"
 		"short":
-			return "品が足りず取引できませんでした"
+			# 成立確認の時点で、出す品かお金が足りなくなっていた
+			return "品やお金が足りず取引できませんでした"
 		"full":
 			return "持ち物がいっぱいで取引できませんでした"
 		_:
@@ -5922,6 +5942,28 @@ func _mouse_cursor_at(pos: Vector2) -> String:
 	return PhiMouse.cursor_for(pos - rect.position, rect.size, north_fix_now(), shift_ctrl, float(map_view.zoom))
 
 
+## マウス移動が有効な範囲。自キャラを中心に上下左右このマス数
+## (従来の 7×7 視界) の正方形の中だけが移動操作になる。
+## 盤面の大きさ (11×11 や v6 の可変視界) や接続方式によらない
+## 共通仕様。大きな地図では描画範囲がタブやメニューの下にまで
+## 広がり、そこの押しまで歩行開始になっていたための制限。
+const MOUSE_MOVE_RANGE := 3
+
+
+func _mouse_move_range_ok(pos: Vector2) -> bool:
+	## 画面座標 pos がマウス移動の有効範囲内か。盤外も false。
+	## 移動の開始 (_start_mouse_hold) と、長押し中の方向の
+	## 追随 (_mouse_repeat_send_if_ready) の両方で使う。
+	if map_view == null:
+		return false
+	var local: Vector2 = map_view.get_global_transform().affine_inverse() * pos
+	var cell := map_view.cell_at_local(local)
+	if cell.x < 0:
+		return false
+	var self_cell := map_view.player_cell()
+	return maxi(absi(cell.x - self_cell.x), absi(cell.y - self_cell.y)) <= MOUSE_MOVE_RANGE
+
+
 func _apply_mouse_cursor(cursor_name: String) -> void:
 	## 方向カーソルを出す。スキンの .cur が無ければ既定カーソル。
 	if cursor_name.is_empty():
@@ -6020,6 +6062,11 @@ func _start_mouse_hold(ev: InputEventMouseButton) -> void:
 		# Talk ボタンの上のクリックはボタン任せ (クリックも
 		# ドラッグも)。地図の長押し移動を始めない (第105段)。
 		return
+	if not _mouse_move_range_ok(ev.position):
+		# 自キャラ中心 ±3 マスの外は移動操作にしない。大きな
+		# 地図で描画範囲と重なるタブやメニューの上の押しが
+		# 歩行開始にならないようにするため。
+		return
 	var cursor := _mouse_cursor_at(ev.position)
 	if cursor.is_empty():
 		return
@@ -6057,9 +6104,12 @@ func _mouse_repeat_send_if_ready() -> void:
 	if not repeat_due(now, _mouse_last_repeat, _repeat_min_interval_ms()):
 		return
 	# 押している間にマウスが動いたら、方向を追いかける。
-	var cursor := _mouse_cursor_at(_mouse_last_pos)
-	if not cursor.is_empty():
-		_mouse_hold_cursor = cursor
+	# 有効範囲の外の位置では方向を変えない (範囲外の位置が
+	# 歩行を操縦しないように)。
+	if _mouse_move_range_ok(_mouse_last_pos):
+		var cursor := _mouse_cursor_at(_mouse_last_pos)
+		if not cursor.is_empty():
+			_mouse_hold_cursor = cursor
 	_mouse_send_step()
 
 

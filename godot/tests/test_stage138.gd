@@ -232,6 +232,53 @@ func _test_shop_quest() -> void:
 			check_eq(str((qs[0] as Dictionary).get("text", "")), "Walk east.", "quest: text")
 
 
+# -- 断り理由の表示文 --------------------------------------------------------
+
+func _test_reason_texts() -> void:
+	## 理由 → 表示文 (PhiCharacter の静的関数)。文言がサーバ
+	## (phidm-v6 phi_items.rs / phi_trade.rs) の送出条件と食い違って
+	## いない事を固定する。特に full / empty / gp / epic は以前、
+	## 意味が逆・別物になっていた。
+	var inv := {
+		"off": "この接続ではカバンは使えません",
+		"empty": "その枠には何もありません",
+		"equipped": "装備中の品はカバンへ入れられません",
+		"nobreak": "壊れない品はカバンに出し入れできません",
+		"epic": "特別な素材の品は床に置けず、消すこともできません",
+		"full": "カバンがいっぱいです",
+		"hand": "手持ちに空きがありません",
+		"bad": "その番号の品はありません",
+		"none": "対象の品がありません",
+		"store": "預かり所のマスでは使えません",
+		"gp": "お金はカバンへ入れられません",
+		"nobag": "その品はカバンへ入れられません",
+		"error": "カバンへの出し入れに失敗しました",
+	}
+	for key in inv:
+		check_eq(PhiCharacter._v6_inv_reason(key), inv[key], "inv text: %s" % key)
+	var trade := {
+		"refused": "取引を断られました",
+		"far": "相手が近くにいません",
+		"busy": "どちらかが取引中か、申し込み中です",
+		"off": "この接続では取引は使えません",
+		"bad": "対象がいません",
+		"none": "取引が始まっていません",
+		"empty": "その枠には何もありません",
+		"equipped": "装備中の品は出せません",
+		"nobreak": "壊れない品は出せません",
+		"epic": "特別な素材の品は出せません",
+		"many": "品はこれ以上出せません",
+		"gp": "お金が足りません",
+		"cancel": "取引は取りやめになりました",
+		"moved": "どちらかが移動したため取引は終わりました",
+		"gone": "相手がいなくなったため取引は終わりました",
+		"short": "品やお金が足りず取引できませんでした",
+		"full": "持ち物がいっぱいで取引できませんでした",
+	}
+	for key in trade:
+		check_eq(PhiCharacter._v6_trade_reason(key), trade[key], "trade text: %s" % key)
+
+
 # -- 直接の行と従来モード ----------------------------------------------------
 
 func _test_direct() -> void:
@@ -393,6 +440,7 @@ func _test_inflate() -> void:
 func _initialize() -> void:
 	_test_inv()
 	_test_trade()
+	_test_reason_texts()
 	_test_shop_quest()
 	_test_direct()
 	_test_eagle()
