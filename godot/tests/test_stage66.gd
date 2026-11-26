@@ -73,6 +73,40 @@ func _v6_frame_with_self() -> Dictionary:
 	return evs[0] if evs.size() == 1 else {}
 
 
+func _v6_r(row: int) -> PackedByteArray:
+	var b := PackedByteArray()
+	b.append_array(("#v6 R %02d " % row).to_ascii_buffer())
+	for i in 33:
+		b.append(0x2E)
+		b.append(0x80)
+	b.append(0x20)
+	return b
+
+
+func _v6_frame_33x25_solid() -> Dictionary:
+	# 実地 (NEO → phidm-v6 転送追随) で捕れた到着フレームの形。
+	# 33x25 solid、selfCell は (16, 12)。到着マスには他の
+	# プレイヤー (Second) が同居していて、自分行より先に並ぶ。
+	var parser := PhiParser.new()
+	var lines: Array = ["#ex-map style=solid".to_ascii_buffer(),
+		"#v6 M B 00000000 33 25".to_ascii_buffer()]
+	for y in 25:
+		lines.append(_v6_r(y))
+	lines.append(_v6_o(1, 16, 12, "Second", "human"))
+	lines.append(_v6_o(3, 16, 12, "KURO", "elb_cat"))
+	lines.append("#v6 .".to_ascii_buffer())
+	var evs := _map_events(_feed_all(parser, lines))
+	return evs[0] if evs.size() == 1 else {}
+
+
+func _padded_name_event() -> Dictionary:
+	# 転送で受け取ったキャラへの #name は、グラ名が 15 文字幅に
+	# 空白埋めされて届く (実地で捕れた到着バーストの行)。
+	var parser := PhiParser.new()
+	var evs := parser.feed("#name elb_cat        ".to_ascii_buffer())
+	return evs[0] if evs.size() == 1 else {}
+
+
 func _classic_m() -> PackedByteArray:
 	var b := PackedByteArray()
 	b.append_array("#map M W 00000000:".to_ascii_buffer())
@@ -266,6 +300,54 @@ func _run() -> void:
 	var state5: Dictionary = tab.call("session_state")
 	check(str(state5["host"]) == "10.0.0.10" and int(state5["port"]) == 20096,
 		"session state saves the destination")
+
+	# --- (6) 転送追随: 空白埋めグラ名の #name で化ける (実地) ---
+	# 移動先 (phidm-v6) はゲート転送で受け取ったキャラのグラ名を
+	# 15 文字幅に空白埋めして #name で送る。空白付きの候補は
+	# _self_gra と一致せず素通りしてプレイヤー名に化け、化けた
+	# 名前は v6 自分行のグラ (空白なし) とも一致しないため、
+	# 実名の取り込みが二重に外れてタブ題名がグラ名のまま
+	# 固まっていた (直接ログインでは空白なしで届くので直る)。
+	var f33 := _v6_frame_33x25_solid()
+	check(not f33.is_empty() and bool(f33.get("v6", false)), "33x25 v6 frame parsed")
+	check(int(f33["selfCell"]["x"]) == 16 and int(f33["selfCell"]["y"]) == 12,
+		"33x25 solid selfCell is (16, 12)")
+	var pad_ev := _padded_name_event()
+	check(str(pad_ev.get("name", "")) == "elb_cat        ",
+		"padded #name reaches the character unstripped")
+	# (6a) 追随時、実名は保持済みで _self_gra も学習済み:
+	# 空白埋めグラ名はグラ名として弾く。
+	tab.set("_player_name", "KURO")
+	tab.set("_self_gra", "elb_cat")
+	tab.call("_on_event", pad_ev)
+	check(str(tab.call("player_name")) == "KURO",
+		"padded gra #name does not poison a held real name")
+	tab.call("_on_event", _v6_frame_33x25_solid())
+	check(str(tab.call("tab_title")) == "KURO", "title stays real name (held-name follow)")
+	# (6b) 追随時、名前が未確定: 空白埋めグラ名が入っても
+	# 空白なしで入り、到着フレームの自分行から実名に戻る。
+	tab.set("_player_name", "")
+	tab.set("_self_gra", "elb_cat")
+	tab.call("_on_event", pad_ev)
+	check(str(tab.call("player_name")) == "elb_cat",
+		"padded gra #name stored without padding (unset follow)")
+	tab.call("_on_event", _v6_frame_33x25_solid())
+	check(str(tab.call("player_name")) == "KURO",
+		"v6 self row restores real name (unset follow, cellmate first)")
+	check(str(tab.call("tab_title")) == "KURO", "tab title is real name (unset follow)")
+	check(str(tab.get("_self_gra")) == "elb_cat",
+		"self gra not overwritten by the cellmate row")
+	# (6c) 既に空白入りのグラ名に化けている状態からでも、
+	# 到着フレームで実名に戻る。
+	tab.set("_player_name", "elb_cat        ")
+	tab.set("_self_gra", "elb_cat")
+	tab.call("_on_event", _v6_frame_33x25_solid())
+	check(str(tab.call("player_name")) == "KURO",
+		"v6 self row restores real name (pre-poisoned padded name)")
+	check(str(tab.call("tab_title")) == "KURO", "tab title is real name (pre-poisoned)")
+	tab.call("_on_event", {"type": "status", "name": "elb_cat"})
+	check(str(tab.call("player_name")) == "KURO",
+		"later gra status does not poison after padded follow")
 
 	print("test_stage66: ", _checks, " checks, ", _failures, " failures")
 	quit(1 if _failures > 0 else 0)

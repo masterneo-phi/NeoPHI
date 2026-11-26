@@ -3192,10 +3192,12 @@ func _on_event(event: Dictionary) -> void:
 						break
 				if self_ch.is_empty() and not _player_name.is_empty():
 					# 名前がグラ名に化けている時は、グラ名の一致する
-					# 行が自分 (実名はその行の名前欄にある)。
+					# 行が自分 (実名はその行の名前欄にある)。化けた
+					# 名前に固定幅の空白埋めが付いている事がある
+					# ので、空白を落として比べる。
 					for ch in _demo_chars:
 						if int(ch.get("x", -1)) == scx and int(ch.get("y", -1)) == scy \
-								and str(ch.get("gra", "")) == _player_name:
+								and str(ch.get("gra", "")) == _player_name.strip_edges():
 							self_ch = ch
 							break
 				if self_ch.is_empty():
@@ -4968,6 +4970,15 @@ func _accept_player_name(new_name: String) -> void:
 	## 名前の代わりにグラ名が送られてくる (旧クライアント
 	## 向けの仕様) ので、自分のグラ名と一致する値は名前と
 	## して扱わない。
+	## 名前欄は固定幅で空白埋めされて届く事がある (ゲート転送で
+	## 受け取ったキャラのグラ名は、移動先サーバが 15 文字幅に
+	## 空白埋めした物をそのまま #name で送ってくる)。空白を
+	## 落としてから比べないと、グラ名と一致せずに素通りして
+	## プレイヤー名が空白入りのグラ名に化け、後段の照合
+	## (v6 自分行のグラ一致・実名の取り込み) が全部外れる。
+	new_name = new_name.strip_edges()
+	if new_name.is_empty():
+		return
 	if new_name == _self_gra and not _player_name.is_empty() and new_name != _player_name:
 		return
 	_player_name = new_name
@@ -5448,7 +5459,7 @@ func _learn_v6_self(self_ch: Dictionary) -> void:
 	var row_name := str(self_ch.get("name", ""))
 	if row_name.is_empty() or row_name == row_gra:
 		return
-	if _player_name.is_empty() or _player_name == row_gra:
+	if _player_name.is_empty() or _player_name.strip_edges() == row_gra:
 		_accept_player_name(row_name)
 
 
