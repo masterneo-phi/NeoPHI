@@ -117,6 +117,7 @@ func _run() -> void:
 	_test_legacy_small()
 	_test_v6()
 	_test_steering()
+	await _test_cursor_feedback()
 	await _test_main()
 	print("test_stage139: ", _checks, " checks, ", _failures, " failures")
 	quit(1 if _failures > 0 else 0)
@@ -243,6 +244,69 @@ func _test_steering() -> void:
 	tab.handle_mouse_button(_release(p))
 	check(not bool(tab.get("_mouse_held")), "s139 steer release ends hold")
 	_queue(tab).clear()
+
+
+# -- カーソルの効く/効かない表示: 範囲内は方向カーソル、範囲外は既定の矢印 ---------
+## 範囲の境目は移動の有効範囲と一致し、歩行で自キャラが動くと
+## 止まっているポインタのカーソルも追随する。
+
+func _test_cursor_feedback() -> void:
+	var tab := _tab
+	_feed_legacy(tab, 11)
+	# 範囲内 (距離 3) は方向カーソル。正方形の角も含む。
+	tab.handle_mouse_motion(_motion(_cell_pos(tab, Vector2i(5, 2))))
+	check_eq(tab.get("_mouse_cursor_now"), "MouseUp", "s139 cursor in range north")
+	tab.handle_mouse_motion(_motion(_cell_pos(tab, Vector2i(2, 2))))
+	check_eq(tab.get("_mouse_cursor_now"), "MouseUpLeft", "s139 cursor in range corner")
+	tab.handle_mouse_motion(_motion(_cell_pos(tab, Vector2i(8, 8))))
+	check_eq(tab.get("_mouse_cursor_now"), "MouseDownRight", "s139 cursor in range corner se")
+	# 範囲外 (距離 4) は、描いている地図の上でも既定の矢印 ("")。
+	tab.handle_mouse_motion(_motion(_cell_pos(tab, Vector2i(5, 1))))
+	check_eq(tab.get("_mouse_cursor_now"), "", "s139 cursor out of range north")
+	tab.handle_mouse_motion(_motion(_cell_pos(tab, Vector2i(1, 5))))
+	check_eq(tab.get("_mouse_cursor_now"), "", "s139 cursor out of range west")
+	tab.handle_mouse_motion(_motion(_cell_pos(tab, Vector2i(9, 9))))
+	check_eq(tab.get("_mouse_cursor_now"), "", "s139 cursor out of range corner")
+	# 地図の外も従来どおり ""。
+	tab.handle_mouse_motion(_motion(Vector2(1279, 1023)))
+	check_eq(tab.get("_mouse_cursor_now"), "", "s139 cursor off map")
+	# 判定ヘルパそのもの: 境目は移動の有効範囲と一致し、北固定の
+	# 向きホバー (turn_hover) だけが範囲外でも方向表示を許す。
+	check(bool(tab.call("_cursor_range_ok_at", _cell_pos(tab, Vector2i(2, 2)), false)), "s139 cursor helper in range")
+	check(not bool(tab.call("_cursor_range_ok_at", _cell_pos(tab, Vector2i(5, 1)), false)), "s139 cursor helper out of range")
+	check(bool(tab.call("_cursor_range_ok_at", _cell_pos(tab, Vector2i(5, 1)), true)), "s139 cursor helper turn hover")
+	check(not bool(tab.call("_cursor_range_ok_at", Vector2(1279, 1023), true)), "s139 cursor helper turn hover off map")
+	# v6 の大きな視界: カーソルも自キャラ基準の範囲で切り替わる。
+	tab.session.v6_mode = true
+	tab.session.v6_diag = true
+	_feed(tab, {"type": "map", "v6": true, "w": 25, "h": 19, "dir": 0,
+		"cells": _cells(25, 19), "chars": [], "selfCell": {"x": 7, "y": 12}})
+	var pw := _cell_pos(tab, Vector2i(4, 9))
+	tab.handle_mouse_motion(_motion(pw))
+	check_eq(tab.get("_mouse_cursor_now"), "MouseLeft", "s139 cursor v6 in range corner")
+	# 画面の中心に近くても、自キャラから距離 4 なら矢印に戻る。
+	tab.handle_mouse_motion(_motion(_cell_pos(tab, Vector2i(11, 12))))
+	check_eq(tab.get("_mouse_cursor_now"), "", "s139 cursor v6 out of range")
+	# 歩行で自キャラが動くと、止まっているポインタ ((4,9) に
+	# 置いたまま) のカーソルも追随する。
+	tab.handle_mouse_motion(_motion(pw))
+	check_eq(tab.get("_mouse_cursor_now"), "MouseLeft", "s139 cursor v6 back in range")
+	_feed(tab, {"type": "map", "v6": true, "w": 25, "h": 19, "dir": 0,
+		"cells": _cells(25, 19), "chars": [], "selfCell": {"x": 10, "y": 12}})
+	tab.call("_refresh_mouse_cursor")
+	check_eq(tab.get("_mouse_cursor_now"), "", "s139 cursor follows step out")
+	_feed(tab, {"type": "map", "v6": true, "w": 25, "h": 19, "dir": 0,
+		"cells": _cells(25, 19), "chars": [], "selfCell": {"x": 7, "y": 12}})
+	tab.call("_refresh_mouse_cursor")
+	check_eq(tab.get("_mouse_cursor_now"), "MouseLeft", "s139 cursor follows step back in")
+	# _process 経由でも追随する (直接呼ばなくても歩行に付いてくる)。
+	_feed(tab, {"type": "map", "v6": true, "w": 25, "h": 19, "dir": 0,
+		"cells": _cells(25, 19), "chars": [], "selfCell": {"x": 10, "y": 12}})
+	await process_frame
+	await process_frame
+	check_eq(tab.get("_mouse_cursor_now"), "", "s139 cursor follows step via process")
+	tab.session.v6_mode = false
+	tab.session.v6_diag = false
 
 
 # -- Main 経由: タブの上の押しは歩行にせず、フロート窓のドラッグは従来どおり -------

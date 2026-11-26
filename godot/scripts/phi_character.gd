@@ -456,9 +456,6 @@ func setup(p_assets: GameAssets, p_config: PhiConfig, p_font: Font, p_bold_font:
 	session.session_closed.connect(_on_session_closed)
 	session.transfer_confirm_requested.connect(
 		func(h: String, p: int) -> void: transfer_confirm_requested.emit(h, p))
-	# 世界移動の追随完了では connect_to を通らないので、前の
-	# 世界の地図状態を落とす合図をここで受ける。
-	session.transfer_completed.connect(_reset_map_state)
 
 
 func set_log_filter(filter: PhiLogFilter) -> void:
@@ -2746,21 +2743,6 @@ func _check_bigmap_watchdog(now_ms: int) -> void:
 			_do_fallback_bigmap()
 
 
-## 世界が変わる時 (新規接続・再接続・転送追随) に、前の世界の
-## 地図表示状態を全部落とす。従来形式のマップセット対応表
-## (_mapset/_defines) と v6 の16枠・体力表示の両方。MapView 側の
-## 表も空の定義で作り直させる。
-func _reset_map_state() -> void:
-	_mapset = ""
-	_defines.clear()
-	_v6_was_active = false
-	_v6_health.clear()
-	_defines16.clear()
-	if map_view != null:
-		map_view.set_v6_health(_v6_health)
-		map_view.set_defines16(_defines16)
-
-
 func connect_to(p_host: String, p_port: int, p_char_id: String) -> void:
 	## 地図の大きさ・様式・魔法表示は、呼ぶ側(_connect_tab)が
 	## セッションに付けてある。
@@ -2775,9 +2757,13 @@ func connect_to(p_host: String, p_port: int, p_char_id: String) -> void:
 	_close_handled = false
 	_cut_by_other = false
 	_clear_pet_job()
-	# 前の世界の地図状態は接続ごとに全部落とす (残像防止)。
-	# 従来形式の対応表 (_mapset/_defines) も v6 の状態も同様。
-	_reset_map_state()
+	# v6 の表示状態も接続ごとに落とす (前の世界の残像防止)。
+	_v6_was_active = false
+	_v6_health.clear()
+	_defines16.clear()
+	if map_view != null:
+		map_view.set_v6_health(_v6_health)
+		map_view.set_defines16(_defines16)
 	_bigmap_fell_back = false
 	_bigmap_watch_since = 0
 	_bigmap_attempts = 0
@@ -3083,26 +3069,12 @@ func _on_event(event: Dictionary) -> void:
 				_world = str(event["world"])
 			if event.has("area"):
 				_area = str(event["area"])
-			var mapset_changed := false
 			if event.has("mapset"):
-				var new_mapset := str(event["mapset"])
-				if new_mapset != _mapset:
-					_mapset = new_mapset
-					mapset_changed = true
+				_mapset = str(event["mapset"])
 			if event.has("mapsetDefine"):
 				var md: Array = event["mapsetDefine"]
 				if md.size() >= 2:
-					var mslot := int(md[0])
-					var mname := str(md[1])
-					if str(_defines.get(mslot, "")) != mname:
-						_defines[mslot] = mname
-						mapset_changed = true
-			if mapset_changed and map_view != null:
-				# サーバは define とフレームを原子的に送るとは
-				# 限らない (フレームが先に届くことがある)。対応表が
-				# 変わったら表示中のフレームを描き直す。新しい
-				# フレームが来ないまま古いシートで残るのを防ぐ。
-				map_view.refresh_mapsets(_mapset, _defines)
+					_defines[int(md[0])] = str(md[1])
 			_update_side_info()
 		"cond":
 			if status_panel != null:
