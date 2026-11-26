@@ -391,7 +391,7 @@ func _test_clear_cache() -> void:
 
 
 func _test_version() -> void:
-	_check_eq(PhiVersion.VERSION, "0.6.0", "version number")
+	_check_eq(PhiVersion.VERSION, "0.7.0", "version number")
 	var action: Dictionary = PhiActions.get_action("VersionInfo")
 	_check_eq(str(action.get("caption", "")), "NeoPHI " + PhiVersion.VERSION, "version menu caption")
 	_check_eq(str(action.get("hint", "")), "バージョン情報を表示する", "version menu hint kept")
