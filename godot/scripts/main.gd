@@ -1242,6 +1242,7 @@ func _update_action_states() -> void:
 	## ツールバーは各タブ側で合わせる(下の refresh_toolbar_states)。
 	var tab := _active_tab()
 	var connected := tab != null and tab.is_session_open()
+	var v6 := tab != null and tab.is_v6_ready()
 	var loud := tab != null and tab.is_loud()
 	for popup in _menu_popups:
 		for i in popup.item_count:
@@ -1249,7 +1250,7 @@ func _update_action_states() -> void:
 			if meta == null:
 				continue
 			var action_name := str(meta)
-			popup.set_item_disabled(i, not PhiActions.enabled_when(action_name, connected))
+			popup.set_item_disabled(i, not PhiActions.enabled_when(action_name, connected, v6))
 	if _scroll_popup != null and _scroll_item >= 0:
 		_scroll_popup.set_item_checked(_scroll_item, _config.scroll_stop)
 	if _smooth_popup != null and _smooth_item >= 0:
@@ -1488,6 +1489,7 @@ func _create_tab() -> PhiCharacter:
 	tab.title_changed.connect(_on_tab_title_changed.bind(tab))
 	tab.unread_changed.connect(_on_tab_unread_changed.bind(tab))
 	tab.connection_changed.connect(_on_tab_connection_changed.bind(tab))
+	tab.v6_state_changed.connect(_on_tab_v6_state_changed.bind(tab))
 	tab.zoom_changed.connect(_on_tab_zoom_changed.bind(tab))
 	tab.users_changed.connect(_on_tab_users_changed.bind(tab))
 	tab.priv_received.connect(_on_tab_priv_received.bind(tab))
@@ -1743,6 +1745,13 @@ func _on_tab_unread_changed(_unread: bool, _tab: PhiCharacter) -> void:
 
 func _on_tab_connection_changed(_open: bool, tab: PhiCharacter) -> void:
 	_refresh_tab_titles()
+	if tab == _active_tab():
+		_update_action_states()
+
+
+func _on_tab_v6_state_changed(tab: PhiCharacter) -> void:
+	## v6 判定はログイン後のプローブで決まるため、成立・喪失の
+	## たびにメニューの出し分けを合わせ直す。
 	if tab == _active_tab():
 		_update_action_states()
 
@@ -2031,7 +2040,14 @@ func _on_tab_loud_confirm(_text: String, _party: bool, tab: PhiCharacter) -> voi
 
 func _do_action(action_name: String) -> void:
 	var tab := _active_tab()
-	match PhiActions.kind_of(action_name):
+	var kind := PhiActions.kind_of(action_name)
+	if kind == "v6-bag" or kind == "v6-trade" or kind == "v6-quests":
+		# v6 の3機能は、v6 と判定された接続でなければ実行しない
+		# (メニュー・ツールバーの無効化に加えた二重の守り。
+		# ショートカット等の別経路から来ても素通りさせる)。
+		if tab == null or not tab.is_v6_ready():
+			return
+	match kind:
 		"send":
 			if tab == null:
 				return

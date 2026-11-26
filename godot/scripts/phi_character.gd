@@ -20,6 +20,9 @@ signal title_changed(title: String)
 signal status_changed
 signal unread_changed(unread: bool)
 signal connection_changed(open: bool)
+## v6 判定の成立・喪失 (プローブの返事、世界移動での作り直し)。
+## Main が行動メニューの出し分けを合わせ直すために使う。
+signal v6_state_changed
 signal zoom_changed(zoom: int)
 signal users_changed
 signal priv_received(plain: String)
@@ -164,6 +167,9 @@ var _defines: Dictionary = {}
 var _defines16: Dictionary = {}
 ## v6 モードに入ったことがあるか (抜けた時の従来地図の復旧用)。
 var _v6_was_active := false
+## 最後に v6_state_changed で外へ伝えた v6 判定 (変化検出用、
+## 接続の開閉を _live_synced で見るのと同じ流儀)。
+var _v6_synced := false
 ## `#v6 H` の体力表示 (キャラID → {"hp","ag"})。
 var _v6_health: Dictionary = {}
 ## `#v6 P/L/K/S/I/B/Q` の最新内容 (表示は既存 UI の範囲で使う)。
@@ -818,6 +824,14 @@ func _process(_delta: float) -> void:
 			# スクロールが最下部から外れることがある。しばらく
 			# 最下部に留め続ける。
 			_stick_log_bottom_until = Time.get_ticks_msec() / 1000.0 + 2.5
+	# v6 判定の成立・喪失も、開閉と同じ流儀で変化を見て外へ
+	# 知らせる (プローブの返事はログインより後に届き、世界移動
+	# ではセッション側で作り直されるため、変化検出が確実)。
+	var now_v6 := session != null and session.v6_mode
+	if now_v6 != _v6_synced:
+		_v6_synced = now_v6
+		refresh_toolbar_states()
+		v6_state_changed.emit()
 	if Time.get_ticks_msec() / 1000.0 < _stick_log_bottom_until:
 		_pin_log_bottom()
 	_repeat_fallback_tick()
@@ -2084,7 +2098,7 @@ func refresh_toolbar_states() -> void:
 		_talk_button.modulate = Color.WHITE if connected else Color(0.55, 0.55, 0.6, 0.85)
 	for button in _toolbar_buttons:
 		var action_name := str(button.get_meta("action"))
-		button.disabled = not PhiActions.enabled_when(action_name, connected)
+		button.disabled = not PhiActions.enabled_when(action_name, connected, _v6_ready())
 		if action_name == "Loud":
 			button.set_pressed_no_signal(is_loud())
 		elif action_name == "PlayBGM":
@@ -3301,6 +3315,11 @@ func _handle_v6_marks(event: Dictionary) -> void:
 func _v6_ready() -> bool:
 	## v6 の機能が使える接続か。
 	return session != null and session.v6_mode
+
+
+func is_v6_ready() -> bool:
+	## v6 と判定された接続か (Main のメニュー出し分け用)。
+	return _v6_ready()
 
 
 func _v6_send(line: String) -> void:

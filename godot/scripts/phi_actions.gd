@@ -296,13 +296,17 @@ static func build_ask2_text(action_name: String, answer1: String, answer2: Strin
 	return text
 
 
-static func enabled_when(action_name: String, connected: bool) -> bool:
+static func enabled_when(action_name: String, connected: bool, v6: bool = false) -> bool:
 	## 接続状態に対する有効・無効(Philly のカテゴリに相当)。
 	## 接続は切断時のみ、切断と送信系は接続時のみ、その他は常に有効。
+	## v6 の3機能 (カバン・取引・依頼) は、接続先が v6 と判定された
+	## 時にだけ有効 (従来サーバでは押せても意味が無いため)。
 	match kind_of(action_name):
 		"connect":
 			return not connected
-		"disconnect", "force-disconnect", "send", "ask", "ask2", "priv-window", "loud-toggle", "say-all-tabs", "v6-bag", "v6-trade", "v6-quests":
+		"v6-bag", "v6-trade", "v6-quests":
+			return connected and v6
+		"disconnect", "force-disconnect", "send", "ask", "ask2", "priv-window", "loud-toggle", "say-all-tabs":
 			return connected
 		_:
 			return true
