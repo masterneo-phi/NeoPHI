@@ -292,6 +292,11 @@ var _mouse_hold_cursor := ""
 var _mouse_last_repeat := 0
 var _mouse_last_pos := Vector2.ZERO
 var _mouse_cursor_now := ""
+## カーソル評価に使った、ポインタ位置以外の状態 (自セル・倍率・
+## 地図の矩形・北固定・修飾キー)。歩行や視界の変化でこれが
+## 変わると、ポインタが止まっていても移動の効く範囲が変わる
+## ので、_process で見張ってカーソルを評価し直す。
+var _cursor_watch_key: Array = []
 var _mouse_turn_dir := ""
 
 var _held_moves: Array[Dictionary] = []
@@ -451,6 +456,9 @@ func setup(p_assets: GameAssets, p_config: PhiConfig, p_font: Font, p_bold_font:
 	session.session_closed.connect(_on_session_closed)
 	session.transfer_confirm_requested.connect(
 		func(h: String, p: int) -> void: transfer_confirm_requested.emit(h, p))
+	# 世界移動の追随完了では connect_to を通らないので、前の
+	# 世界の地図状態を落とす合図をここで受ける。
+	session.transfer_completed.connect(_reset_map_state)
 
 
 func set_log_filter(filter: PhiLogFilter) -> void:
@@ -838,6 +846,7 @@ func _process(_delta: float) -> void:
 	_mouse_repeat_fallback_tick()
 	_held_step_pending_tick()
 	_bump_timeout_tick()
+	_refresh_mouse_cursor()
 
 
 func clear_held_input() -> void:
@@ -849,6 +858,7 @@ func clear_held_input() -> void:
 	_end_toolbar_drag()
 	_end_float_drag()
 	_mouse_cursor_now = ""
+	_cursor_watch_key = []
 	Input.set_custom_mouse_cursor(null)
 
 
@@ -902,6 +912,7 @@ func reload_cached_textures() -> void:
 		if icon != null:
 			button.icon = icon
 	_mouse_cursor_now = ""
+	_cursor_watch_key = []
 	Input.set_custom_mouse_cursor(null)
 
 
@@ -2735,6 +2746,21 @@ func _check_bigmap_watchdog(now_ms: int) -> void:
 			_do_fallback_bigmap()
 
 
+## 世界が変わる時 (新規接続・再接続・転送追随) に、前の世界の
+## 地図表示状態を全部落とす。従来形式のマップセット対応表
+## (_mapset/_defines) と v6 の16枠・体力表示の両方。MapView 側の
+## 表も空の定義で作り直させる。
+func _reset_map_state() -> void:
+	_mapset = ""
+	_defines.clear()
+	_v6_was_active = false
+	_v6_health.clear()
+	_defines16.clear()
+	if map_view != null:
+		map_view.set_v6_health(_v6_health)
+		map_view.set_defines16(_defines16)
+
+
 func connect_to(p_host: String, p_port: int, p_char_id: String) -> void:
 	## 地図の大きさ・様式・魔法表示は、呼ぶ側(_connect_tab)が
 	## セッションに付けてある。
@@ -2749,13 +2775,9 @@ func connect_to(p_host: String, p_port: int, p_char_id: String) -> void:
 	_close_handled = false
 	_cut_by_other = false
 	_clear_pet_job()
-	# v6 の表示状態も接続ごとに落とす (前の世界の残像防止)。
-	_v6_was_active = false
-	_v6_health.clear()
-	_defines16.clear()
-	if map_view != null:
-		map_view.set_v6_health(_v6_health)
-		map_view.set_defines16(_defines16)
+	# 前の世界の地図状態は接続ごとに全部落とす (残像防止)。
+	# 従来形式の対応表 (_mapset/_defines) も v6 の状態も同様。
+	_reset_map_state()
 	_bigmap_fell_back = false
 	_bigmap_watch_since = 0
 	_bigmap_attempts = 0
@@ -3061,12 +3083,26 @@ func _on_event(event: Dictionary) -> void:
 				_world = str(event["world"])
 			if event.has("area"):
 				_area = str(event["area"])
+			var mapset_changed := false
 			if event.has("mapset"):
-				_mapset = str(event["mapset"])
+				var new_mapset := str(event["mapset"])
+				if new_mapset != _mapset:
+					_mapset = new_mapset
+					mapset_changed = true
 			if event.has("mapsetDefine"):
 				var md: Array = event["mapsetDefine"]
 				if md.size() >= 2:
-					_defines[int(md[0])] = str(md[1])
+					var mslot := int(md[0])
+					var mname := str(md[1])
+					if str(_defines.get(mslot, "")) != mname:
+						_defines[mslot] = mname
+						mapset_changed = true
+			if mapset_changed and map_view != null:
+				# サーバは define とフレームを原子的に送るとは
+				# 限らない (フレームが先に届くことがある)。対応表が
+				# 変わったら表示中のフレームを描き直す。新しい
+				# フレームが来ないまま古いシートで残るのを防ぐ。
+				map_view.refresh_mapsets(_mapset, _defines)
 			_update_side_info()
 		"cond":
 			if status_panel != null:
@@ -5958,6 +5994,12 @@ func _mouse_cursor_at(pos: Vector2) -> String:
 	if rect.size.x <= 0.0 or not rect.has_point(pos):
 		return ""
 	var shift_ctrl := Input.is_key_pressed(KEY_SHIFT) or Input.is_key_pressed(KEY_CTRL)
+	if not _cursor_range_ok_at(pos, north_fix_now() and shift_ctrl):
+		# 移動の効かない位置では方向カーソルを出さず、既定の
+		# 矢印に戻す。効く範囲との境目が見た目で分かるように
+		# するため (範囲外でも方向カーソルが出たままでは、
+		# 効いているのか分からないという実地の指摘)。
+		return ""
 	return PhiMouse.cursor_for(pos - rect.position, rect.size, north_fix_now(), shift_ctrl, float(map_view.zoom))
 
 
@@ -5983,6 +6025,16 @@ func _mouse_move_range_ok(pos: Vector2) -> bool:
 	return maxi(absi(cell.x - self_cell.x), absi(cell.y - self_cell.y)) <= MOUSE_MOVE_RANGE
 
 
+func _cursor_range_ok_at(pos: Vector2, turn_hover: bool) -> bool:
+	## カーソルで方向を示してよい位置か。境目は移動の有効範囲
+	## (_mouse_move_range_ok) と必ず一致させる。ただし北固定で
+	## Shift/Ctrl を押したホバーは「向く」操作で、移動の範囲
+	## 制限を受けないので、地図の上なら方向を示す。
+	if _mouse_move_range_ok(pos):
+		return true
+	return turn_hover and _over_map(pos)
+
+
 func _apply_mouse_cursor(cursor_name: String) -> void:
 	## 方向カーソルを出す。スキンの .cur が無ければ既定カーソル。
 	if cursor_name.is_empty():
@@ -5993,6 +6045,37 @@ func _apply_mouse_cursor(cursor_name: String) -> void:
 		Input.set_custom_mouse_cursor(null)
 		return
 	Input.set_custom_mouse_cursor(cursor["texture"], Input.CURSOR_ARROW, cursor["hotspot"])
+
+
+func _mouse_cursor_state_key() -> Array:
+	## カーソルの形を決める、ポインタ位置以外の状態の一覧。
+	## 歩行で自セルが動く・視界や倍率が変わる・北固定や修飾
+	## キーが切り替わると、ポインタが止まっていても効く/
+	## 効かないが変わるので、変化の見張りに使う。
+	if map_view == null:
+		return []
+	var rect := _map_global_rect()
+	return [map_view.player_cell(), float(map_view.zoom), rect.position, rect.size,
+		north_fix_now(), Input.is_key_pressed(KEY_SHIFT) or Input.is_key_pressed(KEY_CTRL)]
+
+
+func _refresh_mouse_cursor() -> void:
+	## 状態が変わっていたら、止まっているポインタのカーソルを
+	## 評価し直す (歩いた先で範囲から外れた位置のカーソルが
+	## 方向カーソルのまま残らないように)。表示中のタブだけが
+	## 全体のカーソルを触る。窓ドラッグ中はそちらが優先。
+	if not is_visible_in_tree() or _panel_drag_active():
+		return
+	var key := _mouse_cursor_state_key()
+	if key == _cursor_watch_key:
+		return
+	_cursor_watch_key = key
+	if _mouse_last_pos == Vector2.ZERO:
+		return
+	var cursor := _mouse_cursor_at(_mouse_last_pos)
+	if cursor != _mouse_cursor_now:
+		_mouse_cursor_now = cursor
+		_apply_mouse_cursor(cursor)
 
 
 func _over_toolbar_panel(pos: Vector2) -> bool:

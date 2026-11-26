@@ -16,6 +16,10 @@ signal session_closed
 ## 違うホストへの世界移動の確認。UI が利用者に確かめて
 ## answer_transfer() で答える。
 signal transfer_confirm_requested(host: String, port: int)
+## 世界移動の追随が完了し、接続が移動先へ差し替わった。
+## connect_to を通らないため、移動元の世界の表示状態を落とす
+## 合図として PhiCharacter が受ける。
+signal transfer_completed
 
 ## 無受信がこの時間続いたら `#code-sjis` を送る
 const KEEPALIVE_AFTER := 120.0
@@ -936,6 +940,7 @@ func _complete_transfer() -> void:
 	_keepalive_sent = false
 	_warned = false
 	old_tcp.disconnect_from_host()
+	transfer_completed.emit()
 
 
 func _poll_transfer() -> void:

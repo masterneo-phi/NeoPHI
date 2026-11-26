@@ -422,10 +422,13 @@ func _note_scroll_start(now_s: float = -1.0) -> void:
 ## チップシートは属性の下位2ビット (#mapset-define の番号) ごとに
 ## 4枚。slot 0 は現在のマップセット、1〜3 は define があればその
 ## 名前、無ければ既定シート (Python 版と同じ解決)。
-## phidm-v6 のマップセット16枠では、セルが持つ枠番号 (slot) で
-## 16枚まで引く。定義の無い枠は null のままで、描画は属性の
-## 下位2ビットのシートへ落とす。
-var _chip_texs: Array = [null, null, null, null, null, null, null, null,
+## 従来形式と v6 のシート解決は完全に分ける (2026-11-26 決定):
+## _chip_texs は従来側の4枠 (マップセット + #mapset-define だけ
+## から作る)、_chip_texs16 は v6 側の16枠 (#v6 D の定義だけから
+## 作る)。互いの定義で相手の表を上書きしない。v6 の定義の無い
+## 枠は null のままで、描画は属性の下位2ビットのシートへ落とす。
+var _chip_texs: Array = [null, null, null, null]
+var _chip_texs16: Array = [null, null, null, null, null, null, null, null,
 	null, null, null, null, null, null, null, null]
 var _defines: Dictionary = {}
 ## v6 の16枠定義 (枠番号 -> 名前)。`#v6 D` で届く。
@@ -798,6 +801,7 @@ func set_map(event: Dictionary, p_assets: GameAssets, p_mapset: String, defines:
 	_fx_icons_tex = null
 	_pet_tex = null
 	_load_chip_texs()
+	_load_chip_texs16()
 	if assets != null:
 		_items_tex = assets.items()
 		_fx_icons_tex = assets.skin_image("fx_icons")
@@ -1237,20 +1241,29 @@ func hover_text_for(cname: String) -> String:
 	return "\n".join(lines)
 
 
-## スロットごとのチップシートを取り直す。slot 0 は現在の
-## マップセット、1〜3 は _defines に名前があればそれ、無ければ
-## 既定シート (assets.chip(""))。シートが無いスロットは null で、
-## そのセルの描画は色塗りの代用に落ちる。
+## v6 のマップセット16枠の定義を差し替える。v6 側の表だけを
+## 取り直し、従来側の表には触れない (完全分離)。
 func set_defines16(defines: Dictionary) -> void:
-	## v6 のマップセット16枠の定義を差し替える。
 	_defines16 = defines.duplicate()
+	_load_chip_texs16()
+	queue_redraw()
+
+
+## 従来形式のマップセット/define 通知がフレームの後から届いた時に、
+## 表示中のフレームを新しい対応表で描き直す。set_map を経ないので
+## スクロール判定などには触れない。v6 側の表には触れない。
+func refresh_mapsets(p_mapset: String, defines: Dictionary) -> void:
+	mapset = p_mapset
+	_defines = defines.duplicate()
 	_load_chip_texs()
 	queue_redraw()
 
 
+## 従来側のシート表 (4枠) を取り直す。slot 0 は現在の
+## マップセット、1〜3 は _defines に名前があればそれ、無ければ
+## 既定シート (assets.chip(""))。v6 の定義は一切見ない。
 func _load_chip_texs() -> void:
-	_chip_texs = [null, null, null, null, null, null, null, null,
-		null, null, null, null, null, null, null, null]
+	_chip_texs = [null, null, null, null]
 	_sheet_images.clear()
 	_toned_cache.clear()
 	_toned_tex_cache.clear()
@@ -1260,20 +1273,37 @@ func _load_chip_texs() -> void:
 	_chip_texs[0] = assets.chip(mapset)
 	for slot in range(1, 4):
 		_chip_texs[slot] = assets.chip(str(_defines.get(slot, "")))
-	# 16枠: 定義のある枠だけシートを持つ (従来の4枠の解決が優先)。
-	for slot in range(1, 16):
+
+
+## v6 側のシート表 (16枠) を取り直す。slot 0 は現在の
+## マップセット、1〜15 は _defines16 の名前。定義の無い 1〜3 は
+## 既定シート、4〜15 は null (描画は従来解決へ落とす)。
+## 従来の define は一切見ない。
+func _load_chip_texs16() -> void:
+	_chip_texs16 = [null, null, null, null, null, null, null, null,
+		null, null, null, null, null, null, null, null]
+	_sheet_images.clear()
+	_toned_cache.clear()
+	_toned_tex_cache.clear()
+	_relief_cache.clear()
+	if assets == null:
+		return
+	_chip_texs16[0] = assets.chip(mapset)
+	for slot in range(1, 4):
+		_chip_texs16[slot] = assets.chip(str(_defines16.get(slot, "")))
+	for slot in range(4, 16):
 		if _defines16.has(slot):
-			_chip_texs[slot] = assets.chip(str(_defines16[slot]))
+			_chip_texs16[slot] = assets.chip(str(_defines16[slot]))
 
 
 ## セルの指すシート。無ければ null。v6 のセルは枠番号 (slot) を
-## 持ち、その枠のシートを引く (定義が無ければ属性の下位2ビット
-## のシートへ落とす)。従来のセルは属性の下位2ビットのまま。
+## 持ち、v6 側の表を引く (定義が無ければ属性の下位2ビットの
+## 従来解決へ落とす)。従来のセルは従来側の表だけを見る。
 func _sheet_for(cell: Dictionary) -> Texture2D:
 	if cell.has("slot"):
 		var slot := int(cell.get("slot", 0))
-		if 0 <= slot and slot < _chip_texs.size():
-			var tex: Variant = _chip_texs[slot]
+		if 0 <= slot and slot < _chip_texs16.size():
+			var tex: Variant = _chip_texs16[slot]
 			if tex != null:
 				return tex as Texture2D
 	return _chip_texs[int(cell.get("attr", 0)) & 0x03] as Texture2D
@@ -1282,6 +1312,9 @@ func _sheet_for(cell: Dictionary) -> Texture2D:
 ## どれか1枚でもシートが読めていれば true。
 func _any_sheet() -> bool:
 	for tex in _chip_texs:
+		if tex != null:
+			return true
+	for tex in _chip_texs16:
 		if tex != null:
 			return true
 	return false
@@ -1547,6 +1580,7 @@ func reload_cached_textures() -> void:
 	_fx_icons_tex = null
 	_ghosts.clear()
 	_load_chip_texs()
+	_load_chip_texs16()
 	if assets != null:
 		_items_tex = assets.items()
 		_fx_icons_tex = assets.skin_image("fx_icons")
