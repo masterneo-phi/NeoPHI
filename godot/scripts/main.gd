@@ -609,6 +609,24 @@ func _on_tab_register_completed(_display_name: String, _tab: PhiCharacter) -> vo
 	_save_tab_session()
 
 
+func _on_tab_transfer_followed(old_host: String, old_port: int, tab: PhiCharacter) -> void:
+	## 世界移動の追随が完了したタブの永続化。タブ側の接続先は
+	## 移動先へ合わせてあるので、タブセッションを保存し直し、
+	## 移動元を指していた `.phirc` を移動先へ書き換える。これが
+	## 無いと、切断後の再接続 (タブ・一覧のどちらからでも) が
+	## 移動元の世界へ戻り、転送時のバックアップでログインして
+	## しまう。
+	_save_tab_session()
+	var char_id := tab.session.char_id
+	if char_id.is_empty() or char_id == "newuser" or old_host.is_empty():
+		return
+	for entry in _registered_characters():
+		if str(entry["id"]) == char_id and str(entry["host"]) == old_host \
+				and int(entry["port"]) == old_port:
+			PhiCharacters.write_phirc(str(entry["root"]), str(entry["display_name"]),
+				char_id, tab.host, tab.port)
+
+
 func _registered_entry_for_id(host: String, port: int, char_id: String) -> Dictionary:
 	## 接続先と ID が一致する登録済みキャラ。無ければ空の辞書。
 	if char_id.is_empty():
@@ -1499,6 +1517,7 @@ func _create_tab() -> PhiCharacter:
 	tab.eagle_eye_received.connect(_on_tab_eagle_eye.bind(tab))
 	tab.edit_requested.connect(_on_tab_edit_requested.bind(tab))
 	tab.transfer_confirm_requested.connect(_on_tab_transfer_confirm.bind(tab))
+	tab.transfer_followed.connect(_on_tab_transfer_followed.bind(tab))
 	tab.status_changed.connect(_on_tab_status_changed.bind(tab))
 	tab.register_completed.connect(_on_tab_register_completed.bind(tab))
 	tab.auto_register_ready.connect(_on_tab_auto_register_ready.bind(tab))

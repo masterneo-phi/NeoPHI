@@ -52,6 +52,27 @@ func _m57_o(id: int, x: int, y: int, name: String, gra: String) -> PackedByteArr
 	return b
 
 
+func _v6_o(id: int, x: int, y: int, name: String, gra: String) -> PackedByteArray:
+	var b := PackedByteArray()
+	b.append_array(("#v6 O C%04x:%02d %02d %s " % [id, x, y, "B"]).to_ascii_buffer())
+	b.append_array(_pad_bytes(name, 31))
+	b.append_array(" 40 ".to_ascii_buffer())
+	b.append_array(_pad_bytes(gra, 15))
+	b.append_array(" # 40 ".to_ascii_buffer())
+	return b
+
+
+func _v6_frame_with_self() -> Dictionary:
+	# 9x7 (turn 形式) の v6 フレーム。selfCell は (4, 4) で、
+	# 自分行は実名 KURO / グラ名 elb_cat を持つ。
+	var parser := PhiParser.new()
+	var evs := _map_events(_feed_all(parser, [
+		"#v6 M B 00000000 9 7".to_ascii_buffer(),
+		_v6_o(7, 4, 4, "KURO", "elb_cat"),
+		"#v6 .".to_ascii_buffer()]))
+	return evs[0] if evs.size() == 1 else {}
+
+
 func _classic_m() -> PackedByteArray:
 	var b := PackedByteArray()
 	b.append_array("#map M W 00000000:".to_ascii_buffer())
@@ -198,6 +219,53 @@ func _run() -> void:
 	check(bool(tab.get("_img_rebuild_queued")) == false, "forced rebuild clears queue flag")
 	var empty_pend: Array[PackedByteArray] = []
 	tsession.set("_pending_lines", empty_pend)
+
+	# --- (4) v6: #name / #status の名前欄はグラ名で届く ---
+	# phidm-v6 の print_status は MD_M57 の時しか実名を出さず、
+	# #name もグラ名を送る (send_cg_name)。実名は v6 フレームの
+	# 自分行の名前欄にしか無いので、そこから取り直す。
+	var vframe := _v6_frame_with_self()
+	check(not vframe.is_empty() and bool(vframe.get("v6", false)), "v6 frame parsed")
+	check(int(vframe["selfCell"]["x"]) == 4 and int(vframe["selfCell"]["y"]) == 4,
+		"v6 selfCell is the self row cell")
+	# (4a) 新規接続: 名前未確定のままグラ名が先に届く
+	tab.set("_player_name", "")
+	tab.set("_self_gra", "")
+	tab.call("_on_event", {"type": "notice", "name": "elb_cat"})
+	tab.call("_on_event", _v6_frame_with_self())
+	check(str(tab.call("player_name")) == "KURO", "v6 self row restores real name (fresh tab)")
+	check(str(tab.call("tab_title")) == "KURO", "tab title is real name after v6 frame")
+	check(str(tab.get("_self_gra")) == "elb_cat", "self gra learned from v6 self row")
+	tab.call("_on_event", {"type": "status", "name": "elb_cat"})
+	check(str(tab.call("player_name")) == "KURO", "later gra status does not poison again")
+	# (4b) 転送追随: 実名はあるが _self_gra 未学習のまま到着し、
+	# 到着バーストのグラ名 status で化ける
+	tab.set("_player_name", "KURO")
+	tab.set("_self_gra", "")
+	tab.call("_on_event", {"type": "status", "name": "elb_cat"})
+	tab.call("_on_event", _v6_frame_with_self())
+	check(str(tab.call("player_name")) == "KURO", "v6 self row restores real name (transfer)")
+	check(str(tab.call("tab_title")) == "KURO", "tab title restored after transfer burst")
+	# (4c) 実名が安定している時は自分行で書き換えない
+	tab.call("_on_event", {"type": "status", "name": "KURO"})
+	tab.call("_on_event", _v6_frame_with_self())
+	check(str(tab.call("player_name")) == "KURO", "stable real name untouched by v6 frame")
+
+	# --- (5) 転送追随でタブの接続先が移動先へ合う ---
+	# セッションは _complete_transfer で自分の host/port を移動先へ
+	# 差し替えるが、タブ側 (再接続・保存の元) は connect_to でしか
+	# 更新されなかった。追随完了でタブ側も合わせる。
+	tab.set("host", "10.0.0.9")
+	tab.set("port", 20030)
+	var tsess2: Variant = tab.get("session")
+	tsess2.set("host", "10.0.0.10")
+	tsess2.set("port", 20096)
+	tsess2.emit_signal("transfer_completed")
+	check(str(tab.get("host")) == "10.0.0.10", "tab host follows transfer destination")
+	check(int(tab.get("port")) == 20096, "tab port follows transfer destination")
+	var state5: Dictionary = tab.call("session_state")
+	check(str(state5["host"]) == "10.0.0.10" and int(state5["port"]) == 20096,
+		"session state saves the destination")
 
 	print("test_stage66: ", _checks, " checks, ", _failures, " failures")
 	quit(1 if _failures > 0 else 0)

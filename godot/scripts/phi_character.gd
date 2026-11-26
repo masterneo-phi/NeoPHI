@@ -35,6 +35,10 @@ signal edit_requested(mode: String)
 ## 世界移動 (違うホスト) の確認。Main がダイアログを出し、
 ## 答えを answer_transfer() で返す。
 signal transfer_confirm_requested(host: String, port: int)
+## 世界移動の追随が完了した (移動元の接続先を渡す)。タブ側の
+## 接続先は移動先へ合わせてあるので、Main はタブセッションと
+## .phirc を移動先へ書き換える。
+signal transfer_followed(old_host: String, old_port: int)
 ## 新規キャラクター作成が完了した(表示名を渡す。第7段)。
 signal register_completed(display_name: String)
 ## 登録ファイルの無い接続 (手入力の ID など) で、サーバから
@@ -458,7 +462,7 @@ func setup(p_assets: GameAssets, p_config: PhiConfig, p_font: Font, p_bold_font:
 		func(h: String, p: int) -> void: transfer_confirm_requested.emit(h, p))
 	# 世界移動の追随完了では connect_to を通らないので、前の
 	# 世界の地図状態を落とす合図をここで受ける。
-	session.transfer_completed.connect(_reset_map_state)
+	session.transfer_completed.connect(_on_transfer_completed)
 
 
 func set_log_filter(filter: PhiLogFilter) -> void:
@@ -2761,6 +2765,21 @@ func _reset_map_state() -> void:
 		map_view.set_defines16(_defines16)
 
 
+func _on_transfer_completed() -> void:
+	## 世界移動の追随完了。セッションは接続先を移動先へ差し替え
+	## てある (PhiSession._complete_transfer) が、タブ側の接続先
+	## (再接続・タブセッション保存・.phirc の元になる host/port)
+	## は connect_to でしか更新されないため、このままでは切断後
+	## の再接続が移動元の世界へ戻ってしまう。移動先へ合わせ、
+	## 永続化は Main に任せる (transfer_followed)。
+	var old_host := host
+	var old_port := port
+	host = session.host
+	port = session.port
+	_reset_map_state()
+	transfer_followed.emit(old_host, old_port)
+
+
 func connect_to(p_host: String, p_port: int, p_char_id: String) -> void:
 	## 地図の大きさ・様式・魔法表示は、呼ぶ側(_connect_tab)が
 	## セッションに付けてある。
@@ -3156,19 +3175,31 @@ func _on_event(event: Dictionary) -> void:
 			if event.get("v6", false) and event.has("selfCell"):
 				# 自分のキャラ番号を覚える (取引相手から自分を除く)。
 				var sc: Dictionary = event["selfCell"]
+				var scx := int(sc.get("x", -2))
+				var scy := int(sc.get("y", -2))
 				_v6_self_id = -1
+				var self_ch: Dictionary = {}
 				for ch in _demo_chars:
-					if int(ch.get("x", -1)) == int(sc.get("x", -2)) \
-							and int(ch.get("y", -1)) == int(sc.get("y", -2)) \
+					if int(ch.get("x", -1)) == scx and int(ch.get("y", -1)) == scy \
 							and str(ch.get("name", "")) == _player_name:
-						_v6_self_id = int(ch.get("id", -1))
+						self_ch = ch
 						break
-				if _v6_self_id < 0:
+				if self_ch.is_empty() and not _player_name.is_empty():
+					# 名前がグラ名に化けている時は、グラ名の一致する
+					# 行が自分 (実名はその行の名前欄にある)。
 					for ch in _demo_chars:
-						if int(ch.get("x", -1)) == int(sc.get("x", -2)) \
-								and int(ch.get("y", -1)) == int(sc.get("y", -2)):
-							_v6_self_id = int(ch.get("id", -1))
+						if int(ch.get("x", -1)) == scx and int(ch.get("y", -1)) == scy \
+								and str(ch.get("gra", "")) == _player_name:
+							self_ch = ch
 							break
+				if self_ch.is_empty():
+					for ch in _demo_chars:
+						if int(ch.get("x", -1)) == scx and int(ch.get("y", -1)) == scy:
+							self_ch = ch
+							break
+				if not self_ch.is_empty():
+					_v6_self_id = int(self_ch.get("id", -1))
+					_learn_v6_self(self_ch)
 			if event.has("w"):
 				var v6dims := MapView.grid_dims(event)
 				_demo_dim = maxi(v6dims.x, v6dims.y)
@@ -5397,6 +5428,22 @@ func _learn_self_gra(event: Dictionary) -> void:
 		var ch: Dictionary = ch_var
 		if str(ch.get("name", "")) == _player_name and not str(ch.get("gra", "")).is_empty():
 			_self_gra = str(ch["gra"])
+
+
+func _learn_v6_self(self_ch: Dictionary) -> void:
+	## v6 では #name / #status の名前欄がグラ名で届く (サーバは
+	## MD_M57 の時しか実名を出さず、#name もグラ名を送る) ため、
+	## 実名は v6 フレームの自分行の名前欄からしか得られない。
+	## 自分行のグラを覚え、今の名前が未確定か、そのグラ名そのもの
+	## (グラ名に化けている) なら、行の名前欄を実名として取り込む。
+	var row_gra := str(self_ch.get("gra", ""))
+	if not row_gra.is_empty():
+		_self_gra = row_gra
+	var row_name := str(self_ch.get("name", ""))
+	if row_name.is_empty() or row_name == row_gra:
+		return
+	if _player_name.is_empty() or _player_name == row_gra:
+		_accept_player_name(row_name)
 
 
 func _fixup_classic_self(event: Dictionary) -> void:
