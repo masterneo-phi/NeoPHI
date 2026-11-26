@@ -175,6 +175,46 @@ var _v6_spells: Array = []
 var _v6_items: Array = []
 var _v6_shop: Array = []
 var _v6_quests: Array = []
+## カバンの中身 (#ex-inv I) と足元の品 (#ex-inv F) の最新の一覧。
+var _v6_bag: Array = []
+var _v6_floor: Array = []
+## 取引の状態。{} = 無し。"phase" に pick / sent / ask / offers。
+var _v6_trade_state: Dictionary = {}
+## 自分のキャラ番号 (#v6 O の id)。取引相手の列挙で自分を除く。
+var _v6_self_id := -1
+## 依頼の題の集合 (変化をログへ出すため)。
+var _v6_quest_titles: Array = []
+var _v6_compress_noted := false
+# -- v6 のパネル群 (カバン・取引・店・依頼) -------------------------
+var _bag_panel: PanelContainer = null
+var _bag_header: Label = null
+var _bag_box: ItemList = null
+var _bag_section := "bag"
+var _bag_section_buttons: Dictionary = {}
+var _bag_actions_box: HBoxContainer = null
+var _bag_destroy_armed := false
+var _trade_panel: PanelContainer = null
+var _trade_header: Label = null
+var _trade_note: Label = null
+var _trade_me_box: ItemList = null
+var _trade_you_box: ItemList = null
+var _trade_pick_box: ItemList = null
+var _trade_pick_label: Label = null
+var _trade_gp_value: Label = null
+var _trade_gp_add_row: HBoxContainer = null
+var _v6_gp_staged: int = 0
+var _trade_gp_row: HBoxContainer = null
+var _trade_buttons_box: HBoxContainer = null
+## 取引で「出す物」リストの行 → 送る行 (put/枠・bag/番号) の対応。
+var _trade_pick_cmds: Array = []
+var _shop_panel: PanelContainer = null
+var _shop_box: ItemList = null
+var _quest_panel: PanelContainer = null
+var _quest_box: ItemList = null
+var _quest_text: Label = null
+## v6 パネルのリストと見出し (フォントサイズ変更に追随させる)。
+var _v6_lists: Array = []
+var _v6_headers: Array = []
 var _users: Array[Dictionary] = []
 var _priv_history: Array[String] = []
 var _log_lines: Array[Dictionary] = []
@@ -904,6 +944,7 @@ func _build_ui() -> void:
 	_build_talk_button()
 	_build_toolbar_overlay()
 	_build_float_panels()
+	_build_v6_panels()
 	status_panel = StatusPanel.new()
 	status_panel.label_font = _font
 	status_panel.bold_font = _bold_font
@@ -2212,6 +2253,10 @@ func _apply_list_font_size(size: int) -> void:
 	if _list_cancel_button != null:
 		_list_cancel_button.add_theme_font_size_override("font_size", size)
 		_list_cancel_button.custom_minimum_size = Vector2(0, size + 16)
+	for l in _v6_lists:
+		(l as ItemList).add_theme_font_size_override("font_size", size)
+	for h in _v6_headers:
+		(h as Label).add_theme_font_size_override("font_size", size)
 
 
 ## リストの種類名を、開くきっかけになったコマンドから決める。
@@ -2870,6 +2915,11 @@ func _on_session_closed() -> void:
 	_held_seq_sent = false
 	_clear_pet_job()
 	_hide_list_overlay()
+	_v6_bag = []
+	_v6_floor = []
+	_v6_trade_state = {}
+	_v6_self_id = -1
+	_hide_v6_panels()
 	# BGM は切断で止める(Philly と同じく曲名も空に戻す)。
 	if not bgm_name.is_empty():
 		bgm_name = ""
@@ -3053,6 +3103,22 @@ func _on_event(event: Dictionary) -> void:
 			if int(event.get("size", 7)) == 5:
 				_fixup_classic_self(event)
 			_demo_chars = event.get("chars", [])
+			if event.get("v6", false) and event.has("selfCell"):
+				# 自分のキャラ番号を覚える (取引相手から自分を除く)。
+				var sc: Dictionary = event["selfCell"]
+				_v6_self_id = -1
+				for ch in _demo_chars:
+					if int(ch.get("x", -1)) == int(sc.get("x", -2)) \
+							and int(ch.get("y", -1)) == int(sc.get("y", -2)) \
+							and str(ch.get("name", "")) == _player_name:
+						_v6_self_id = int(ch.get("id", -1))
+						break
+				if _v6_self_id < 0:
+					for ch in _demo_chars:
+						if int(ch.get("x", -1)) == int(sc.get("x", -2)) \
+								and int(ch.get("y", -1)) == int(sc.get("y", -2)):
+							_v6_self_id = int(ch.get("id", -1))
+							break
 			if event.has("w"):
 				var v6dims := MapView.grid_dims(event)
 				_demo_dim = maxi(v6dims.x, v6dims.y)
@@ -3140,10 +3206,31 @@ func _on_event(event: Dictionary) -> void:
 			_v6_spells = event.get("spells", [])
 		"v6items":
 			_v6_items = event.get("items", [])
+			_refresh_bag_panel()
+			_refresh_trade_panel()
 		"v6shop":
 			_v6_shop = event.get("items", [])
+			_refresh_shop_panel()
 		"v6quests":
 			_v6_quests = event.get("quests", [])
+			_handle_v6_quests()
+		"v6bag":
+			_v6_bag = event.get("items", [])
+			_refresh_bag_panel()
+		"v6flooritems":
+			_v6_floor = event.get("items", [])
+			_refresh_bag_panel()
+		"v6invno":
+			log_message("system", "カバン: %s" % _v6_inv_reason(str(event.get("reason", ""))))
+			_refresh_bag_panel()
+		"v6tradeno":
+			_handle_v6_tradeno(str(event.get("reason", "")))
+		"v6trade":
+			_handle_v6_trade(event)
+		"v6compress":
+			if bool(event.get("accepted", false)) and not _v6_compress_noted:
+				_v6_compress_noted = true
+				log_message("system", "通信の圧縮 (deflate) を開始しました")
 
 
 func _handle_v6_view(event: Dictionary) -> void:
@@ -3161,6 +3248,11 @@ func _handle_v6_view(event: Dictionary) -> void:
 	elif _v6_was_active:
 		_v6_was_active = false
 		_v6_health.clear()
+		_v6_bag = []
+		_v6_floor = []
+		_v6_trade_state = {}
+		_v6_self_id = -1
+		_hide_v6_panels()
 		if map_view != null:
 			map_view.set_v6_health(_v6_health)
 		if session != null:
@@ -3197,6 +3289,804 @@ func _handle_v6_marks(event: Dictionary) -> void:
 		_v6_mark_names = names
 		if not names.is_empty():
 			log_message("system", "目印: %s" % ", ".join(names))
+
+
+# -- v6 のカバン・取引・店・依頼 (フェーズ2+3) ------------------------------
+#
+# パネルは #list のオーバーレイと同じ流儀で、地図の上に重ねる
+# PanelContainer。開くのは行動メニューの「カバン」「取引」「依頼」
+# (main 経由で toggle_* が呼ばれる) と、取引の申し込み・店の品の
+# 到着 (サーバ発信)。v6 検出が成立した接続でのみ意味がある。
+
+func _v6_ready() -> bool:
+	## v6 の機能が使える接続か。
+	return session != null and session.v6_mode
+
+
+func _v6_send(line: String) -> void:
+	if _v6_ready():
+		session.send_line(line)
+
+
+func _hide_v6_panels() -> void:
+	for p in [_bag_panel, _trade_panel, _shop_panel, _quest_panel]:
+		if p != null:
+			p.visible = false
+
+
+static func _v6_item_label(e: Dictionary) -> String:
+	## アイテム欄の辞書 → 一覧表示の1行。名前が無く gp だけの
+	## エントリは足元のお金。欄の意味は phidm-v6 の item_fields。
+	var gp := str(e.get("gp", ""))
+	var name := PhiTags.plain_text(str(e.get("name", ""))).strip_edges()
+	if name.is_empty():
+		if not gp.is_empty():
+			return "お金 %s gp" % gp
+		return "(空)"
+	var label := name
+	match str(e.get("eq", "-")):
+		"W":
+			label += " [武器・装備中]"
+		"A":
+			label += " [防具・装備中]"
+		"O":
+			label += " [装備中]"
+	var bits: Array[String] = []
+	var type := str(e.get("type", ""))
+	if not type.is_empty():
+		bits.append(type)
+	var mat := str(e.get("mat", ""))
+	if not mat.is_empty():
+		bits.append(mat)
+	var elem := str(e.get("elem", ""))
+	if not elem.is_empty() and elem != "None":
+		bits.append(elem)
+	var effect := str(e.get("effect", ""))
+	if not effect.is_empty():
+		bits.append(effect)
+	if e.has("count"):
+		bits.append("残り %s 回" % str(e.get("count")))
+	if not bits.is_empty():
+		label += " (" + "・".join(bits) + ")"
+	label += " wp=%s" % str(e.get("wp", "0"))
+	var ready := int(str(e.get("ready", "0")))
+	if ready > 0:
+		label += " (使えるまで %d 秒)" % ready
+	if not gp.is_empty():
+		label += " — %s gp" % gp
+	return label
+
+
+static func _v6_inv_reason(reason: String) -> String:
+	## `#ex-inv no` の理由 → 表示文。
+	match reason:
+		"off":
+			return "この接続ではカバンは使えません"
+		"empty":
+			return "カバンは空です"
+		"equipped":
+			return "装備中の品はカバンへ入れられません"
+		"nobreak":
+			return "壊れない品はカバンへ入れられません"
+		"epic":
+			return "特別な素材の品はカバンへ入れられません"
+		"full":
+			return "手持ちがいっぱいです"
+		"hand":
+			return "手持ちに空きがありません"
+		"bad":
+			return "その番号の品はありません"
+		"none":
+			return "対象の品がありません"
+		"store":
+			return "売り場のマスでは使えません"
+		"gp":
+			return "お金が足りません"
+		_:
+			return reason
+
+
+static func _v6_trade_reason(reason: String) -> String:
+	## `#ex-trade no` / `#v6 Y end` の理由 → 表示文。
+	match reason:
+		"refused":
+			return "取引を断られました"
+		"far":
+			return "相手が近くにいません"
+		"busy":
+			return "相手は取引中です"
+		"off":
+			return "この接続では取引は使えません"
+		"bad":
+			return "対象がいません"
+		"none":
+			return "対象の品がありません"
+		"empty":
+			return "カバンが空です"
+		"equipped":
+			return "装備中の品は出せません"
+		"nobreak":
+			return "壊れない品は出せません"
+		"epic":
+			return "特別な素材の品は出せません"
+		"many":
+			return "個数が合いません"
+		"gp":
+			return "お金が足りません"
+		"cancel":
+			return "取引は取りやめになりました"
+		"moved":
+			return "相手が離れたため取引は終わりました"
+		"gone":
+			return "相手がいなくなったため取引は終わりました"
+		"short":
+			return "品が足りず取引できませんでした"
+		"full":
+			return "持ち物がいっぱいで取引できませんでした"
+		_:
+			return reason
+
+
+func _make_v6_panel(title: String) -> Array:
+	## v6 パネルの枠 (見出し + 縦箱)。[パネル, 箱] を返す。
+	var panel := PanelContainer.new()
+	_round_panel(panel)
+	panel.visible = false
+	panel.position = Vector2(8, 8)
+	map_view.add_child(panel)
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 4)
+	panel.add_child(box)
+	var header := Label.new()
+	header.text = title
+	header.add_theme_font_size_override("font_size", _v6_ui_font_size())
+	_v6_headers.append(header)
+	box.add_child(header)
+	return [panel, box, header]
+
+
+func _v6_panel_size(rows: int, extra_h: float) -> Vector2:
+	## 一覧 rows 行 + 見出し・ボタン類 extra_h のパネル寸法。
+	var size := maxi(_list_font_size if _list_font_size > 0 else _applied_size, 15)
+	var row_h := maxi(_font.get_height(size) + 6, 24) if _font != null else 24
+	var panel_w := clampf(map_view.size.x - 16.0, 260.0, 620.0)
+	return Vector2(panel_w, rows * row_h + extra_h)
+
+
+func _over_v6_panel(pos: Vector2) -> bool:
+	## v6 パネルのどれかの上か (地図クリック移動などの除外判定)。
+	for p in [_bag_panel, _trade_panel, _shop_panel, _quest_panel]:
+		if p != null and (p as PanelContainer).visible \
+				and (p as PanelContainer).get_global_rect().has_point(pos):
+			return true
+	return false
+
+
+func _v6_ui_font_size() -> int:
+	## v6 パネルの文字サイズ (#list と同じ解決順)。
+	return maxi(_list_font_size if _list_font_size > 0 else _applied_size, 15)
+
+
+func _v6_reg_list(list: ItemList) -> void:
+	## v6 パネルの一覧をフォントサイズ変更の追随対象にする。
+	list.add_theme_font_size_override("font_size", _v6_ui_font_size())
+	_v6_lists.append(list)
+
+
+func _v6_fit_list(list: ItemList, width: float, rows: int) -> void:
+	## v6 パネルの一覧に、行数ぶんの最小の高さを持たせる。
+	## ItemList は最小の高さが 0 なので、付けないと VBox の中で
+	## 潰れて項目が見えなくなる。
+	var size := maxi(_list_font_size if _list_font_size > 0 else _applied_size, 15)
+	var row_h := maxi(_font.get_height(size) + 6, 24) if _font != null else 24
+	list.custom_minimum_size = Vector2(width, rows * row_h + 8.0)
+
+
+func _build_v6_panels() -> void:
+	# カバン
+	var bag := _make_v6_panel("カバン")
+	_bag_panel = bag[0]
+	_bag_header = bag[2]
+	var bag_box: VBoxContainer = bag[1]
+	var sections := HBoxContainer.new()
+	sections.add_theme_constant_override("separation", 6)
+	bag_box.add_child(sections)
+	for pair in [["bag", "カバン"], ["hand", "手持ち"], ["floor", "足元"]]:
+		var b := Button.new()
+		b.text = pair[1]
+		b.focus_mode = Control.FOCUS_NONE
+		b.toggle_mode = true
+		UiStyle.apply_metal_button(b)
+		b.pressed.connect(_on_bag_section.bind(pair[0]))
+		sections.add_child(b)
+		_bag_section_buttons[pair[0]] = b
+	_bag_box = ItemList.new()
+	_bag_box.select_mode = ItemList.SELECT_SINGLE
+	_bag_box.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_v6_reg_list(_bag_box)
+	_bag_box.item_selected.connect(func(_i: int) -> void: _refresh_bag_actions())
+	_bag_box.item_activated.connect(_on_bag_item_activated)
+	bag_box.add_child(_bag_box)
+	_bag_actions_box = HBoxContainer.new()
+	_bag_actions_box.add_theme_constant_override("separation", 6)
+	bag_box.add_child(_bag_actions_box)
+	var bag_bottom := HBoxContainer.new()
+	bag_bottom.add_theme_constant_override("separation", 6)
+	bag_box.add_child(bag_bottom)
+	var bag_refresh := Button.new()
+	bag_refresh.text = "更新"
+	bag_refresh.focus_mode = Control.FOCUS_NONE
+	UiStyle.apply_metal_button(bag_refresh)
+	bag_refresh.pressed.connect(_on_bag_refresh)
+	bag_bottom.add_child(bag_refresh)
+	var bag_close := Button.new()
+	bag_close.text = "閉じる"
+	bag_close.focus_mode = Control.FOCUS_NONE
+	UiStyle.apply_metal_button(bag_close)
+	bag_close.pressed.connect(func() -> void: _bag_panel.visible = false)
+	bag_bottom.add_child(bag_close)
+	# 取引
+	var trade := _make_v6_panel("取引")
+	_trade_panel = trade[0]
+	_trade_header = trade[2]
+	var trade_box: VBoxContainer = trade[1]
+	_trade_note = Label.new()
+	_trade_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	trade_box.add_child(_trade_note)
+	var sides := HBoxContainer.new()
+	sides.add_theme_constant_override("separation", 6)
+	trade_box.add_child(sides)
+	var me_col := VBoxContainer.new()
+	me_col.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	sides.add_child(me_col)
+	var me_label := Label.new()
+	me_label.text = "自分の提示"
+	me_col.add_child(me_label)
+	_trade_me_box = ItemList.new()
+	_trade_me_box.select_mode = ItemList.SELECT_SINGLE
+	_trade_me_box.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_v6_reg_list(_trade_me_box)
+	me_col.add_child(_trade_me_box)
+	var you_col := VBoxContainer.new()
+	you_col.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	sides.add_child(you_col)
+	var you_label := Label.new()
+	you_label.text = "相手の提示"
+	you_col.add_child(you_label)
+	_trade_you_box = ItemList.new()
+	_trade_you_box.select_mode = ItemList.SELECT_SINGLE
+	_trade_you_box.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_v6_reg_list(_trade_you_box)
+	you_col.add_child(_trade_you_box)
+	_trade_pick_label = Label.new()
+	_trade_pick_label.text = "出す物を選ぶ (クリックで出し入れ)"
+	trade_box.add_child(_trade_pick_label)
+	_trade_pick_box = ItemList.new()
+	_trade_pick_box.select_mode = ItemList.SELECT_SINGLE
+	_trade_pick_box.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_v6_reg_list(_trade_pick_box)
+	_trade_pick_box.item_activated.connect(_on_trade_pick_activated)
+	trade_box.add_child(_trade_pick_box)
+	_trade_gp_row = HBoxContainer.new()
+	_trade_gp_row.add_theme_constant_override("separation", 6)
+	trade_box.add_child(_trade_gp_row)
+	var gp_label := Label.new()
+	gp_label.text = "金額 (gp)"
+	_trade_gp_row.add_child(gp_label)
+	# 金額はボタンで積む。数字キーは本体のキー送信 (リスト回答)
+	# に割り当てられていて、自由入力欄では数字を受け取れない。
+	_trade_gp_value = Label.new()
+	_trade_gp_value.text = "0"
+	_trade_gp_value.custom_minimum_size = Vector2(60, 0)
+	_trade_gp_row.add_child(_trade_gp_value)
+	var gp_set := Button.new()
+	gp_set.text = "金額を出す"
+	gp_set.focus_mode = Control.FOCUS_NONE
+	UiStyle.apply_metal_button(gp_set)
+	gp_set.pressed.connect(_on_trade_gp_set)
+	_trade_gp_row.add_child(gp_set)
+	_trade_gp_add_row = HBoxContainer.new()
+	_trade_gp_add_row.add_theme_constant_override("separation", 6)
+	trade_box.add_child(_trade_gp_add_row)
+	for delta in [10, 50, 100, 500, 1000]:
+		var add_btn := Button.new()
+		add_btn.text = "+%d" % delta
+		add_btn.focus_mode = Control.FOCUS_NONE
+		UiStyle.apply_metal_button(add_btn)
+		add_btn.pressed.connect(_on_trade_gp_add.bind(delta))
+		_trade_gp_add_row.add_child(add_btn)
+	var gp_clear := Button.new()
+	gp_clear.text = "クリア"
+	gp_clear.focus_mode = Control.FOCUS_NONE
+	UiStyle.apply_metal_button(gp_clear)
+	gp_clear.pressed.connect(_on_trade_gp_add.bind(-1))
+	_trade_gp_add_row.add_child(gp_clear)
+	_trade_buttons_box = HBoxContainer.new()
+	_trade_buttons_box.add_theme_constant_override("separation", 6)
+	trade_box.add_child(_trade_buttons_box)
+	# 店の品 (表示のみ)
+	var shop := _make_v6_panel("店の品")
+	_shop_panel = shop[0]
+	var shop_box: VBoxContainer = shop[1]
+	_shop_box = ItemList.new()
+	_shop_box.select_mode = ItemList.SELECT_SINGLE
+	_shop_box.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_v6_reg_list(_shop_box)
+	shop_box.add_child(_shop_box)
+	var shop_note := Label.new()
+	shop_note.text = "買うときは品の金額を払ってください"
+	shop_box.add_child(shop_note)
+	# 依頼
+	var quest := _make_v6_panel("依頼")
+	_quest_panel = quest[0]
+	var quest_box: VBoxContainer = quest[1]
+	_quest_box = ItemList.new()
+	_quest_box.select_mode = ItemList.SELECT_SINGLE
+	_quest_box.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_v6_reg_list(_quest_box)
+	_quest_box.item_selected.connect(_on_quest_selected)
+	quest_box.add_child(_quest_box)
+	_quest_text = Label.new()
+	_quest_text.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	quest_box.add_child(_quest_text)
+	var quest_close := Button.new()
+	quest_close.text = "閉じる"
+	quest_close.focus_mode = Control.FOCUS_NONE
+	UiStyle.apply_metal_button(quest_close)
+	quest_close.pressed.connect(func() -> void: _quest_panel.visible = false)
+	quest_box.add_child(quest_close)
+
+
+# -- カバン ---------------------------------------------------------------
+
+func toggle_v6_bag() -> void:
+	## 行動メニュー「カバン」。開く時に一覧を取り直す。
+	if _bag_panel == null:
+		return
+	if _bag_panel.visible:
+		_bag_panel.visible = false
+		return
+	if not _v6_ready():
+		log_message("system", "カバンは V6 サーバでのみ使えます")
+		return
+	_bag_panel.visible = true
+	_on_bag_refresh()
+	_refresh_bag_panel()
+
+
+func _on_bag_refresh() -> void:
+	_v6_send("#ex-inv list")
+	_v6_send("#ex-inv floor")
+
+
+func _on_bag_section(section: String) -> void:
+	_bag_section = section
+	_bag_destroy_armed = false
+	_refresh_bag_panel()
+	if section == "floor":
+		_v6_send("#ex-inv floor")
+
+
+func _bag_entries() -> Array:
+	match _bag_section:
+		"hand":
+			# サーバは手持ちの空き枠も送ってくるので、表示からは
+			# 除く (金額の行は残す)。枠番号は各行が持っているため、
+			# 除いても操作 (put の枠指定) は壊れない。
+			var out: Array = []
+			for e in _v6_items:
+				var d := e as Dictionary
+				if str(d.get("name", "")).is_empty() and not d.has("gp"):
+					continue
+				out.append(d)
+			return out
+		"floor":
+			return _v6_floor
+		_:
+			return _v6_bag
+
+
+func _refresh_bag_panel() -> void:
+	if _bag_panel == null or not _bag_panel.visible:
+		return
+	for key in _bag_section_buttons:
+		(_bag_section_buttons[key] as Button).button_pressed = key == _bag_section
+	_bag_header.text = "カバン"
+	var entries := _bag_entries()
+	var keep := _bag_box.get_selected_items()
+	_bag_box.clear()
+	for e in entries:
+		_bag_box.add_item(_v6_item_label(e))
+	if not keep.is_empty() and keep[0] < entries.size():
+		_bag_box.select(keep[0])
+	_bag_panel.size = _v6_panel_size(mini(maxi(entries.size(), 1), 10), 150.0)
+	_v6_fit_list(_bag_box, _bag_panel.size.x - 16.0, mini(maxi(entries.size(), 1), 10))
+	_refresh_bag_actions()
+
+
+func _bag_selected_entry() -> Dictionary:
+	var sel := _bag_box.get_selected_items()
+	if sel.is_empty():
+		return {}
+	var entries := _bag_entries()
+	if sel[0] >= entries.size():
+		return {}
+	return entries[sel[0]]
+
+
+func _bag_add_action(text: String, cmd: String) -> Button:
+	var b := Button.new()
+	b.text = text
+	b.focus_mode = Control.FOCUS_NONE
+	UiStyle.apply_metal_button(b)
+	b.pressed.connect(_on_bag_action.bind(cmd))
+	_bag_actions_box.add_child(b)
+	return b
+
+
+func _refresh_bag_actions() -> void:
+	if _bag_actions_box == null:
+		return
+	for child in _bag_actions_box.get_children():
+		_bag_actions_box.remove_child(child)
+		child.queue_free()
+	var e := _bag_selected_entry()
+	var has_item := not e.is_empty() and not str(e.get("name", "")).is_empty()
+	match _bag_section:
+		"bag":
+			if has_item:
+				var no := int(e.get("no", 0))
+				_bag_add_action("取り出す", "#ex-inv get %d" % no)
+				_bag_add_action("使う", "#ex-inv use %d" % no)
+				_bag_add_action("装備", "#ex-inv equip %d" % no)
+				_bag_add_action("置く", "#ex-inv drop %d" % no)
+				var d := _bag_add_action(
+					"本当に捨てる" if _bag_destroy_armed else "捨てる",
+					"#ex-inv destroy %d" % no)
+				d.set_meta("destroy", true)
+		"hand":
+			if has_item:
+				_bag_add_action("カバンへ入れる", "#ex-inv put %d" % int(e.get("no", 0)))
+		"floor":
+			if has_item:
+				_bag_add_action("カバンへ拾う", "#ex-inv pick %d" % int(e.get("no", 0)))
+			_bag_add_action("全部拾う", "#ex-inv pick")
+			_bag_add_action("買い取りに出す", "#ex-inv offer")
+
+
+func _on_bag_action(cmd: String) -> void:
+	# 「捨てる」は2度押しで確定する (取り返しが付かないため)。
+	if cmd.begins_with("#ex-inv destroy") and not _bag_destroy_armed:
+		_bag_destroy_armed = true
+		_refresh_bag_actions()
+		return
+	_bag_destroy_armed = false
+	_v6_send(cmd)
+	# 足元が変わる操作では、サーバが足元の一覧を送り直さない
+	# ので、こちらから取り直す。
+	if cmd.begins_with("#ex-inv pick") or cmd.begins_with("#ex-inv drop"):
+		_v6_send("#ex-inv floor")
+
+
+func _on_bag_item_activated(index: int) -> void:
+	## ダブルクリックの既定操作: カバンは取り出す、手持ちは
+	## カバンへ入れる、足元はカバンへ拾う。
+	if index < 0:
+		return
+	_bag_box.select(index)
+	var e := _bag_selected_entry()
+	if e.is_empty() or str(e.get("name", "")).is_empty():
+		return
+	var no := int(e.get("no", 0))
+	match _bag_section:
+		"bag":
+			_v6_send("#ex-inv get %d" % no)
+		"hand":
+			_v6_send("#ex-inv put %d" % no)
+		"floor":
+			_v6_send("#ex-inv pick %d" % no)
+
+
+# -- 店の品 ---------------------------------------------------------------
+
+func _refresh_shop_panel() -> void:
+	if _shop_panel == null:
+		return
+	if _v6_shop.is_empty():
+		_shop_panel.visible = false
+		return
+	_shop_box.clear()
+	for e in _v6_shop:
+		_shop_box.add_item(_v6_item_label(e))
+	_shop_panel.size = _v6_panel_size(mini(_v6_shop.size(), 8), 90.0)
+	_v6_fit_list(_shop_box, _shop_panel.size.x - 16.0, mini(maxi(_v6_shop.size(), 1), 8))
+	# 店のパネルは地図の右上に置く (カバン等と重ならない)。
+	_shop_panel.position = Vector2(
+		maxf(8.0, map_view.size.x - _shop_panel.size.x - 8.0), 8)
+	_shop_panel.visible = true
+
+
+# -- 依頼 -----------------------------------------------------------------
+
+func toggle_v6_quests() -> void:
+	if _quest_panel == null:
+		return
+	if _quest_panel.visible:
+		_quest_panel.visible = false
+		return
+	if not _v6_ready():
+		log_message("system", "依頼は V6 サーバでのみ使えます")
+		return
+	_quest_panel.visible = true
+	_refresh_quest_panel()
+
+
+func _handle_v6_quests() -> void:
+	## 依頼の題の集合が変わったらログへ出す (#v6 L と同じ流儀)。
+	var titles: Array = []
+	for q in _v6_quests:
+		titles.append(str((q as Dictionary).get("title", "")))
+	titles.sort()
+	if titles != _v6_quest_titles:
+		_v6_quest_titles = titles
+		if not titles.is_empty():
+			log_message("system", "依頼: %s" % ", ".join(titles))
+	_refresh_quest_panel()
+
+
+func _refresh_quest_panel() -> void:
+	if _quest_panel == null or not _quest_panel.visible:
+		return
+	_quest_box.clear()
+	for q in _v6_quests:
+		var d := q as Dictionary
+		var label := str(d.get("title", ""))
+		var kind := str(d.get("kind", ""))
+		if not kind.is_empty():
+			label += " (%s)" % kind
+		_quest_box.add_item(label)
+	_quest_text.text = ""
+	_quest_panel.size = _v6_panel_size(mini(maxi(_v6_quests.size(), 1), 8), 190.0)
+	_v6_fit_list(_quest_box, _quest_panel.size.x - 16.0, mini(maxi(_v6_quests.size(), 1), 8))
+	if not _v6_quests.is_empty():
+		_quest_box.select(0)
+		_on_quest_selected(0)
+
+
+func _on_quest_selected(index: int) -> void:
+	if index < 0 or index >= _v6_quests.size():
+		_quest_text.text = ""
+		return
+	_quest_text.text = str((_v6_quests[index] as Dictionary).get("text", ""))
+
+
+# -- 取引 -----------------------------------------------------------------
+
+func toggle_v6_trade() -> void:
+	## 行動メニュー「取引」。取引中でなければ相手選びから始める。
+	if _trade_panel == null:
+		return
+	if _trade_panel.visible:
+		_trade_panel.visible = false
+		return
+	if not _v6_ready():
+		log_message("system", "取引は V6 サーバでのみ使えます")
+		return
+	if _v6_trade_state.is_empty():
+		_v6_trade_state = {"phase": "pick"}
+	_trade_panel.visible = true
+	_refresh_trade_panel()
+
+
+func _handle_v6_tradeno(reason: String) -> void:
+	log_message("system", "取引: %s" % _v6_trade_reason(reason))
+	var phase := str(_v6_trade_state.get("phase", ""))
+	if phase == "sent" or phase == "ask":
+		# 申し込みが成立しなかった / 相手違い。状態を落とす。
+		_v6_trade_state = {}
+		if _trade_panel != null:
+			_trade_panel.visible = false
+	_refresh_trade_panel()
+
+
+func _handle_v6_trade(event: Dictionary) -> void:
+	match str(event.get("phase", "")):
+		"ask":
+			_v6_gp_staged = 0
+			_update_trade_gp_label()
+			_v6_trade_state = {"phase": "ask",
+				"id": int(event.get("id", 0)), "name": str(event.get("name", ""))}
+			log_message("system", "%s さんから取引の申し込みがあります" % str(event.get("name", "")))
+			if _trade_panel != null:
+				_trade_panel.visible = true
+		"offers":
+			_v6_trade_state = {"phase": "offers",
+				"with": event.get("with", {}),
+				"me": event.get("me", {}), "you": event.get("you", {})}
+			if _trade_panel != null:
+				_trade_panel.visible = true
+		"done":
+			log_message("system", "取引が成立しました")
+			_v6_gp_staged = 0
+			_update_trade_gp_label()
+			_v6_trade_state = {}
+			if _trade_panel != null:
+				_trade_panel.visible = false
+			# 成立で手持ち・カバンの中身が変わる。取り直す。
+			if _bag_panel != null and _bag_panel.visible:
+				_on_bag_refresh()
+		"end":
+			log_message("system", "取引: %s" % _v6_trade_reason(str(event.get("reason", ""))))
+			_v6_gp_staged = 0
+			_update_trade_gp_label()
+			_v6_trade_state = {}
+			if _trade_panel != null:
+				_trade_panel.visible = false
+	_refresh_trade_panel()
+
+
+func _trade_add_button(text: String, cmd: String) -> void:
+	var b := Button.new()
+	b.text = text
+	b.focus_mode = Control.FOCUS_NONE
+	UiStyle.apply_metal_button(b)
+	b.pressed.connect(_on_trade_button.bind(cmd))
+	_trade_buttons_box.add_child(b)
+
+
+func _refresh_trade_panel() -> void:
+	if _trade_panel == null or not _trade_panel.visible:
+		return
+	for child in _trade_buttons_box.get_children():
+		_trade_buttons_box.remove_child(child)
+		child.queue_free()
+	_trade_me_box.clear()
+	_trade_you_box.clear()
+	_trade_pick_box.clear()
+	_trade_pick_cmds.clear()
+	var phase := str(_v6_trade_state.get("phase", ""))
+	_trade_gp_row.visible = phase == "offers"
+	_trade_gp_add_row.visible = phase == "offers"
+	_trade_pick_label.visible = phase == "offers" or phase == "pick"
+	match phase:
+		"pick":
+			_trade_header.text = "取引"
+			_trade_note.text = "取引する相手を選んでください (同じマスか隣のマス)"
+			for ch in _v6_trade_targets():
+				_trade_pick_box.add_item(str(ch.get("name", "")))
+				_trade_pick_cmds.append("#ex-trade C%04x" % int(ch.get("id", 0)))
+			if _trade_pick_box.item_count == 0:
+				_trade_note.text = "近くに取引できる相手がいません"
+			_trade_add_button("閉じる", "close")
+		"sent":
+			_trade_header.text = "取引"
+			_trade_note.text = "%s さんへ申し込み中です…" % str(_v6_trade_state.get("name", ""))
+			_trade_add_button("取りやめ", "cancel")
+			_trade_add_button("閉じる", "close")
+		"ask":
+			_trade_header.text = "取引の申し込み"
+			_trade_note.text = "%s さんから取引の申し込みがあります" % str(_v6_trade_state.get("name", ""))
+			_trade_add_button("受ける", "ok")
+			_trade_add_button("断る", "cancel")
+		"offers":
+			var w: Dictionary = _v6_trade_state.get("with", {})
+			var me: Dictionary = _v6_trade_state.get("me", {})
+			var you: Dictionary = _v6_trade_state.get("you", {})
+			_trade_header.text = "取引: %s さん" % str(w.get("name", ""))
+			_fill_trade_side(_trade_me_box, me)
+			_fill_trade_side(_trade_you_box, you)
+			var note := ""
+			if bool(me.get("ok", false)) and bool(you.get("ok", false)):
+				note = "両方とも承諾しました"
+			elif bool(me.get("ok", false)):
+				note = "承諾済みです。相手の承諾を待っています"
+			elif bool(you.get("ok", false)):
+				note = "相手は承諾しています。提示を確認して承諾してください"
+			else:
+				note = "出す物を選び、両方が承諾すると交換します。提示を変えると承諾は取り消されます"
+			_trade_note.text = note
+			# 出す物の候補: 手持ち (put) とカバン (bag)。
+			for e in _v6_items:
+				if str(e.get("name", "")).is_empty():
+					continue
+				_trade_pick_box.add_item("手持ち: " + _v6_item_label(e))
+				_trade_pick_cmds.append("#ex-trade put %d" % int(e.get("no", 0)))
+			for e in _v6_bag:
+				_trade_pick_box.add_item("カバン: " + _v6_item_label(e))
+				_trade_pick_cmds.append("#ex-trade bag %d" % int(e.get("no", 0)))
+			if _trade_pick_box.item_count == 0:
+				_trade_pick_label.text = "出せる品がありません (カバンは「カバン」から開いて取り直してください)"
+			else:
+				_trade_pick_label.text = "出す物を選ぶ (クリックで出し入れ)"
+			_trade_add_button("承諾する", "ok")
+			_trade_add_button("取りやめ", "cancel")
+		_:
+			_trade_header.text = "取引"
+			_trade_note.text = ""
+			_trade_add_button("閉じる", "close")
+	_trade_panel.size = _v6_panel_size(6, 366.0)
+	# 一覧の高さは提示の増減で変えない (変えると金額欄やボタンの
+	# 位置がずれて誤操作の元になる)。多い分は一覧側でスクロール。
+	var side_w := _trade_panel.size.x / 2.0 - 24.0
+	_v6_fit_list(_trade_me_box, side_w, 5)
+	_v6_fit_list(_trade_you_box, side_w, 5)
+	_v6_fit_list(_trade_pick_box, _trade_panel.size.x - 16.0, 5)
+
+
+func _fill_trade_side(box: ItemList, side: Dictionary) -> void:
+	## 提示の一覧表示。先頭に金額と承諾状態、続いて品。
+	var head := "金額 %d gp" % int(side.get("gp", 0))
+	head += " / 承諾済み" if bool(side.get("ok", false)) else " / 未承諾"
+	box.add_item(head)
+	for e in side.get("items", []):
+		box.add_item(_v6_item_label(e))
+
+
+func _v6_trade_targets() -> Array:
+	## 取引相手の候補。直近の地図フレームのキャラ (自分を除く)。
+	var out: Array = []
+	for ch in _demo_chars:
+		if str(ch.get("kind", "C")) != "C":
+			continue
+		var cid := int(ch.get("id", -1))
+		if cid < 0 or cid == _v6_self_id:
+			continue
+		if str(ch.get("name", "")).is_empty():
+			continue
+		out.append(ch)
+	out.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		return str(a.get("name", "")) < str(b.get("name", "")))
+	return out
+
+
+func _on_trade_pick_activated(index: int) -> void:
+	if index < 0 or index >= _trade_pick_cmds.size():
+		return
+	var cmd := str(_trade_pick_cmds[index])
+	var phase := str(_v6_trade_state.get("phase", ""))
+	if phase == "pick":
+		# 相手への申し込み。相手の名前を控えて「申し込み中」へ。
+		var targets := _v6_trade_targets()
+		var name := ""
+		if index < targets.size():
+			name = str(targets[index].get("name", ""))
+		_v6_send(cmd)
+		_v6_trade_state = {"phase": "sent", "name": name}
+		_refresh_trade_panel()
+	else:
+		_v6_send(cmd)
+
+
+func _on_trade_gp_add(delta: int) -> void:
+	if delta < 0:
+		_v6_gp_staged = 0
+	else:
+		_v6_gp_staged = clampi(_v6_gp_staged + delta, 0, 9999)
+	_update_trade_gp_label()
+
+
+func _update_trade_gp_label() -> void:
+	if _trade_gp_value != null:
+		_trade_gp_value.text = str(_v6_gp_staged)
+
+
+func _on_trade_gp_set() -> void:
+	_v6_send("#ex-trade gp %d" % _v6_gp_staged)
+
+
+func _on_trade_button(cmd: String) -> void:
+	match cmd:
+		"close":
+			_trade_panel.visible = false
+		"ok":
+			_v6_send("#ex-trade ok")
+			if str(_v6_trade_state.get("phase", "")) == "ask":
+				# 受けた直後は提示の一覧が届くまで申し込み表示のまま。
+				pass
+		"cancel":
+			_v6_send("#ex-trade cancel")
+			_v6_trade_state = {}
+			_trade_panel.visible = false
 
 
 func _collect_image_refs(raw: String) -> void:
@@ -5091,13 +5981,13 @@ func handle_mouse_button(ev: InputEventMouseButton) -> void:
 	elif ev.button_index == MOUSE_BUTTON_RIGHT and ev.pressed:
 		# 右クリックは攻撃(Philly の MapForm)。ツールバーと
 		# フロート窓と Talk ボタンの上は除く。
-		if _over_map(ev.position) and not _over_toolbar_panel(ev.position) and not _over_float_panel(ev.position) and not _over_talk_button(ev.position):
+		if _over_map(ev.position) and not _over_toolbar_panel(ev.position) and not _over_float_panel(ev.position) and not _over_talk_button(ev.position) and not _over_v6_panel(ev.position):
 			session.send_line("hit")
 			get_viewport().set_input_as_handled()
 	elif ev.button_index == MOUSE_BUTTON_MIDDLE and ev.pressed:
 		# 中クリックはマップ画像の保存(Philly の SSMap)。
 		# ツールバーとフロート窓と Talk ボタンの上は除く。
-		if _over_map(ev.position) and not _over_toolbar_panel(ev.position) and not _over_float_panel(ev.position) and not _over_talk_button(ev.position):
+		if _over_map(ev.position) and not _over_toolbar_panel(ev.position) and not _over_float_panel(ev.position) and not _over_talk_button(ev.position) and not _over_v6_panel(ev.position):
 			screenshot_requested.emit()
 			get_viewport().set_input_as_handled()
 
@@ -5113,6 +6003,11 @@ func _start_mouse_hold(ev: InputEventMouseButton) -> void:
 		return
 	if _list_panel != null and _list_panel.visible and _list_panel.get_global_rect().has_point(ev.position):
 		# リストの上のクリックはリスト任せ。
+		return
+	if _over_v6_panel(ev.position):
+		# v6 パネル (カバン・取引・店・依頼) の上のクリックも
+		# パネル任せ。ここで移動を始めると、取引が「移動した」で
+		# 終わったり、カバンの操作で歩き出したりする。
 		return
 	if _over_toolbar_panel(ev.position):
 		# ツールバーの上のクリックはツールバー任せ。

@@ -2046,6 +2046,15 @@ func _do_action(action_name: String) -> void:
 			_ask_text(action_name)
 		"ask2":
 			_ask_text(action_name)
+		"v6-bag":
+			if tab != null:
+				tab.toggle_v6_bag()
+		"v6-trade":
+			if tab != null:
+				tab.toggle_v6_trade()
+		"v6-quests":
+			if tab != null:
+				tab.toggle_v6_quests()
 		"map-size-dialog":
 			_show_map_size_dialog()
 		"display-size-dialog":

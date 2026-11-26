@@ -58,6 +58,12 @@ var v6_mode := false
 var v6_view := Vector2i.ZERO
 ## サーバが `#ex-switch move=diag` を受理したか (斜め移動可)。
 var v6_diag := false
+## deflate 圧縮の受信側 (PhiInflate)。プローブで申し込み、
+## 返事行の後ろからバイト列を解凍して行へ分ける。
+var _inflate := PhiInflate.new()
+## 圧縮の返事を待つ期限 (msec)。過ぎたら平文のまま続ける。
+var _inflate_deadline := 0
+var _inflate_error_noted := false
 ## 解読済みの受信行を、パーサ処理の前に通知する任意のフック。
 ## 新規キャラクター作成(PhiRegister)がプロンプト応答に使う。
 ## 既定は無効で、その場合は従来どおりの振る舞いになる。
@@ -190,7 +196,21 @@ func v6_probe_lines() -> Array[String]:
 	return [
 		"#ex-map mapsets=16 view=%d %d" % [view.x, view.y],
 		"#ex-switch move=diag",
+		"#ex-switch compress=deflate",
 	]
+
+
+func _arm_inflate() -> void:
+	## 圧縮を申し込んだので、返事行の探索を始める。返事が来ない
+	## サーバ (従来・NEO) では期限が来たら平文のまま続ける。
+	_inflate.arm()
+	_inflate_deadline = Time.get_ticks_msec() + 20000
+	_inflate_error_noted = false
+
+
+func v6_compress_on() -> bool:
+	## deflate 圧縮が効いているか (テスト・確認用)。
+	return _inflate.is_on()
 
 
 func _reset_v6() -> void:
@@ -199,6 +219,7 @@ func _reset_v6() -> void:
 	v6_mode = false
 	v6_view = Vector2i.ZERO
 	v6_diag = false
+	_inflate.reset()
 
 
 func is_open() -> bool:
@@ -253,6 +274,10 @@ func send_line(line: String) -> void:
 	if line.contains("\r") or line.contains("\n"):
 		push_error("送る1行に改行を含める事はできません")
 		return
+	if line == "#ex-switch compress=deflate":
+		# 登録直後のプローブなど、send_line 経由の申込みでも
+		# 受信側の探索を始める (接続直後の申込みは poll 側でも張る)。
+		_arm_inflate()
 	if line == "#ulist":
 		_parser.clear_users()
 	if line.begins_with("#ex-map size="):
@@ -374,6 +399,7 @@ func poll() -> void:
 			else:
 				# phidm-v6 の検出プローブ (従来サーバでは読み捨て)。
 				lines.append_array(v6_probe_lines())
+				_arm_inflate()
 			for line in lines:
 				_send_queue.append(line)
 			_flush_queue()
@@ -409,6 +435,12 @@ func poll() -> void:
 		return
 	# 受信
 	_drain_available()
+	# 圧縮の返事が期限までに来なければ、探索用に残した平文を
+	# 放出して従来どおり続ける (従来サーバ・NEO は返事をしない)。
+	if _inflate.is_armed() and Time.get_ticks_msec() > _inflate_deadline:
+		var held := _inflate.flush_armed()
+		if not held.is_empty():
+			_feed_lines(held)
 	# 溜まった行を処理する (上限付き。世界移動が始まったら
 	# 残りは保留する)。
 	_process_pending_lines()
@@ -492,7 +524,15 @@ func _drain_available() -> void:
 func _feed_lines(chunk: PackedByteArray) -> void:
 	## 届いた塊を行へ分け、未処理行へ足す。トレース有効時は
 	## 分けた行の生バイトも残す (第82段)。
-	var got := _lines.feed(chunk)
+	## v6 の圧縮を申し込んである時は、先に PhiInflate を通す
+	## (返事行の境界の検出と、その後ろの解凍)。
+	var plain := _inflate.feed(chunk)
+	if _inflate.failed and not _inflate_error_noted:
+		_inflate_error_noted = true
+		session_error.emit("通信の圧縮 (deflate) の解読に失敗しました")
+	if plain.is_empty():
+		return
+	var got := _lines.feed(plain)
 	if wire_trace:
 		for ln in got:
 			_trace_wire("RECV", ln)
@@ -880,6 +920,8 @@ func _complete_transfer() -> void:
 	_lines = _dst_lines
 	_dst_lines = LineBuffer.new()
 	_reset_v6()
+	# 転送先でも圧縮を申し込んである (上のプローブ行)。
+	_arm_inflate()
 	_parser = PhiParser.new()
 	host = _transfer_host
 	port = _transfer_port

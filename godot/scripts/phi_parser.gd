@@ -311,6 +311,13 @@ var _v6_defines: Dictionary = {}
 var _v6_blocks: Dictionary = {}
 ## `#v6 T` のタグ。次の発言メッセージに付けてから消す。
 var _v6_tag: Variant = null
+## `#ex-inv` の蓄積 (カバン I / 足元 F)。行は I/F 混在しない。
+var _inv_bag: Array = []
+var _inv_floor: Array = []
+## `#v6 Y` の提示ブロック蓄積 (with の相手と両側の提示)。
+var _trade_with: Dictionary = {}
+var _trade_me: Dictionary = {}
+var _trade_you: Dictionary = {}
 
 
 func _init() -> void:
@@ -597,6 +604,18 @@ func _dispatch_command(text: String, raw: PackedByteArray) -> Array[Dictionary]:
 		return [{"type": "v6move", "diag": true}]
 	if text == "#ex-switch move=no":
 		return [{"type": "v6move", "diag": false}]
+	if text == "#ex-switch compress=deflate":
+		# 圧縮の開始はセッションがバイト境界で処理する。これは通知のみ。
+		return [{"type": "v6compress", "accepted": true}]
+	if text == "#ex-switch compress=no":
+		return [{"type": "v6compress", "accepted": false}]
+	if text.begins_with("#ex-inv"):
+		return _parse_ex_inv(text)
+	if text.begins_with("#ex-trade"):
+		var tparts := _split_ws(text)
+		if tparts.size() >= 3 and tparts[1] == "no":
+			return [{"type": "v6tradeno", "reason": tparts[2]}]
+		return []
 	# #bgm と #ex-bgm-speed は wphi のパーサと同じく無視する
 	# (golden の notice シナリオに `#bgm Seiju` → イベント無しがある)。
 	# BGM の解釈はセッションが bgm_event_for_line() で行う(第5段)。
@@ -1299,6 +1318,8 @@ func _feed_v6(raw: PackedByteArray) -> Array[Dictionary]:
 			_v6_parse_t(text)
 		0x53, 0x49, 0x42, 0x50, 0x4C, 0x51, 0x4B: # S I B P L Q K
 			return _v6_parse_block(sub, rest)
+		0x59: # Y (取引)
+			return _v6_parse_y(rest)
 	return []
 
 
@@ -1616,3 +1637,108 @@ func _v6_block_entry(letter: String, rest: String) -> Dictionary:
 	var entry3 := {"no": int(no)}
 	entry3.merge(_v6_kv_fields("\t".join(tabs.slice(1))))
 	return entry3
+
+
+func _parse_ex_inv(text: String) -> Array[Dictionary]:
+	## `#ex-inv` の行群 (カバン)。I = カバンの中身 (`#ex-inv .` で確定)、
+	## F = 足元の品 (`#ex-inv F .` で確定)、no = 失敗の理由。
+	var rest := text.substr(7).strip_edges(true, false) # "#ex-inv" の後ろ
+	if rest.begins_with("no "):
+		return [{"type": "v6invno", "reason": rest.substr(3).strip_edges()}]
+	if rest == ".":
+		var items := _inv_bag
+		_inv_bag = []
+		return [{"type": "v6bag", "items": items}]
+	if rest == "F .":
+		var fitems := _inv_floor
+		_inv_floor = []
+		return [{"type": "v6flooritems", "items": fitems}]
+	if rest.begins_with("I ") or rest.begins_with("F "):
+		var entry := _v6_block_entry("I", rest.substr(2))
+		if entry.is_empty():
+			return []
+		if rest.begins_with("I "):
+			_inv_bag.append(entry)
+		else:
+			_inv_floor.append(entry)
+	return []
+
+
+func _v6_parse_y(rest: String) -> Array[Dictionary]:
+	## `#v6 Y` の取引行群。ask = 申し込み、with 〜 `.` = 提示の一覧、
+	## done = 成立、end 理由 = 終了 (cancel / moved / gone / short / full)。
+	if rest.begins_with("ask "):
+		var who := _trade_parse_who(rest.substr(4))
+		if who.is_empty():
+			return []
+		return [{"type": "v6trade", "phase": "ask",
+			"id": who["id"], "name": who["name"]}]
+	if rest.begins_with("with "):
+		_trade_with = _trade_parse_who(rest.substr(5))
+		_trade_me = {"gp": 0, "ok": false, "items": []}
+		_trade_you = {"gp": 0, "ok": false, "items": []}
+		return []
+	if rest == "done":
+		return [{"type": "v6trade", "phase": "done"}]
+	if rest.begins_with("end "):
+		return [{"type": "v6trade", "phase": "end",
+			"reason": rest.substr(4).strip_edges()}]
+	if rest == ".":
+		if _trade_with.is_empty():
+			return []
+		return [{"type": "v6trade", "phase": "offers",
+			"with": _trade_with.duplicate(),
+			"me": _trade_side_dup(_trade_me),
+			"you": _trade_side_dup(_trade_you)}]
+	if rest.begins_with("me") or rest.begins_with("you"):
+		_trade_parse_side(rest)
+	return []
+
+
+static func _trade_side_dup(side: Dictionary) -> Dictionary:
+	var items: Array = []
+	for it in side.get("items", []):
+		items.append((it as Dictionary).duplicate())
+	return {"gp": int(side.get("gp", 0)), "ok": bool(side.get("ok", false)),
+		"items": items}
+
+
+func _trade_parse_who(body: String) -> Dictionary:
+	## `C%04x 名前` → {"id": 番号, "name": 名前}。読めなければ {}。
+	var sp := body.find(" ")
+	if sp < 2 or body[0] != "C":
+		return {}
+	var id_v: Variant = _hex_u32(body.substr(1, sp - 1).to_ascii_buffer())
+	if id_v == null:
+		return {}
+	return {"id": int(id_v), "name": body.substr(sp + 1)}
+
+
+func _trade_parse_side(rest: String) -> void:
+	## 提示行。頭 (`me` / `me 3` / `you` / `you 2`) + TAB 区切りの欄。
+	## 頭だけの行は gp と ok、番号付きは提示した品1個。
+	var tabs := rest.split("\t")
+	if tabs.is_empty():
+		return
+	var head := tabs[0].strip_edges()
+	var side: Dictionary = _trade_me if head.begins_with("me") else _trade_you
+	var sp := head.find(" ")
+	if sp < 0:
+		var kv := _v6_kv_fields("\t".join(tabs.slice(1)))
+		var gp: Variant = _py_int(str(kv.get("gp", "")))
+		if gp != null:
+			side["gp"] = int(gp)
+		side["ok"] = str(kv.get("ok", "0")) == "1"
+	else:
+		var no: Variant = _py_int(head.substr(sp + 1))
+		if no == null:
+			return
+		var entry := {"no": int(no)}
+		entry.merge(_v6_kv_fields("\t".join(tabs.slice(1))))
+		var items: Array = side.get("items", [])
+		items.append(entry)
+		side["items"] = items
+	if head.begins_with("me"):
+		_trade_me = side
+	else:
+		_trade_you = side

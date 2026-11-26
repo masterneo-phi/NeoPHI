@@ -48,6 +48,10 @@ const ACTIONS := {
 	"Sort": {"caption": "アイテム整理 [V]", "hint": "アイテム整理する [V]", "kind": "send", "send": "sort"},
 	"FloorItem": {"caption": "アイテムに注意する [F]", "hint": "落ちているアイテムに注意する(ON/OFF) [F]", "kind": "send", "send": "floor item"},
 	"Spells": {"caption": "魔法一覧 [R]", "hint": "所持魔法の一覧を見る [R]", "kind": "send", "send": "spells"},
+	# phidm-v6 のカバン・取引・依頼 (v6 接続の時だけ意味がある)。
+	"V6Bag": {"caption": "カバン", "hint": "カバンを開く (V6 サーバ)", "kind": "v6-bag"},
+	"V6Trade": {"caption": "取引", "hint": "近くのプレイヤーと取引する (V6 サーバ)", "kind": "v6-trade"},
+	"V6Quests": {"caption": "依頼", "hint": "受けている依頼と進み具合を見る (V6 サーバ)", "kind": "v6-quests"},
 	"Pay": {"caption": "お金を払う [P]", "hint": "お金を払う", "kind": "ask", "template": "pay %s", "title": "支払い金額", "label": "支払う金額を入力してください", "integer": true},
 	"Hit": {"caption": "攻撃する [Space]", "hint": "攻撃する [Space]", "kind": "send", "send": "hit"},
 	"Talk": {"caption": "話しかける [Alt+H]", "hint": "近くの NPC に『hi』と話しかける [Alt+H]", "kind": "send", "send": "hi"},
@@ -141,7 +145,7 @@ const ACTIONS := {
 const MENUS := [
 	{"name": "ファイル", "items": ["Open", "Close", "ForceClose", "OpenAll", "CloseAll", "ForceCloseAll", "-", "ReadConfigFile", "InitializeConfig", "InitializeGraCache", "-", "Exit"]},
 	{"name": "操作", "items": ["NewPrivWindow", "Loud", "TalkAdd", "SayAllTabs", "-", "SetCG", "ActionSay", "FakeAction", "-", "SendMail", "ReadMail", "DelMail", "-", "ChatMode", "Address", "ServerVersion"]},
-	{"name": "行動", "items": ["Equip", "Unequip", "-", "Talk", "Read", "Write", "Erase", "Board", "-", "Get", "Put", "Use", "Sort", "FloorItem", "-", "Spells", "Pay", "Hit", "Check", "Level", "Skills"]},
+	{"name": "行動", "items": ["Equip", "Unequip", "-", "Talk", "Read", "Write", "Erase", "Board", "-", "Get", "Put", "Use", "Sort", "FloorItem", "-", "Spells", "Pay", "Hit", "Check", "Level", "Skills", "-", "V6Bag", "V6Trade", "V6Quests"]},
 	{"name": "魔法", "items": ["WizardEye", "PartyEye", "EagleEye", "Identify", "Search", "WizardLock", "Unlock", "Detect", "Create", "Analyze", "Forget", "Call", "Return", "-", "WizardLight", "EagleEyeText", "List", "WizList", "WizEye", "Destroy", "ChargeSpell", "Appear", "Disappear", "-", "Cast", "Cast1", "Cast2", "Cast3", "Cast4", "Cast5", "Cast6", "Cast7"]},
 	{"name": "表示", "items": ["M11x11", "M7x7", "M5x5", "MSolid", "MTurn", "MapSizeSetting", "DisplaySizeSetting", "MapAlignCenter", "MapAlignLeft", "MapAlignRight", "-", "UiStyleFloat", "LayoutToAllTabs", "-", "SSMap", "LogScrollStop", "SmoothScroll", "DispMagic", "LogImage", "PlayBGM", "PlaySE", "MasterMagicAlways", "-", "LogAutoSave", "LogSave", "LogSaveDir", "LogDeleteFilter", "ImageWindow"]},
 	{"name": "ツール", "items": ["UnewPanel", "SoundTest", "ChipViewer", "CharaViewer", "ShortcutConfig", "OpenConfigFolder", "CheckUpdate", "VersionInfo"]},
@@ -298,7 +302,7 @@ static func enabled_when(action_name: String, connected: bool) -> bool:
 	match kind_of(action_name):
 		"connect":
 			return not connected
-		"disconnect", "force-disconnect", "send", "ask", "ask2", "priv-window", "loud-toggle", "say-all-tabs":
+		"disconnect", "force-disconnect", "send", "ask", "ask2", "priv-window", "loud-toggle", "say-all-tabs", "v6-bag", "v6-trade", "v6-quests":
 			return connected
 		_:
 			return true
