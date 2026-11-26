@@ -16,6 +16,10 @@ extends SceneTree
 ## - B) 平文の移動元 → 平文の移動先 (従来経路の回帰確認)。
 ## - C) 圧縮された `#trs-no` で移動元に留まり、接続が生きて
 ##   次の圧縮行も届くこと。
+## - D) ポート無し `#ch-srv <host>` が既定ポート 20017 で補われて
+##   移動対象になること (サーバは移動先が既定ポートの時にポートを
+##   省く。従来は行ごと捨てられ、移動が始まらなかった)。通常形と
+##   壊れた行の扱いは不変。
 ##
 ## 圧縮列は zlib の無圧縮 (stored) ブロックで組み立てる
 ## (同期フラッシュ相当の空ブロック付き)。クライアント側の
@@ -279,6 +283,30 @@ func _scenario_c() -> void:
 	dst.stop()
 
 
+func _scenario_d() -> void:
+	print("-- D) port-less #ch-srv defaults to port 20017 --")
+	var parser := PhiParser.new()
+	var evs := parser.feed("#ch-srv 127.0.0.1".to_ascii_buffer())
+	check(evs.size() == 1 and str(evs[0].get("type", "")) == "worldTransfer",
+		"port-less #ch-srv yields a worldTransfer event: %s" % str(evs))
+	if evs.size() == 1:
+		check(str(evs[0].get("server", "")) == "127.0.0.1:20017",
+			"port-less #ch-srv server is host:20017: %s" % str(evs[0]))
+		var target: Variant = PhiSession.transfer_target(
+			str(evs[0].get("server", "")))
+		check(target != null and str(target[0]) == "127.0.0.1" \
+			and int(target[1]) == 20017,
+			"port-less #ch-srv target is [127.0.0.1, 20017]: %s" % str(target))
+	evs = parser.feed("#ch-srv 127.0.0.1 20019".to_ascii_buffer())
+	check(evs.size() == 1 \
+		and str(evs[0].get("server", "")) == "127.0.0.1:20019",
+		"host+port #ch-srv unchanged: %s" % str(evs))
+	evs = parser.feed("#ch-srv 127.0.0.1 notaport".to_ascii_buffer())
+	check(evs.is_empty(), "non-numeric port #ch-srv ignored: %s" % str(evs))
+	evs = parser.feed("#ch-srv ".to_ascii_buffer())
+	check(evs.is_empty(), "host-less #ch-srv ignored: %s" % str(evs))
+
+
 func _teardown(s: PhiSession, servers: Array) -> void:
 	## 読取りスレッドを止めてから終わる (終了コードを汚さない)。
 	if s != null and s.is_open():
@@ -290,6 +318,7 @@ func _run() -> void:
 	await _scenario_a()
 	await _scenario_b()
 	await _scenario_c()
+	_scenario_d()
 	await _teardown(_session, [])
 	print("stage141: ", _checks, " checks, ", _failures, " failures")
 	quit(1 if _failures > 0 else 0)

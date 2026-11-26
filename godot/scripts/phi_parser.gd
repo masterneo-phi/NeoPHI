@@ -9,6 +9,9 @@ extends RefCounted
 ## マップは `M`(地形)・`O`(キャラ)・`.`(確定)の複数行に分かれて届くので、
 ## 確定行が来るまでパーサがフレームを溜める。
 
+## PHI の既定ポート。`#ch-srv` でポートが省かれた時に補う。
+const DEFAULT_PORT := 20017
+
 const _MAP_CELLS := 49
 const _M57_DIRECTION_OFFSET := 7
 const _M57_CHIP_OFFSET := 18
@@ -592,8 +595,13 @@ func _dispatch_command(text: String, raw: PackedByteArray) -> Array[Dictionary]:
 		return fx_out
 	if text.begins_with("#ch-srv "):
 		var parts := _split_ws(text)
-		if parts.size() >= 3:
-			var port: Variant = _py_int(parts[2])
+		if parts.size() >= 2:
+			# サーバは移動先が既定ポートの時にポートを省く。省かれた
+			# 行を捨てると既定ポートの世界への移動が始まらないので、
+			# ポート無しは DEFAULT_PORT で補う。
+			var port: Variant = DEFAULT_PORT
+			if parts.size() >= 3:
+				port = _py_int(parts[2])
 			if port != null:
 				return [{"type": "worldTransfer", "state": "start", "server": "%s:%d" % [parts[1], port]}]
 		return []
