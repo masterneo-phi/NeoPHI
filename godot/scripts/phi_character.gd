@@ -2777,6 +2777,12 @@ func _on_transfer_completed() -> void:
 	host = session.host
 	port = session.port
 	_reset_map_state()
+	# 地図の大きさも新しい世界で交渉し直す。接続は開いたまま
+	# 差し替わるので「開いた」検出が立たず、昇格試行は再武装
+	# されない。到着バーストは v6 滞在時の map_size (57) で
+	# 頼んでおり、放っておくと希望が 121 でも 7x7 に固まる
+	# (2026-11-27 実地報告)。開いた直後と同じ仕切り直しをする。
+	_on_bigmap_session_opened()
 	transfer_followed.emit(old_host, old_port)
 
 
