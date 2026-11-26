@@ -992,7 +992,11 @@ func _poll_transfer() -> void:
 				if chunk.is_empty():
 					break
 				_last_recv_msec = Time.get_ticks_msec()
-				for line in _lines.feed(chunk):
+				# 移動元が v6 で deflate を交渉済みの時は、`#trs-ok` /
+				# `#trs-no` も圧縮されて届く。通常受信と同じく
+				# PhiInflate を通さないと行として認識できない
+				# (平文の移動元では素通しになる)。
+				for line in _lines.feed(_inflate.feed(chunk)):
 					var text := Cp932.decode(line)
 					if text == "#trs-ok":
 						_complete_transfer()
