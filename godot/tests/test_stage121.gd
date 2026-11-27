@@ -101,6 +101,26 @@ func _test_master_magic() -> void:
 	_check_eq(gf_steps.size(), 2, "gfakeaction 2 steps")
 	_check_eq(str(gf_steps[0].get("kind", "")), "string_dialog", "gfakeaction dialog first")
 	_check_eq(str(gf_steps[1].get("text", "")), "gfakeaction %string", "gfakeaction send text")
+	var file_menu: Dictionary = {}
+	for menu in menus:
+		if str(menu.get("caption", "")) == "操作魔法":
+			file_menu = menu
+	_check(not file_menu.is_empty(), "mm file menu found")
+	var file_by_caption := {}
+	for item in file_menu.get("items", []):
+		file_by_caption[str(item.get("caption", ""))] = item
+	for load_name in ["Load jb", "Load pt"]:
+		_check(file_by_caption.has(load_name), "mm has " + load_name + " item")
+		var load_item: Dictionary = file_by_caption.get(load_name, {})
+		var ext: String = str(load_name).trim_prefix("Load ")
+		_check_eq(str(load_item.get("hint", "")), "phi." + ext + " を読み込む", load_name + " hint")
+		var load_steps: Array = load_item.get("steps", [])
+		_check_eq(load_steps.size(), 2, load_name + " 2 steps")
+		if load_steps.size() == 2:
+			_check_eq(str(load_steps[0].get("kind", "")), "send", load_name + " step0 send")
+			_check_eq(str(load_steps[0].get("text", "")), "cast", load_name + " step0 cast")
+			_check_eq(str(load_steps[0].get("list", "")), "no", load_name + " step0 list attr")
+			_check_eq(str(load_steps[1].get("text", "")), load_name, load_name + " step1 text")
 
 
 func _test_config_zoom() -> void:
