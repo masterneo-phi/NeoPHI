@@ -4282,24 +4282,28 @@ func _entry_color(channel: String) -> Variant:
 func _append_log_entry(entry: Dictionary) -> void:
 	## 記録した1行をログ欄へ出す。画像が届いた後の描き直しでも
 	## 同じ結果になるよう、entry の情報だけで描く。
-	var channel := str(entry.get("channel", "log"))
-	var color: Variant = _entry_color(channel)
-	# 画像タグを含む行は従来どおり即時に出す。それ以外の行は、
 	# 受信処理の間は下準備 (タグ解析・bbcode 化) をせず entry
 	# のまま溜め、表示の時に下準備する (第65段: 大量行の受信を
-	# 表示コストで詰まらせない)。表示待ちが残っている時も、
-	# 順番が入れ替わらないよう即時に出さず後ろに並べる。
-	var may_img := false
-	if _config != null and _config.log_image_disp:
-		var raw_probe := str(entry.get("raw", ""))
-		var disp_probe := str(entry.get("display", ""))
-		may_img = raw_probe.contains("/*img=") or raw_probe.contains("/*image=") \
-			or disp_probe.contains("/*img=") or disp_probe.contains("/*image=")
-	if not may_img and (_log_batching or (not _log_rebuilding and not _log_batch.is_empty())):
+	# 表示コストで詰まらせない)。画像タグを含む行も同じ順序で
+	# 溜める (第144段: 以前は画像行だけ即時に出していたため、
+	# ログイン直後のバーストでバナー画像がバージョン行などの
+	# テキストより上に割り込んでいた)。表示待ちが残っている
+	# 時も、順番が入れ替わらないよう即時に出さず後ろに並べる。
+	if _log_batching or (not _log_rebuilding and not _log_batch.is_empty()):
 		_log_batch.append(entry)
 		return
-	var segments := _log_line_segments(entry)
 	var follow := _log_at_bottom()
+	_append_entry_immediate(entry, _log_line_segments(entry))
+	_log_view_lines += 1
+	if follow and (_config == null or not _config.scroll_stop):
+		_pin_bottom_pending = true
+
+
+func _append_entry_immediate(entry: Dictionary, segments: Array) -> void:
+	## 1行を今すぐログ欄へ出す (色付けと画像の埋め込み込み)。
+	## バッチ表示 (_flush_log_batch) で画像を含む行に当たった
+	## 時も、溜めた文字を先に出してからこれで順序を保つ。
+	var color: Variant = _entry_color(str(entry.get("channel", "log")))
 	if color != null:
 		log_view.push_color(color)
 	for segment in segments:
@@ -4310,9 +4314,6 @@ func _append_log_entry(entry: Dictionary) -> void:
 	log_view.append_text("\n")
 	if color != null:
 		log_view.pop()
-	_log_view_lines += 1
-	if follow and (_config == null or not _config.scroll_stop):
-		_pin_bottom_pending = true
 
 
 func _log_line_segments(entry: Dictionary) -> Array:
@@ -4692,7 +4693,22 @@ func _flush_log_batch() -> void:
 	while not _log_batch.is_empty() and n < max_lines:
 		var item: Variant = _log_batch.pop_front()
 		if item is Dictionary:
-			out += _entry_bbcode(_entry_color(str(item.get("channel", "log"))), _log_line_segments(item))
+			var segments := _log_line_segments(item)
+			var has_img := false
+			for segment in segments:
+				if segment.has("img"):
+					has_img = true
+					break
+			if has_img:
+				# 画像は bbcode 文字列にできないので、溜めた
+				# 文字を先に出してから行ごと即時に出す
+				# (第144段: バッチ内でも受信順を保つ)。
+				if not out.is_empty():
+					log_view.append_text(out)
+					out = ""
+				_append_entry_immediate(item, segments)
+			else:
+				out += _entry_bbcode(_entry_color(str(item.get("channel", "log"))), segments)
 		else:
 			out += str(item)
 		n += 1
@@ -4700,6 +4716,7 @@ func _flush_log_batch() -> void:
 			break
 	if not out.is_empty():
 		log_view.append_text(out)
+	if n > 0:
 		_log_view_lines += n
 		if follow and (_config == null or not _config.scroll_stop):
 			_pin_bottom_pending = true
