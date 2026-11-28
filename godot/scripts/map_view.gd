@@ -1728,6 +1728,18 @@ func drawn_map_rect() -> Rect2:
 	return Rect2(ox, oy, w, h)
 
 
+static func fx_image_fit_rect(map_rect: Rect2, tex_size: Vector2) -> Rect2:
+	## サーバ画像 (FX) を地図の範囲にアスペクト維持で収める矩形。
+	## 拡大も縮小もする (地図が小さい時は地図に合わせて縮む)。
+	## 中央寄せ。寸法が不正な時は中心の零矩形を返す。
+	if tex_size.x <= 0.0 or tex_size.y <= 0.0 \
+			or map_rect.size.x <= 0.0 or map_rect.size.y <= 0.0:
+		return Rect2(map_rect.get_center(), Vector2.ZERO)
+	var scale := minf(map_rect.size.x / tex_size.x, map_rect.size.y / tex_size.y)
+	var fitted := tex_size * scale
+	return Rect2(map_rect.get_center() - fitted * 0.5, fitted)
+
+
 func debug_disp_magic_count() -> int:
 	return _disp_magics.size()
 
@@ -2579,11 +2591,11 @@ func _draw_fx_overlays() -> void:
 			draw_texture_rect(_glow_texture(),
 				Rect2(mrect.get_center() - Vector2(side, side) * 0.5, Vector2(side, side)),
 				false, Color(1, 1, 1, sin(PI * t) * 0.85))
-	# サーバ画像 (マップ中央)。
+	# サーバ画像 (マップ矩形にアスペクト維持でフィット、中央寄せ)。
 	if not _fx_img.is_empty():
 		var tex: Texture2D = _fx_img["tex"]
 		var mrect2 := drawn_map_rect()
-		draw_texture(tex, mrect2.get_center() - Vector2(tex.get_width(), tex.get_height()) * 0.5)
+		draw_texture_rect(tex, fx_image_fit_rect(mrect2, tex.get_size()), false)
 	# マップ上文字。
 	_draw_fx_texts(now)
 	# ワイプ (最前面)。

@@ -234,6 +234,42 @@ func _test_combat_fx() -> void:
 	_check_eq(PhiCombatFx.parse_kill("DM > Guest が Cure によって回復した. [40 hp]"), null, "kill no match cure")
 
 
+func _check_rect_approx(got: Rect2, want: Rect2, label: String) -> void:
+	_check_approx(got.position.x, want.position.x, label + " x")
+	_check_approx(got.position.y, want.position.y, label + " y")
+	_check_approx(got.size.x, want.size.x, label + " w")
+	_check_approx(got.size.y, want.size.y, label + " h")
+
+
+func _test_fx_image_fit() -> void:
+	# 拡大: 320x240 のシーン絵を 11x11 マップ (352x368) に幅いっぱい
+	var map11 := Rect2(10, 20, 352, 368)
+	var fit := MapView.fx_image_fit_rect(map11, Vector2(320, 240))
+	_check_rect_approx(fit, Rect2(10, 20 + (368 - 264) * 0.5, 352, 264), "fx fit upscale width")
+	_check_approx(fit.get_center().x, map11.get_center().x, "fx fit upscale centered x")
+	_check_approx(fit.get_center().y, map11.get_center().y, "fx fit upscale centered y")
+	# 縮小: 大きい絵を小さいマップに収める
+	var small := Rect2(0, 0, 176, 184)
+	fit = MapView.fx_image_fit_rect(small, Vector2(640, 480))
+	_check_rect_approx(fit, Rect2(0, (184 - 132) * 0.5, 176, 132), "fx fit downscale")
+	# 縦長の絵は高さで決まる
+	fit = MapView.fx_image_fit_rect(map11, Vector2(240, 320))
+	_check_rect_approx(fit, Rect2(10 + (352 - 276) * 0.5, 20, 276, 368), "fx fit tall")
+	# ちょうど同じ大きさ
+	fit = MapView.fx_image_fit_rect(map11, Vector2(352, 368))
+	_check_rect_approx(fit, map11, "fx fit exact")
+	# アスペクト維持と範囲内 (任意の組み合わせ)
+	for ts in [Vector2(100, 100), Vector2(320, 200), Vector2(50, 400), Vector2(1024, 768)]:
+		var r := MapView.fx_image_fit_rect(map11, ts)
+		_check_approx(r.size.x / r.size.y, ts.x / ts.y, "fx fit aspect " + str(ts))
+		_check(map11.encloses(r), "fx fit enclosed " + str(ts))
+	# 不正な寸法は中心の零矩形
+	fit = MapView.fx_image_fit_rect(map11, Vector2.ZERO)
+	_check_rect_approx(fit, Rect2(map11.get_center(), Vector2.ZERO), "fx fit zero texture")
+	fit = MapView.fx_image_fit_rect(Rect2(5, 5, 0, 0), Vector2(320, 240))
+	_check_rect_approx(fit, Rect2(5, 5, 0, 0), "fx fit zero map")
+
+
 func _test_anchors() -> void:
 	var view := MapView.new()
 	view.set_map({"size": 7, "cells": [], "chars": [
@@ -257,6 +293,7 @@ func _initialize() -> void:
 	_test_float_text()
 	_test_bubbles()
 	_test_combat_fx()
+	_test_fx_image_fit()
 	_test_anchors()
 	print("test_fx: ", _checks, " checks, ", _failures, " failures")
 	quit(1 if _failures > 0 else 0)
